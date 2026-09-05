@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1788005126226,
+      "tag": "0000_init_sensor_network",
+      "breakpoints": true
+    }
+  ]
+}
