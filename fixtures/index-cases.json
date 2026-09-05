@@ -1,0 +1,12 @@
+{
+  "comment": "Shared between the Rust program and the TypeScript twin. 0 = no coverage, 1 = dry, 2 = wet.",
+  "cases": [
+    { "name": "longest run wins, not the last run", "days": [1, 1, 1, 2, 1, 1], "drySpell": 3 },
+    { "name": "a wet day breaks the run", "days": [1, 1, 2, 1], "drySpell": 2 },
+    { "name": "a day without coverage breaks the run", "days": [1, 1, 1, 0, 1, 1], "drySpell": 3 },
+    { "name": "empty window has no spell", "days": [], "drySpell": 0 },
+    { "name": "a run still open at the end still counts", "days": [2, 1, 1, 1, 1], "drySpell": 4 },
+    { "name": "no dry day at all", "days": [2, 2, 0, 2], "drySpell": 0 },
+    { "name": "policy window of the reference trace", "days": [2, 2, 2, 2, 0, 0, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], "drySpell": 18 }
+  ]
+}

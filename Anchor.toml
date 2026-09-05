@@ -1,0 +1,19 @@
+[toolchain]
+anchor_version = "0.32.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.devnet]
+pumpking = "F2cw4FWjzUL29G4WEWHANUE2jXAyF9QJLCdvmsjy7YbY"
+
+[programs.localnet]
+pumpking = "F2cw4FWjzUL29G4WEWHANUE2jXAyF9QJLCdvmsjy7YbY"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "pnpm --filter @pumpking/anchor-client test"
