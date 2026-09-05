@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: lint · typecheck · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm перед setup-node: інакше `cache: pnpm` не знайде стор.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+  rust:
+    name: cargo check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Версія береться з rust-toolchain.toml — єдиного місця, де вона живе.
+      - name: Install pinned toolchain
+        run: |
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          test -n "$channel"
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+          rustup override set "$channel"
+          rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # --locked: збірка падає, якщо Cargo.lock зрушив. Лок і є пін —
+      # без нього solana-address поїде на 2.7.0 і зламає wincode (E0277).
+      - run: cargo check --locked --lib -p pumpking
+
+      # Двійники dry_spell (Rust і TS) звіряються лише тут: обидві реалізації
+      # проганяють fixtures/index-cases.json. cargo check розбіжності не бачить.
+      - run: cargo test --locked --lib -p pumpking
