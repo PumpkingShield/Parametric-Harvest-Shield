@@ -1,7 +1,10 @@
 export { decodeBase58, encodeBase58 } from './base58.ts'
 export { cellIdFromH3Index, H3_CELL_PATTERN, h3IndexFromCellId } from './cell.ts'
-export type { DayClassification } from './index-math.ts'
-export { classifyDay, DayState, drySpell } from './index-math.ts'
+export type { DayClassification, DayParams, DayResult } from './day.ts'
+export { classifyDay, DayState } from './day.ts'
+export { drySpell } from './index-math.ts'
+export type { CellMedian, MedianParams, OperatorVote, SensorReading } from './median.ts'
+export { cellMedian, medianX100 } from './median.ts'
 export type {
   Reading,
   ReadingKindName,

@@ -1,17 +1,13 @@
-/**
- * Classification of one day of a cell, mirroring the on-chain day log.
- *
- * A day without coverage is not "not dry" — it is unknown, and unknown breaks
- * a run. Treating silence as drought would let anyone manufacture an event by
- * switching their sensors off.
- */
-export const DayState = {
-  NoCoverage: 0,
-  Dry: 1,
-  Wet: 2,
-} as const
+import { DayState } from './day.ts'
 
-export type DayClassification = (typeof DayState)[keyof typeof DayState]
+/**
+ * The index a policy is settled against — a deterministic function of the
+ * classified days of its coverage window, and of nothing else (`FR-014`).
+ *
+ * The classification itself lives in `day.ts`. This file holds the part that
+ * exists **twice**: `programs/pumpking/src/index.rs` is the other half, and
+ * both are driven by `fixtures/index-cases.json`.
+ */
 
 /**
  * Longest unbroken run of dry days.
@@ -19,6 +15,12 @@ export type DayClassification = (typeof DayState)[keyof typeof DayState]
  * The Rust twin lives in `programs/pumpking/src/index.rs`. Both are driven by
  * `fixtures/index-cases.json`; a divergence of one day is a payout the
  * interface never promised.
+ *
+ * Comparing the result against a policy is **inclusive**: `FR-046` says the
+ * event happens when the spell *reaches* the policy threshold, so settlement
+ * tests `spell >= spell_days_threshold`, never `>`. Same convention as the dry
+ * threshold in `day.ts`, and for the same reason — a threshold means the value
+ * it names, not one step short of it.
  */
 export function drySpell(days: readonly number[]): number {
   let best = 0
@@ -34,18 +36,4 @@ export function drySpell(days: readonly number[]): number {
   }
 
   return best
-}
-
-/**
- * A day is dry when its rainfall stayed under the threshold. Values are
- * hundredths of a millimetre as integers: the median and the threshold have to
- * agree byte for byte between TypeScript and Rust, and floating point does not
- * give that guarantee.
- */
-export function classifyDay(
-  rainfallX100: number | null,
-  dryThresholdX100: number,
-): DayClassification {
-  if (rainfallX100 === null) return DayState.NoCoverage
-  return rainfallX100 < dryThresholdX100 ? DayState.Dry : DayState.Wet
 }
