@@ -136,6 +136,9 @@ importers:
       '@scure/base':
         specifier: ^2.4.0
         version: 2.4.0
+      h3-js:
+        specifier: ^4.5.0
+        version: 4.5.0
       zod:
         specifier: ^4.5.2
         version: 4.5.2

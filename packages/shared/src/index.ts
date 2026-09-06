@@ -1,5 +1,15 @@
 export { decodeBase58, encodeBase58 } from './base58.ts'
-export { cellIdFromH3Index, H3_CELL_PATTERN, h3IndexFromCellId } from './cell.ts'
+export type { CellSize } from './cell.ts'
+export {
+  cellFromLatLng,
+  cellIdFromH3Index,
+  cellResolution,
+  cellSize,
+  DEFAULT_RESOLUTION,
+  H3_CELL_PATTERN,
+  h3IndexFromCellId,
+  isCellId,
+} from './cell.ts'
 export type { DayClassification, DayParams, DayResult } from './day.ts'
 export { classifyDay, DayState } from './day.ts'
 export { drySpell } from './index-math.ts'
