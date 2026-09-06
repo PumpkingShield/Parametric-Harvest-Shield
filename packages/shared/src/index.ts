@@ -5,6 +5,8 @@ export { classifyDay, DayState } from './day.ts'
 export { drySpell } from './index-math.ts'
 export type { CellMedian, MedianParams, OperatorVote, SensorReading } from './median.ts'
 export { cellMedian, medianX100 } from './median.ts'
+export type { MerkleProof } from './merkle.ts'
+export { MERKLE_HASH_BYTES, merkleProof, merkleRoot, verifyMerkleProof } from './merkle.ts'
 export type {
   Reading,
   ReadingKindName,
