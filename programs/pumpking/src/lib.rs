@@ -18,4 +18,10 @@ pub mod pumpking {
     pub fn initialize_pool(ctx: Context<InitializePool>, params: PoolParams) -> Result<()> {
         instructions::pool::initialize_pool(ctx, params)
     }
+
+    /// Puts capital in and takes a proportional share out — `FR-032`. The same
+    /// instruction seeds the pool and funds it later; there is no second path.
+    pub fn deposit_capital(ctx: Context<DepositCapital>, amount: u64) -> Result<()> {
+        instructions::pool::deposit_capital(ctx, amount)
+    }
 }

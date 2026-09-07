@@ -1,9 +1,10 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
+use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::errors::PumpkingError;
 use crate::state::{
-    Pool, BPS_DENOMINATOR, MAX_SENSORS_PER_CELL, POOL_SEED, STAKE_VAULT_SEED, VAULT_SEED,
+    CapitalPosition, Pool, BPS_DENOMINATOR, CAPITAL_SEED, MAX_SENSORS_PER_CELL, POOL_SEED,
+    STAKE_VAULT_SEED, VAULT_SEED,
 };
 
 /// Bringing the pool into existence: its parameters, its two vaults, and the
@@ -200,6 +201,126 @@ pub fn initialize_pool(ctx: Context<InitializePool>, params: PoolParams) -> Resu
     Ok(())
 }
 
+/* -------------------------------------------------------------------------- */
+/* deposit_capital                                                            */
+/* -------------------------------------------------------------------------- */
+
+/// Shares a deposit buys — `FR-032`.
+///
+/// The first deposit sets the scale: one unit of the asset, one share. After
+/// that a deposit buys the fraction of the pool it adds, which is what makes
+/// the share proportional rather than merely numerous.
+///
+/// Rounding is down, always towards the pool. A depositor who loses a
+/// fractional share loses at most one unit of dust; existing holders diluted
+/// by a rounding gain would lose real money, and the choice is between the two.
+///
+/// A pool holding shares against no capital cannot price a deposit at all:
+/// every existing share is worth nothing, and any number minted here would be
+/// an arbitrary split of the newcomer's money with people who have none left.
+/// Refusing is the honest answer; picking a ratio is a quiet transfer.
+pub fn shares_for_deposit(amount: u64, capital_total: u64, shares_total: u64) -> Result<u64> {
+    require!(amount > 0, PumpkingError::DepositTooSmall);
+
+    if shares_total == 0 {
+        return Ok(amount);
+    }
+    require!(capital_total > 0, PumpkingError::PoolValueUnknown);
+
+    let shares = u128::from(amount) * u128::from(shares_total) / u128::from(capital_total);
+    let shares = u64::try_from(shares).map_err(|_| error!(PumpkingError::MathOverflow))?;
+    require!(shares > 0, PumpkingError::DepositTooSmall);
+    Ok(shares)
+}
+
+#[derive(Accounts)]
+pub struct DepositCapital<'info> {
+    #[account(mut)]
+    pub depositor: Signer<'info>,
+
+    #[account(mut, seeds = [POOL_SEED], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(address = pool.asset_mint)]
+    pub asset_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, address = pool.vault)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        token::mint = asset_mint,
+        token::authority = depositor,
+    )]
+    pub depositor_tokens: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-032`. One position per wallet, opened on the first deposit and
+    /// added to afterwards.
+    #[account(
+        init_if_needed,
+        payer = depositor,
+        space = 8 + CapitalPosition::INIT_SPACE,
+        seeds = [CAPITAL_SEED, depositor.key().as_ref()],
+        bump,
+    )]
+    pub position: Account<'info, CapitalPosition>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Puts capital in and takes a proportional share out — `FR-032`.
+///
+/// This is the only way capital enters, and it is deliberately the same public
+/// instruction for the deployer seeding the pool and for a stranger funding
+/// it later. A separate `seed_pool` for the authority would be a second path
+/// to the money that nobody uses in production — therefore untested — and it
+/// would hand the authority a power over funds that `FR-030` exists to deny.
+///
+/// Transferring tokens straight into the vault is not a deposit and buys
+/// nothing: `capital_total` is what the program accounts against, and a
+/// balance that drifts from it would be a discrepancy nobody could see.
+pub fn deposit_capital(ctx: Context<DepositCapital>, amount: u64) -> Result<()> {
+    let pool = &ctx.accounts.pool;
+    let shares = shares_for_deposit(amount, pool.capital_total, pool.shares_total)?;
+
+    // Money first, accounting second: a failed transfer must not leave shares
+    // minted against capital that never arrived.
+    token_interface::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.depositor_tokens.to_account_info(),
+                mint: ctx.accounts.asset_mint.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+                authority: ctx.accounts.depositor.to_account_info(),
+            },
+        ),
+        amount,
+        ctx.accounts.asset_mint.decimals,
+    )?;
+
+    let pool = &mut ctx.accounts.pool;
+    pool.capital_total = pool
+        .capital_total
+        .checked_add(amount)
+        .ok_or(PumpkingError::MathOverflow)?;
+    pool.shares_total = pool
+        .shares_total
+        .checked_add(shares)
+        .ok_or(PumpkingError::MathOverflow)?;
+
+    let position = &mut ctx.accounts.position;
+    position.owner = ctx.accounts.depositor.key();
+    position.bump = ctx.bumps.position;
+    position.shares = position
+        .shares
+        .checked_add(shares)
+        .ok_or(PumpkingError::MathOverflow)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +476,64 @@ mod tests {
         let pool = Pubkey::new_unique();
         let minter = Pubkey::new_unique();
         assert!(ensure_mint_is_not_pool_controlled(Some(minter), authority, pool).is_ok());
+    }
+
+    /* ------------------------------------------------------------ Shares */
+
+    #[test]
+    fn the_first_deposit_sets_the_scale() {
+        assert_eq!(shares_for_deposit(1_000, 0, 0).unwrap(), 1_000);
+    }
+
+    #[test]
+    fn a_deposit_buys_the_fraction_of_the_pool_it_adds() {
+        // Pool of 1000 against 1000 shares: 500 in buys 500 shares.
+        assert_eq!(shares_for_deposit(500, 1_000, 1_000).unwrap(), 500);
+        // Same pool after it grew to 2000 on the same 1000 shares: a share
+        // now costs twice as much, so 500 buys half as many.
+        assert_eq!(shares_for_deposit(500, 2_000, 1_000).unwrap(), 250);
+        // And after losses to 500: a share is cheap, 500 buys 1000.
+        assert_eq!(shares_for_deposit(500, 500, 1_000).unwrap(), 1_000);
+    }
+
+    #[test]
+    fn rounding_goes_to_the_pool_not_the_depositor() {
+        // 100 * 3 / 7 = 42.85…; the depositor gets 42 and the fraction stays
+        // with the holders. The other way round is dilution of real money.
+        assert_eq!(shares_for_deposit(100, 7, 3).unwrap(), 42);
+    }
+
+    #[test]
+    fn a_deposit_that_would_buy_no_share_is_refused() {
+        // 1 unit into a pool where a share costs 1000 rounds to nothing. It
+        // would be a donation dressed as a deposit.
+        assert_eq!(
+            code_of(shares_for_deposit(1, 1_000_000, 1_000).unwrap_err()),
+            u32::from(PumpkingError::DepositTooSmall)
+        );
+        assert_eq!(
+            code_of(shares_for_deposit(0, 0, 0).unwrap_err()),
+            u32::from(PumpkingError::DepositTooSmall)
+        );
+    }
+
+    #[test]
+    fn shares_against_no_capital_cannot_price_a_deposit() {
+        // Every existing share is worth nothing, and any ratio picked here
+        // would quietly hand part of the newcomer's money to holders who have
+        // none left.
+        assert_eq!(
+            code_of(shares_for_deposit(1_000, 0, 5_000).unwrap_err()),
+            u32::from(PumpkingError::PoolValueUnknown)
+        );
+    }
+
+    #[test]
+    fn the_share_arithmetic_does_not_overflow_on_the_way() {
+        // amount * shares_total exceeds u64 long before either does; the
+        // multiplication goes through u128 and the result still fits.
+        let huge = u64::MAX / 2;
+        assert_eq!(shares_for_deposit(huge, huge, huge).unwrap(), huge);
     }
 
     #[test]

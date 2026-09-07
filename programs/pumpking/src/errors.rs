@@ -27,4 +27,13 @@ pub enum PumpkingError {
 
     #[msg("The mint authority of the asset must hold no power over the pool")]
     MintAuthorityHasPoolPower,
+
+    #[msg("Deposit is too small to be worth a share of the pool")]
+    DepositTooSmall,
+
+    #[msg("The pool holds shares against no capital; a deposit cannot be priced")]
+    PoolValueUnknown,
+
+    #[msg("Arithmetic overflow")]
+    MathOverflow,
 }
