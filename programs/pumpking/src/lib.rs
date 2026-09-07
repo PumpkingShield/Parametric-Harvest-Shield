@@ -2,22 +2,20 @@ use anchor_lang::prelude::*;
 
 declare_id!("F2cw4FWjzUL29G4WEWHANUE2jXAyF9QJLCdvmsjy7YbY");
 
+pub mod errors;
 pub mod index;
+pub mod instructions;
 pub mod state;
+
+use instructions::*;
 
 #[program]
 pub mod pumpking {
     use super::*;
 
-    /// Placeholder entrypoint: the instruction set lands in M1.
-    /// Keeping the crate compiling from day one is what makes the toolchain
-    /// pins in Cargo.lock meaningful.
-    pub fn ping(_ctx: Context<Ping>) -> Result<()> {
-        Ok(())
+    /// Creates the pool, its capital vault and its stake vault, and fixes the
+    /// asset all three of premium, stake and payout are denominated in.
+    pub fn initialize_pool(ctx: Context<InitializePool>, params: PoolParams) -> Result<()> {
+        instructions::pool::initialize_pool(ctx, params)
     }
-}
-
-#[derive(Accounts)]
-pub struct Ping<'info> {
-    pub payer: Signer<'info>,
 }

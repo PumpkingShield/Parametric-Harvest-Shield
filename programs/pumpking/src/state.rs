@@ -10,6 +10,10 @@ use crate::index::DayState;
 /// Seeds. Written once here so an instruction and a client cannot disagree
 /// about what a PDA is called.
 pub const POOL_SEED: &[u8] = b"pool";
+/// Token account holding capital, owned by the pool PDA.
+pub const VAULT_SEED: &[u8] = b"vault";
+/// Token account holding sensor stake — `FR-051` keeps it out of capital.
+pub const STAKE_VAULT_SEED: &[u8] = b"stake_vault";
 pub const CELL_SEED: &[u8] = b"cell";
 pub const SENSOR_SEED: &[u8] = b"sensor";
 pub const POLICY_SEED: &[u8] = b"policy";
