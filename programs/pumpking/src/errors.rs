@@ -40,9 +40,6 @@ pub enum PumpkingError {
     #[msg("A policy must pay out something")]
     PayoutNotSet,
 
-    #[msg("A policy costing nothing is a free option on the pool")]
-    PremiumNotSet,
-
     #[msg("The coverage window ends before it starts")]
     WindowNotOrdered,
 
@@ -66,4 +63,16 @@ pub enum PumpkingError {
 
     #[msg("The pool has no day index for this moment")]
     DayIndexUnavailable,
+
+    #[msg("The cell has too few recorded days to price cover on")]
+    CellHistoryTooShort,
+
+    #[msg("The premium is above the limit the buyer set")]
+    PremiumAboveLimit,
+
+    #[msg("Risk loading must not exceed 10000 basis points")]
+    RiskLoadingOutOfRange,
+
+    #[msg("The floor rate must be between 1 and 10000 basis points")]
+    MinRateOutOfRange,
 }

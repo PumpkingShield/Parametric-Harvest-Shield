@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::errors::PumpkingError;
+use crate::premium::{dry_day_frequency_bps, premium_for, premium_rate_bps};
 use crate::state::{
     CellState, Policy, PolicyState, Pool, CELL_SEED, MAX_COVERAGE_DAYS, POLICY_SEED, POOL_SEED,
 };
@@ -26,8 +27,11 @@ pub struct PolicyParams {
     /// `FR-046`: consecutive dry days that trigger the event.
     pub spell_days_threshold: u8,
     pub payout: u64,
-    /// `FR-021` is not enforced here yet — see `issue_policy`.
-    pub premium: u64,
+    /// The most the buyer will pay. `FR-021` sets the price, not this: the
+    /// program charges what the formula says and refuses above this bound.
+    /// Without it a quote and the transaction that follows it are two
+    /// different prices whenever a day is recorded in between.
+    pub max_premium: u64,
     /// Day indices, both ends inclusive — `FR-024`.
     pub window_start_day: u32,
     pub window_end_day: u32,
@@ -61,8 +65,6 @@ pub fn check_underwriting(
     today: u32,
 ) -> Result<()> {
     require!(params.payout > 0, PumpkingError::PayoutNotSet);
-    // A policy costing nothing is not cover, it is a free option on the pool.
-    require!(params.premium > 0, PumpkingError::PremiumNotSet);
 
     // FR-024: the window is ordered and bounded. `MAX_COVERAGE_DAYS` sits
     // inside the cell's day log with room to spare, so settlement can still
@@ -173,16 +175,27 @@ pub struct IssuePolicy<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Issues a policy — `FR-018`.
+/// The price of a policy, read out of the cell's own recorded history —
+/// `FR-021`.
 ///
-/// **The premium is still the buyer's own number.** `FR-021` makes it a
-/// deterministic function of the cell's history and the payout, and that
-/// function is `T017`; until it lands this instruction charges what it is
-/// told. The exposure is bounded rather than open — the payout is reserved
-/// out of capital that already existed, and `FR-019` and `FR-020` are
-/// enforced above — so an underpriced policy costs the pool margin, not
-/// solvency. `T017` replaces the field with a computed value; it must not
-/// survive as an argument.
+/// The buyer names a payout and a bound, never a price. Everything that
+/// decides the number is public and on chain: the day log the frequency comes
+/// from, and the two published pool parameters. Two buyers asking for the same
+/// cover on the same cell in the same block are quoted the same figure, which
+/// is the whole of "формула публічна й однакова для всіх".
+pub fn price_of(pool: &Pool, day_log: &[u8], payout: u64, max_premium: u64) -> Result<u64> {
+    let frequency = dry_day_frequency_bps(day_log).ok_or(PumpkingError::CellHistoryTooShort)?;
+    let rate = premium_rate_bps(frequency, pool.risk_loading_bps, pool.min_rate_bps);
+    let premium = premium_for(payout, rate).ok_or(error!(PumpkingError::MathOverflow))?;
+
+    // The bound is the buyer's, and it is checked here rather than at the
+    // caller so that the price and the promise about it are one decision with
+    // one set of tests.
+    require!(premium <= max_premium, PumpkingError::PremiumAboveLimit);
+    Ok(premium)
+}
+
+/// Issues a policy — `FR-018`.
 pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let today = ctx
@@ -199,6 +212,16 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
         today,
     )?;
 
+    // FR-021. The whole ring is read, not the live window: a slot the log does
+    // not answer for holds no coverage, and no coverage counts on neither side
+    // of the ratio.
+    let premium = price_of(
+        &ctx.accounts.pool,
+        &ctx.accounts.cell.day_log,
+        params.payout,
+        params.max_premium,
+    )?;
+
     // Money first, accounting second: a failed transfer must not leave a
     // policy standing against a premium that never arrived.
     token_interface::transfer_checked(
@@ -211,7 +234,7 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
                 authority: ctx.accounts.owner.to_account_info(),
             },
         ),
-        params.premium,
+        premium,
         ctx.accounts.asset_mint.decimals,
     )?;
 
@@ -226,7 +249,7 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
     // were already carrying the risk.
     pool.capital_total = pool
         .capital_total
-        .checked_add(params.premium)
+        .checked_add(premium)
         .ok_or(PumpkingError::MathOverflow)?;
 
     let cell = &mut ctx.accounts.cell;
@@ -241,7 +264,7 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
         cell_id: params.cell_id,
         spell_days_threshold: params.spell_days_threshold,
         payout: params.payout,
-        premium: params.premium,
+        premium,
         window_start_day: params.window_start_day,
         window_end_day: params.window_end_day,
         state: PolicyState::Active,
@@ -254,6 +277,8 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::DayState;
+    use crate::state::DAY_LOG_LEN;
     use anchor_lang::error::Error;
 
     fn code_of(err: Error) -> u32 {
@@ -277,6 +302,8 @@ mod tests {
             shares_total: 1_000_000,
             cell_exposure_bps: 1_000,
             premium_rewards_bps: 1_000,
+            risk_loading_bps: 2_500,
+            min_rate_bps: 100,
             min_sensors_per_cell: 3,
             min_stake: 1_000,
             unstake_delay_days: 30,
@@ -296,7 +323,7 @@ mod tests {
             cell_id: 0x871e701b3ffffff,
             spell_days_threshold: 14,
             payout: 50_000,
-            premium: 2_500,
+            max_premium: 2_500,
             window_start_day: 13,
             window_end_day: 42,
         }
@@ -320,16 +347,6 @@ mod tests {
         assert_eq!(
             code_of(check(&p).unwrap_err()),
             u32::from(PumpkingError::PayoutNotSet)
-        );
-    }
-
-    #[test]
-    fn cover_costing_nothing_is_a_free_option() {
-        let mut p = params();
-        p.premium = 0;
-        assert_eq!(
-            code_of(check(&p).unwrap_err()),
-            u32::from(PumpkingError::PremiumNotSet)
         );
     }
 
@@ -504,6 +521,67 @@ mod tests {
             code_of(check_underwriting(&p, &pool(), 3, 1, TODAY).unwrap_err()),
             u32::from(PumpkingError::InsufficientLiquidity)
         );
+    }
+
+    /// A day log holding `dry` dry days and `wet` wet ones, the rest of the
+    /// ring untouched — which is what an on-chain cell actually looks like.
+    fn day_log(dry: usize, wet: usize) -> [u8; DAY_LOG_LEN] {
+        let mut log = [DayState::NoCoverage as u8; DAY_LOG_LEN];
+        for slot in log.iter_mut().take(dry) {
+            *slot = DayState::Dry as u8;
+        }
+        for slot in log.iter_mut().skip(dry).take(wet) {
+            *slot = DayState::Wet as u8;
+        }
+        log
+    }
+
+    #[test]
+    fn the_price_comes_from_the_cell_own_record() {
+        // Seven dry days in fourteen is 5000 bps; a quarter of loading makes
+        // the rate 6250, and a quarter of the payout plus a bit is 31_250.
+        let log = day_log(7, 7);
+        assert_eq!(price_of(&pool(), &log, 50_000, u64::MAX).unwrap(), 31_250);
+    }
+
+    #[test]
+    fn a_cell_with_no_dry_day_still_pays_the_floor() {
+        // FR-021 has no way to say "we do not know yet" other than the floor:
+        // a fortnight without a dry day is not proof that a cell never dries.
+        let log = day_log(0, 14);
+        assert_eq!(price_of(&pool(), &log, 50_000, u64::MAX).unwrap(), 500);
+    }
+
+    #[test]
+    fn a_cell_too_new_to_have_a_record_cannot_be_priced() {
+        let log = day_log(6, 7);
+        assert_eq!(
+            code_of(price_of(&pool(), &log, 50_000, u64::MAX).unwrap_err()),
+            u32::from(PumpkingError::CellHistoryTooShort)
+        );
+    }
+
+    #[test]
+    fn the_buyer_bound_is_the_buyer_s_and_the_price_is_not() {
+        // The bound never lowers the price — it refuses the sale. A quote and
+        // the transaction that follows it are two different prices whenever a
+        // day lands in between, and this is what the buyer is protected by.
+        let log = day_log(7, 7);
+        assert_eq!(price_of(&pool(), &log, 50_000, 31_250).unwrap(), 31_250);
+        assert_eq!(
+            code_of(price_of(&pool(), &log, 50_000, 31_249).unwrap_err()),
+            u32::from(PumpkingError::PremiumAboveLimit)
+        );
+    }
+
+    #[test]
+    fn two_buyers_of_the_same_cover_are_quoted_the_same_number() {
+        // FR-021: the formula is public and the same for everybody. Nothing
+        // about the buyer is an input, so there is nothing to differ on.
+        let log = day_log(3, 11);
+        let first = price_of(&pool(), &log, 12_345, u64::MAX).unwrap();
+        let second = price_of(&pool(), &log, 12_345, u64::MAX).unwrap();
+        assert_eq!(first, second);
     }
 
     #[test]

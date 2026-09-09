@@ -74,6 +74,15 @@ pub struct Pool {
     /// `FR-034`: share of a premium that goes to the cell's reward reserve at
     /// issue time. The rest becomes capital there and then.
     pub premium_rewards_bps: u16,
+    /// `FR-021`: what the pool charges on top of the expected loss. A pool
+    /// charging exactly its expected loss breaks even on average and goes
+    /// insolvent on variance; this is the difference between a pool and a
+    /// coin flip, and it is published rather than negotiated.
+    pub risk_loading_bps: u16,
+    /// `FR-021`: the rate below which cover is not sold at any history. A
+    /// fortnight without a dry day is not proof that a cell never dries out,
+    /// and the formula has no other way to say "we do not know yet".
+    pub min_rate_bps: u16,
     /// `FR-010`: independent votes an interval needs to get a value at all.
     pub min_sensors_per_cell: u8,
     /// `FR-050`: below this a sensor still publishes, but does not vote.
@@ -399,6 +408,8 @@ mod tests {
             shares_total: 0,
             cell_exposure_bps: 1_000,
             premium_rewards_bps: 1_000,
+            risk_loading_bps: 2_500,
+            min_rate_bps: 100,
             min_sensors_per_cell: 3,
             min_stake: 0,
             unstake_delay_days: 30,

@@ -1,0 +1,120 @@
+{
+  "comment": "Shared between packages/shared/src/premium.ts and programs/pumpking/src/premium.rs. Day codes are the same as index-cases.json: 0 = no coverage, 1 = dry, 2 = wet. Payouts and premiums are strings because they are u64 and JSON numbers are doubles.",
+  "frequency": [
+    {
+      "name": "half of the record is dry",
+      "days": [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2],
+      "frequencyBps": 5000
+    },
+    {
+      "name": "days without coverage are not evidence either way",
+      "days": [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "frequencyBps": 5000
+    },
+    {
+      "name": "a record with no dry day at all",
+      "days": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+      "frequencyBps": 0
+    },
+    {
+      "name": "every recorded day was dry",
+      "days": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "frequencyBps": 10000
+    },
+    {
+      "name": "five dry days in fourteen, rounded down",
+      "days": [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+      "frequencyBps": 3571
+    },
+    {
+      "name": "six dry days in twenty covered, the rest of the ring empty",
+      "days": [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0],
+      "frequencyBps": 3000
+    },
+    {
+      "name": "thirteen covered days are too few to price",
+      "days": [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2],
+      "frequencyBps": null
+    },
+    {
+      "name": "a cell the network never reported on",
+      "days": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "frequencyBps": null
+    },
+    {
+      "name": "no record at all",
+      "days": [],
+      "frequencyBps": null
+    },
+    {
+      "name": "an unknown classification is not coverage",
+      "days": [9, 9, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2],
+      "frequencyBps": 5000
+    }
+  ],
+  "premium": [
+    {
+      "name": "a fifth of the days dry, a quarter of loading",
+      "payout": "50000",
+      "frequencyBps": 2000,
+      "riskLoadingBps": 2500,
+      "minRateBps": 100,
+      "rateBps": 2500,
+      "premium": "12500"
+    },
+    {
+      "name": "a cell with no dry day still pays the floor rate",
+      "payout": "50000",
+      "frequencyBps": 0,
+      "riskLoadingBps": 2500,
+      "minRateBps": 100,
+      "rateBps": 100,
+      "premium": "500"
+    },
+    {
+      "name": "the floor binds when the record is almost dry-free",
+      "payout": "100000",
+      "frequencyBps": 10,
+      "riskLoadingBps": 0,
+      "minRateBps": 500,
+      "rateBps": 500,
+      "premium": "5000"
+    },
+    {
+      "name": "the money rounds up, towards the pool",
+      "payout": "333",
+      "frequencyBps": 3000,
+      "riskLoadingBps": 1100,
+      "minRateBps": 100,
+      "rateBps": 3330,
+      "premium": "111"
+    },
+    {
+      "name": "a payout of one unit still costs something",
+      "payout": "1",
+      "frequencyBps": 5000,
+      "riskLoadingBps": 0,
+      "minRateBps": 100,
+      "rateBps": 5000,
+      "premium": "1"
+    },
+    {
+      "name": "a cell that is dry every recorded day prices above its own payout",
+      "payout": "1000",
+      "frequencyBps": 10000,
+      "riskLoadingBps": 2000,
+      "minRateBps": 100,
+      "rateBps": 12000,
+      "premium": "1200"
+    },
+    {
+      "name": "the largest payout a u64 holds does not wrap",
+      "payout": "18446744073709551615",
+      "frequencyBps": 0,
+      "riskLoadingBps": 0,
+      "minRateBps": 100,
+      "rateBps": 100,
+      "premium": "184467440737095517"
+    }
+  ]
+}

@@ -277,6 +277,10 @@ export interface PoolParams {
   aggregator: PublicKey
   cellExposureBps: number
   premiumRewardsBps: number
+  /** `FR-021`: charged on top of the expected loss. */
+  riskLoadingBps: number
+  /** `FR-021`: the rate below which cover is not sold at any history. */
+  minRateBps: number
   minSensorsPerCell: number
   minStake: bigint
   unstakeDelayDays: number
@@ -368,8 +372,13 @@ export interface PolicyTerms {
   /** `FR-046`: consecutive dry days that trigger the event. */
   spellDaysThreshold: number
   payout: bigint
-  /** `FR-021` will compute this; the program still takes what it is told. */
-  premium: bigint
+  /**
+   * The most the buyer will pay. `FR-021` sets the price out of the cell's own
+   * record; this only refuses the sale above a bound. A quote and the
+   * transaction that follows it are two different prices whenever a day is
+   * recorded in between, and this is what stands between them.
+   */
+  maxPremium: bigint
   windowStartDay: number
   windowEndDay: number
 }
@@ -411,7 +420,7 @@ export function issuePolicyInstruction(input: IssuePolicyInput): TransactionInst
         cellId: new BN(terms.cellId.toString()),
         spellDaysThreshold: terms.spellDaysThreshold,
         payout: new BN(terms.payout.toString()),
-        premium: new BN(terms.premium.toString()),
+        maxPremium: new BN(terms.maxPremium.toString()),
         windowStartDay: terms.windowStartDay,
         windowEndDay: terms.windowEndDay,
       },

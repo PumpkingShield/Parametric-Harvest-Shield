@@ -30,6 +30,8 @@ const params: PoolParams = {
   aggregator,
   cellExposureBps: 1_000,
   premiumRewardsBps: 500,
+  riskLoadingBps: 2_500,
+  minRateBps: 100,
   minSensorsPerCell: 3,
   minStake: 1_000_000n,
   unstakeDelayDays: 14,
@@ -75,6 +77,8 @@ describe('initializePoolInstruction', () => {
     expect((encoded.aggregator as PublicKey).equals(aggregator)).toBe(true)
     expect(encoded.cellExposureBps).toBe(1_000)
     expect(encoded.premiumRewardsBps).toBe(500)
+    expect(encoded.riskLoadingBps).toBe(2_500)
+    expect(encoded.minRateBps).toBe(100)
     expect(encoded.minSensorsPerCell).toBe(3)
     expect(String(encoded.minStake)).toBe('1000000')
     expect(encoded.unstakeDelayDays).toBe(14)
@@ -226,7 +230,7 @@ describe('buildInstruction', () => {
       cellId: 0x871e701b3ffffffn,
       spellDaysThreshold: 14,
       payout: 50_000n,
-      premium: 2_500n,
+      maxPremium: 2_500n,
       windowStartDay: 13,
       windowEndDay: 42,
     }
@@ -261,5 +265,81 @@ describe('buildInstruction', () => {
     const { keys } = initializePoolInstruction({ authority, assetMint, params, programId })
     const index = accountNames('initializePool').indexOf('systemProgram')
     expect(keys[index]?.pubkey.equals(SYSTEM_PROGRAM_ID)).toBe(true)
+  })
+})
+
+/**
+ * The round-trip that was missing when `premium` became `maxPremium`.
+ *
+ * Every other test here reads the IDL for names and derivations, so a client
+ * field the program no longer has still lines up with itself and passes. Only
+ * decoding the bytes back asks the coder what the *program* will read — and a
+ * renamed field is silently dropped on the way in, which Borsh then fills with
+ * a zero. A policy priced at a ceiling of zero is refused, not mispriced, but
+ * the transaction fails on chain with nothing here having warned.
+ */
+describe('issuePolicyInstruction', () => {
+  const terms = {
+    nonce: 7n,
+    cellId: 0x871e701b3ffffffn,
+    spellDaysThreshold: 14,
+    payout: 50_000n,
+    maxPremium: 2_500n,
+    windowStartDay: 13,
+    windowEndDay: 42,
+  }
+  const input = {
+    owner: depositor,
+    assetMint,
+    ownerTokens: depositorTokens,
+    programId,
+    terms,
+  }
+
+  it('carries the discriminator the program compiled', () => {
+    const instruction = issuePolicyInstruction(input)
+    const expected = idl.instructions.find((one) => one.name === 'issuePolicy')?.discriminator
+    expect(expected).toHaveLength(8)
+    expect([...instruction.data.subarray(0, 8)]).toEqual(expected)
+  })
+
+  it('round-trips every term through the wire format', () => {
+    const { name, data } = decode(issuePolicyInstruction(input).data)
+    expect(name).toBe('issuePolicy')
+
+    const encoded = data.params as Record<string, unknown>
+    expect(Object.keys(encoded).sort()).toEqual([
+      'cellId',
+      'maxPremium',
+      'nonce',
+      'payout',
+      'spellDaysThreshold',
+      'windowEndDay',
+      'windowStartDay',
+    ])
+    expect(String(encoded.nonce)).toBe('7')
+    expect(String(encoded.cellId)).toBe(terms.cellId.toString())
+    expect(encoded.spellDaysThreshold).toBe(14)
+    expect(String(encoded.payout)).toBe('50000')
+    expect(String(encoded.maxPremium)).toBe('2500')
+    expect(encoded.windowStartDay).toBe(13)
+    expect(encoded.windowEndDay).toBe(42)
+  })
+
+  /** `FR-021`: the program prices the policy, so no price is on the wire. */
+  it('sends a ceiling and never a price', () => {
+    const { data } = decode(issuePolicyInstruction(input).data)
+    expect(data.params as Record<string, unknown>).not.toHaveProperty('premium')
+  })
+
+  it('keeps a payout and a ceiling larger than a double can hold', () => {
+    const payout = 18_446_744_073_709_551_615n
+    const maxPremium = 9_007_199_254_740_993n
+    const { data } = decode(
+      issuePolicyInstruction({ ...input, terms: { ...terms, payout, maxPremium } }).data,
+    )
+    const encoded = data.params as Record<string, unknown>
+    expect(String(encoded.payout)).toBe(payout.toString())
+    expect(String(encoded.maxPremium)).toBe(maxPremium.toString())
   })
 })

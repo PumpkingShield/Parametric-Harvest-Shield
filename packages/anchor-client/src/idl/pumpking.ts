@@ -484,48 +484,63 @@ export type Pumpking = {
     },
     {
       "code": 6012,
-      "name": "premiumNotSet",
-      "msg": "A policy costing nothing is a free option on the pool"
-    },
-    {
-      "code": 6013,
       "name": "windowNotOrdered",
       "msg": "The coverage window ends before it starts"
     },
     {
-      "code": 6014,
+      "code": 6013,
       "name": "windowTooLong",
       "msg": "The coverage window is longer than the day log can answer for"
     },
     {
-      "code": 6015,
+      "code": 6014,
       "name": "thresholdOutOfWindow",
       "msg": "The spell threshold cannot be reached inside the coverage window"
     },
     {
-      "code": 6016,
+      "code": 6015,
       "name": "waitingPeriodNotElapsed",
       "msg": "Coverage may not start before the waiting period has elapsed"
     },
     {
-      "code": 6017,
+      "code": 6016,
       "name": "cellNotCovered",
       "msg": "The cell has fewer sensors than a value needs"
     },
     {
-      "code": 6018,
+      "code": 6017,
       "name": "insufficientLiquidity",
       "msg": "Free liquidity does not cover this payout"
     },
     {
-      "code": 6019,
+      "code": 6018,
       "name": "cellExposureExceeded",
       "msg": "The cell would owe more than its share of the capital"
     },
     {
-      "code": 6020,
+      "code": 6019,
       "name": "dayIndexUnavailable",
       "msg": "The pool has no day index for this moment"
+    },
+    {
+      "code": 6020,
+      "name": "cellHistoryTooShort",
+      "msg": "The cell has too few recorded days to price cover on"
+    },
+    {
+      "code": 6021,
+      "name": "premiumAboveLimit",
+      "msg": "The premium is above the limit the buyer set"
+    },
+    {
+      "code": 6022,
+      "name": "riskLoadingOutOfRange",
+      "msg": "Risk loading must not exceed 10000 basis points"
+    },
+    {
+      "code": 6023,
+      "name": "minRateOutOfRange",
+      "msg": "The floor rate must be between 1 and 10000 basis points"
     }
   ],
   "types": [
@@ -766,9 +781,12 @@ export type Pumpking = {
             "type": "u64"
           },
           {
-            "name": "premium",
+            "name": "maxPremium",
             "docs": [
-              "`FR-021` is not enforced here yet — see `issue_policy`."
+              "The most the buyer will pay. `FR-021` sets the price, not this: the",
+              "program charges what the formula says and refuses above this bound.",
+              "Without it a quote and the transaction that follows it are two",
+              "different prices whenever a day is recorded in between."
             ],
             "type": "u64"
           },
@@ -890,6 +908,25 @@ export type Pumpking = {
             "type": "u16"
           },
           {
+            "name": "riskLoadingBps",
+            "docs": [
+              "`FR-021`: what the pool charges on top of the expected loss. A pool",
+              "charging exactly its expected loss breaks even on average and goes",
+              "insolvent on variance; this is the difference between a pool and a",
+              "coin flip, and it is published rather than negotiated."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "minRateBps",
+            "docs": [
+              "`FR-021`: the rate below which cover is not sold at any history. A",
+              "fortnight without a dry day is not proof that a cell never dries out,",
+              "and the formula has no other way to say \"we do not know yet\"."
+            ],
+            "type": "u16"
+          },
+          {
             "name": "minSensorsPerCell",
             "docs": [
               "`FR-010`: independent votes an interval needs to get a value at all."
@@ -983,6 +1020,20 @@ export type Pumpking = {
             "name": "premiumRewardsBps",
             "docs": [
               "`FR-034`: share of a premium that becomes the cell's reward reserve."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "riskLoadingBps",
+            "docs": [
+              "`FR-021`: what the pool charges on top of the expected loss."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "minRateBps",
+            "docs": [
+              "`FR-021`: the rate below which cover is not sold at any history."
             ],
             "type": "u16"
           },

@@ -5,6 +5,7 @@ declare_id!("F2cw4FWjzUL29G4WEWHANUE2jXAyF9QJLCdvmsjy7YbY");
 pub mod errors;
 pub mod index;
 pub mod instructions;
+pub mod premium;
 pub mod state;
 
 use instructions::*;

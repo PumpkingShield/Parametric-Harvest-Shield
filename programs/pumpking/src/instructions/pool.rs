@@ -26,6 +26,10 @@ pub struct PoolParams {
     pub cell_exposure_bps: u16,
     /// `FR-034`: share of a premium that becomes the cell's reward reserve.
     pub premium_rewards_bps: u16,
+    /// `FR-021`: what the pool charges on top of the expected loss.
+    pub risk_loading_bps: u16,
+    /// `FR-021`: the rate below which cover is not sold at any history.
+    pub min_rate_bps: u16,
     /// `FR-010`: independent votes an interval needs to get a value.
     pub min_sensors_per_cell: u8,
     /// `FR-050`: stake below which a sensor publishes but does not vote.
@@ -61,6 +65,19 @@ impl PoolParams {
         require!(
             self.min_sensors_per_cell > 0 && self.min_sensors_per_cell <= MAX_SENSORS_PER_CELL,
             PumpkingError::MinSensorsOutOfRange
+        );
+        // FR-021. A loading above the expected loss itself is a price nobody
+        // buys, not a danger; the bound is there to catch a misplaced digit.
+        require!(
+            u64::from(self.risk_loading_bps) <= BPS_DENOMINATOR,
+            PumpkingError::RiskLoadingOutOfRange
+        );
+        // The floor is what a pool with no history to price on falls back to,
+        // so a floor of zero means cover can be sold for nothing the first
+        // fortnight of every new cell.
+        require!(
+            self.min_rate_bps > 0 && u64::from(self.min_rate_bps) <= BPS_DENOMINATOR,
+            PumpkingError::MinRateOutOfRange
         );
         require!(self.seconds_per_day > 0, PumpkingError::DayLengthNotSet);
         // FR-023 and FR-053 are periods, not options. Zero would leave the
@@ -188,6 +205,8 @@ pub fn initialize_pool(ctx: Context<InitializePool>, params: PoolParams) -> Resu
         shares_total: 0,
         cell_exposure_bps: params.cell_exposure_bps,
         premium_rewards_bps: params.premium_rewards_bps,
+        risk_loading_bps: params.risk_loading_bps,
+        min_rate_bps: params.min_rate_bps,
         min_sensors_per_cell: params.min_sensors_per_cell,
         min_stake: params.min_stake,
         unstake_delay_days: params.unstake_delay_days,
@@ -338,6 +357,8 @@ mod tests {
             aggregator: Pubkey::new_unique(),
             cell_exposure_bps: 1_000,
             premium_rewards_bps: 1_000,
+            risk_loading_bps: 2_500,
+            min_rate_bps: 100,
             min_sensors_per_cell: 3,
             min_stake: 1_000_000,
             unstake_delay_days: 30,

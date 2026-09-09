@@ -37,4 +37,11 @@ export {
   toReadingWire,
   toSignedReadingWire,
 } from './reading.ts'
+export {
+  BPS_DENOMINATOR,
+  dryDayFrequencyBps,
+  MIN_HISTORY_DAYS,
+  premiumFor,
+  premiumRateBps,
+} from './premium.ts'
 export { sensorPublicKey, signReading, verifyReadingSignature } from './signature.ts'
