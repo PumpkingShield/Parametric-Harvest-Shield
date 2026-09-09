@@ -4,7 +4,8 @@ use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, Tran
 use crate::errors::PumpkingError;
 use crate::premium::{dry_day_frequency_bps, premium_for, premium_rate_bps};
 use crate::state::{
-    CellState, Policy, PolicyState, Pool, CELL_SEED, MAX_COVERAGE_DAYS, POLICY_SEED, POOL_SEED,
+    CellState, Policy, PolicyState, Pool, BPS_DENOMINATOR, CELL_SEED, MAX_COVERAGE_DAYS,
+    POLICY_SEED, POOL_SEED,
 };
 
 /// Selling cover — the point where the pool takes on risk it cannot refuse
@@ -195,6 +196,34 @@ pub fn price_of(pool: &Pool, day_log: &[u8], payout: u64, max_premium: u64) -> R
     Ok(premium)
 }
 
+/// How one premium divides between the cell's reward reserve and capital —
+/// `FR-034`, `FR-061`. Returns `(to_rewards, to_capital)`.
+///
+/// The split happens **at issue**, once, and nothing later moves the line:
+/// `FR-034` says closing a policy without an event redistributes nothing,
+/// because capital was paid its part the day the risk was taken on, not the
+/// day it turned out to be a good bet.
+///
+/// The reward share is computed and the remainder handed to capital, rather
+/// than both sides computed and hoped to add up. Two divisions of the same
+/// number can lose a unit between them; a subtraction cannot. The premium is
+/// conserved exactly, and the dust of the division falls to capital — the same
+/// direction every other rounding in this program takes.
+///
+/// Nothing here can overflow: the product is taken in `u128` and both parts
+/// are bounded by the premium.
+pub fn split_premium(premium: u64, rewards_bps: u16) -> (u64, u64) {
+    // A share larger than the whole is not a split. `initialize_pool` refuses
+    // one, and clamping here means the arithmetic below holds on its own terms
+    // rather than on a check living in another file.
+    let share = u64::from(rewards_bps).min(BPS_DENOMINATOR);
+    let to_rewards = u128::from(premium) * u128::from(share) / u128::from(BPS_DENOMINATOR);
+    // With `share <= BPS_DENOMINATOR` the quotient is at most `premium`, so
+    // the conversion cannot narrow and the subtraction cannot go below zero.
+    let to_rewards = u64::try_from(to_rewards).unwrap_or(premium);
+    (to_rewards, premium - to_rewards)
+}
+
 /// Issues a policy — `FR-018`.
 pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
@@ -238,24 +267,38 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
         ctx.accounts.asset_mint.decimals,
     )?;
 
+    // FR-034: the premium divides here and only here.
+    let (to_rewards, to_capital) = split_premium(premium, ctx.accounts.pool.premium_rewards_bps);
+
     let pool = &mut ctx.accounts.pool;
     pool.reserved_total = pool
         .reserved_total
         .checked_add(params.payout)
         .ok_or(PumpkingError::MathOverflow)?;
-    // `FR-034` splits the premium between capital and the cell's reward
-    // reserve; until `T018` carves out the reward share, all of it is capital.
-    // No shares are minted against it — the gain belongs to the holders who
-    // were already carrying the risk.
+    // No shares are minted against the capital share — the gain belongs to the
+    // holders who were already carrying the risk.
+    //
+    // `FR-061`: the reward share is deliberately **not** added here. Both
+    // parts sit in the same vault, but only this number backs policies, so
+    // what the sensors earned is neither sold as cover nor withdrawn as
+    // capital. The vault holds `capital_total` plus every cell's reserve; the
+    // two are told apart by the books, which is why the split is a
+    // subtraction and not a second division.
     pool.capital_total = pool
         .capital_total
-        .checked_add(premium)
+        .checked_add(to_capital)
         .ok_or(PumpkingError::MathOverflow)?;
 
     let cell = &mut ctx.accounts.cell;
     cell.reserved = cell
         .reserved
         .checked_add(params.payout)
+        .ok_or(PumpkingError::MathOverflow)?;
+    // FR-062: the reserve belongs to the cell whose policy paid for it, and
+    // waits there for the interval that earns it.
+    cell.rewards_reserve = cell
+        .rewards_reserve
+        .checked_add(to_rewards)
         .ok_or(PumpkingError::MathOverflow)?;
 
     ctx.accounts.policy.set_inner(Policy {
@@ -582,6 +625,77 @@ mod tests {
         let first = price_of(&pool(), &log, 12_345, u64::MAX).unwrap();
         let second = price_of(&pool(), &log, 12_345, u64::MAX).unwrap();
         assert_eq!(first, second);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* FR-034, FR-061: the premium divides at issue                      */
+    /* ---------------------------------------------------------------- */
+
+    #[test]
+    fn the_premium_divides_by_the_published_share() {
+        // A tenth to the sensors, the rest to the people carrying the risk.
+        assert_eq!(split_premium(10_000, 1_000), (1_000, 9_000));
+        assert_eq!(split_premium(2_500, 2_000), (500, 2_000));
+    }
+
+    #[test]
+    fn neither_side_of_the_split_can_be_the_whole_premium_by_accident() {
+        // The two ends of the published range, both of them legal parameters.
+        assert_eq!(split_premium(7_777, 0), (0, 7_777));
+        assert_eq!(split_premium(7_777, 10_000), (7_777, 0));
+        // A share past the whole is refused at `initialize_pool` and cannot
+        // reach here; if it ever did, it would give the sensors everything
+        // rather than wrap capital past the premium.
+        assert_eq!(split_premium(7_777, 30_000), (7_777, 0));
+    }
+
+    #[test]
+    fn the_premium_is_conserved_exactly_at_every_share() {
+        // Not a rounding preference: a unit lost between the two halves is a
+        // unit sitting in the vault that no account claims and no instruction
+        // can ever move. The subtraction is what makes that impossible.
+        for premium in [1u64, 2, 3, 7, 999, 1_000_001, u64::MAX] {
+            for bps in [0u16, 1, 333, 5_000, 9_999, 10_000] {
+                let (rewards, capital) = split_premium(premium, bps);
+                assert_eq!(
+                    rewards.checked_add(capital),
+                    Some(premium),
+                    "premium {premium} at {bps} bps"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_dust_of_the_division_falls_to_capital() {
+        // A third of one unit is nobody's unit; capital keeps it, as it keeps
+        // the dust of a deposit and of a premium.
+        assert_eq!(split_premium(1, 3_333), (0, 1));
+        assert_eq!(split_premium(9, 5_000), (4, 5));
+    }
+
+    #[test]
+    fn the_largest_premium_at_the_largest_share_does_not_wrap() {
+        // The intermediate product leaves u64 long before the result does.
+        assert_eq!(split_premium(u64::MAX, 10_000), (u64::MAX, 0));
+        assert_eq!(split_premium(u64::MAX, 5_000), (u64::MAX / 2, u64::MAX / 2 + 1));
+    }
+
+    #[test]
+    fn what_the_sensors_earned_is_not_liquidity_to_sell_against() {
+        // FR-061 as underwriting sees it: the reward share never reaches
+        // `capital_total`, so it is not free liquidity, it does not raise the
+        // cell exposure limit, and no policy is written against it.
+        let mut pool = pool();
+        pool.capital_total = 0;
+        pool.reserved_total = 0;
+
+        let (to_rewards, to_capital) = split_premium(10_000, pool.premium_rewards_bps);
+        pool.capital_total += to_capital;
+
+        assert_eq!(to_rewards, 1_000);
+        assert_eq!(pool.free_liquidity(), 9_000);
+        assert_eq!(pool.cell_exposure_limit(), 900);
     }
 
     #[test]
