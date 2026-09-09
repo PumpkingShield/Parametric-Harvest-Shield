@@ -36,4 +36,34 @@ pub enum PumpkingError {
 
     #[msg("Arithmetic overflow")]
     MathOverflow,
+
+    #[msg("A policy must pay out something")]
+    PayoutNotSet,
+
+    #[msg("A policy costing nothing is a free option on the pool")]
+    PremiumNotSet,
+
+    #[msg("The coverage window ends before it starts")]
+    WindowNotOrdered,
+
+    #[msg("The coverage window is longer than the day log can answer for")]
+    WindowTooLong,
+
+    #[msg("The spell threshold cannot be reached inside the coverage window")]
+    ThresholdOutOfWindow,
+
+    #[msg("Coverage may not start before the waiting period has elapsed")]
+    WaitingPeriodNotElapsed,
+
+    #[msg("The cell has fewer sensors than a value needs")]
+    CellNotCovered,
+
+    #[msg("Free liquidity does not cover this payout")]
+    InsufficientLiquidity,
+
+    #[msg("The cell would owe more than its share of the capital")]
+    CellExposureExceeded,
+
+    #[msg("The pool has no day index for this moment")]
+    DayIndexUnavailable,
 }

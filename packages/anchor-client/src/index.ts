@@ -4,6 +4,8 @@ export type {
   DepositCapitalInput,
   InitializePoolInput,
   InstructionInput,
+  IssuePolicyInput,
+  PolicyTerms,
   PoolParams,
 } from './instructions.ts'
 export {
@@ -11,6 +13,7 @@ export {
   depositCapitalInstruction,
   derivePdaFromIdl,
   initializePoolInstruction,
+  issuePolicyInstruction,
 } from './instructions.ts'
 export type { Pda } from './pda.ts'
 export {

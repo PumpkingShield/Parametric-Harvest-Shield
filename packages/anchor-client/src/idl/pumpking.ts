@@ -234,6 +234,137 @@ export type Pumpking = {
           }
         }
       ]
+    },
+    {
+      "name": "issuePolicy",
+      "docs": [
+        "Sells cover — `FR-018`. Once this returns, the payout is owed the",
+        "moment the index says so: `settle_policy` has no discretion, so every",
+        "question the pool gets to ask is asked here."
+      ],
+      "discriminator": [
+        126,
+        159,
+        34,
+        92,
+        118,
+        55,
+        15,
+        196
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "`FR-025` and `FR-067`: buyer, owner and payer are one account. The",
+            "policy holds no payer field, so a cooperative or a donor paying for",
+            "somebody else changes this instruction later and nothing downstream —",
+            "not settlement, not consensus, not the index."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "docs": [
+            "Must already exist: cover is sold on a cell the network is publishing",
+            "for, and `FR-022` is that sentence enforced."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.cell_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "arg",
+                "path": "params.nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "assetMint"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "ownerTokens",
+          "docs": [
+            "The buyer's own token account — `FR-025`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "policyParams"
+            }
+          }
+        }
+      ]
     }
   ],
   "accounts": [
@@ -248,6 +379,32 @@ export type Pumpking = {
         205,
         221,
         66
+      ]
+    },
+    {
+      "name": "cellState",
+      "discriminator": [
+        183,
+        122,
+        196,
+        168,
+        99,
+        142,
+        27,
+        53
+      ]
+    },
+    {
+      "name": "policy",
+      "discriminator": [
+        222,
+        135,
+        7,
+        163,
+        235,
+        177,
+        33,
+        68
       ]
     },
     {
@@ -319,6 +476,56 @@ export type Pumpking = {
       "code": 6010,
       "name": "mathOverflow",
       "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6011,
+      "name": "payoutNotSet",
+      "msg": "A policy must pay out something"
+    },
+    {
+      "code": 6012,
+      "name": "premiumNotSet",
+      "msg": "A policy costing nothing is a free option on the pool"
+    },
+    {
+      "code": 6013,
+      "name": "windowNotOrdered",
+      "msg": "The coverage window ends before it starts"
+    },
+    {
+      "code": 6014,
+      "name": "windowTooLong",
+      "msg": "The coverage window is longer than the day log can answer for"
+    },
+    {
+      "code": 6015,
+      "name": "thresholdOutOfWindow",
+      "msg": "The spell threshold cannot be reached inside the coverage window"
+    },
+    {
+      "code": 6016,
+      "name": "waitingPeriodNotElapsed",
+      "msg": "Coverage may not start before the waiting period has elapsed"
+    },
+    {
+      "code": 6017,
+      "name": "cellNotCovered",
+      "msg": "The cell has fewer sensors than a value needs"
+    },
+    {
+      "code": 6018,
+      "name": "insufficientLiquidity",
+      "msg": "Free liquidity does not cover this payout"
+    },
+    {
+      "code": 6019,
+      "name": "cellExposureExceeded",
+      "msg": "The cell would owe more than its share of the capital"
+    },
+    {
+      "code": 6020,
+      "name": "dayIndexUnavailable",
+      "msg": "The pool has no day index for this moment"
     }
   ],
   "types": [
@@ -341,6 +548,260 @@ export type Pumpking = {
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cellState",
+      "docs": [
+        "PDA `[\"cell\", cell_id]`. Everything the settlement of a policy reads."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "docs": [
+              "H3 index — `FR-006`. The grid level is read back out of it (`FR-069`),",
+              "so a policy is settled at the level it was sold on."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "sensorCount",
+            "docs": [
+              "Registered sensors, at most `MAX_SENSORS_PER_CELL`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "underInvestigation",
+            "docs": [
+              "`FR-045`: systematic divergence from the reference stops new policies",
+              "on this cell. Policies already sold keep being served by the median —",
+              "the reference moves future underwriting, never a live obligation."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Payout committed to policies on this cell — checked against",
+              "`Pool::cell_exposure_limit`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rewardsReserve",
+            "docs": [
+              "`FR-062`: the reward reserve belongs to the cell, fed by the premiums",
+              "of its own policies and split between the sensors that voted."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "firstDayIndex",
+            "docs": [
+              "Oldest day the ring buffer still holds."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "lastDayIndex",
+            "docs": [
+              "Newest day recorded; `None` until the cell has its first day."
+            ],
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "dayLog",
+            "docs": [
+              "`0` no coverage, `1` dry, `2` wet, indexed by `day_index % DAY_LOG_LEN`.",
+              "A day inside the window that was never written reads as no coverage,",
+              "which is the honest answer and breaks a run — `FR-047`."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                128
+              ]
+            }
+          },
+          {
+            "name": "contributors",
+            "docs": [
+              "Bitmask of the sensors that voted in that day, same slot."
+            ],
+            "type": {
+              "array": [
+                "u32",
+                128
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "policy",
+      "docs": [
+        "PDA `[\"policy\", owner, nonce]`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "docs": [
+              "`FR-066`: fixed at issue and never changed. There is no path to",
+              "redirect someone else's payout, because there is no field to change."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "docs": [
+              "Distinguishes several policies of one owner; part of the seeds, so it",
+              "is stored to let the address be rebuilt from the account."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "spellDaysThreshold",
+            "docs": [
+              "`FR-046`: consecutive dry days that trigger the event."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          },
+          {
+            "name": "premium",
+            "docs": [
+              "`FR-025`: paid by the owner from their own wallet, so there is no",
+              "separate payer field to hold."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "windowStartDay",
+            "docs": [
+              "Day indices, inclusive. `FR-069`: the window is counted at the grid",
+              "level this cell was sold on."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "windowEndDay",
+            "type": "u32"
+          },
+          {
+            "name": "state",
+            "type": {
+              "defined": {
+                "name": "policyState"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "policyParams",
+      "docs": [
+        "Selling cover — the point where the pool takes on risk it cannot refuse",
+        "later. Everything the underwriting depends on is checked here, because",
+        "`settle_policy` (`FR-030`) has no discretion at all: once this instruction",
+        "returns `Ok`, the payout is owed the moment the index says so.",
+        "The terms of one policy, as the buyer states them.",
+        "",
+        "Gathered into one type for the same reason as `PoolParams`: the rules that",
+        "make a set of terms sellable live in one place and can be checked without a",
+        "runtime. `owner` is not among them — it is the signer, and `FR-066` gives",
+        "the policy no field to point the money somewhere else."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "nonce",
+            "docs": [
+              "Distinguishes several policies of one buyer; part of the seeds."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cellId",
+            "docs": [
+              "`FR-006`: cover is sold on a cell, never on a field."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "spellDaysThreshold",
+            "docs": [
+              "`FR-046`: consecutive dry days that trigger the event."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          },
+          {
+            "name": "premium",
+            "docs": [
+              "`FR-021` is not enforced here yet — see `issue_policy`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "windowStartDay",
+            "docs": [
+              "Day indices, both ends inclusive — `FR-024`."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "windowEndDay",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "policyState",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "active"
+          },
+          {
+            "name": "paidOut"
+          },
+          {
+            "name": "closedNoEvent"
+          },
+          {
+            "name": "unclaimed"
           }
         ]
       }

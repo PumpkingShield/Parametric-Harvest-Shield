@@ -75,6 +75,95 @@ function argSeedBytes(where: string, type: IdlType, value: unknown): Uint8Array 
   return Uint8Array.from(encoded.toArray('le', width))
 }
 
+/**
+ * Anchor camel-cases the **names** in the IDL it generates for TypeScript but
+ * leaves the **path** of a seed as the Rust identifier that wrote it: a field
+ * listed as `cellId` is pointed at by `params.cell_id`. So a path segment is
+ * matched in both forms, and a path that already arrives camel-cased — which
+ * is what Anchor's own runtime converter produces — keeps working unchanged.
+ *
+ * The domain is narrow enough for this to be exact rather than a guess:
+ * segments are Rust identifiers, `[a-z0-9_]+`.
+ */
+function camelSegment(segment: string): string {
+  return segment.replace(/_+([a-z0-9])/g, (_match, char: string) => char.toUpperCase())
+}
+
+/** Whether an IDL name is the one a path segment is pointing at. */
+function names(candidate: string, segment: string): boolean {
+  return candidate === segment || candidate === camelSegment(segment)
+}
+
+/** A property under either spelling, without confusing a real `0` for absence. */
+function pick(source: Readonly<Record<string, unknown>>, segment: string): unknown {
+  if (segment in source) {
+    return source[segment]
+  }
+  const camel = camelSegment(segment)
+  return camel in source ? source[camel] : undefined
+}
+
+/**
+ * The declared type of one field of a `defined` struct — the step a dotted
+ * argument path takes, e.g. `params.cell_id`.
+ *
+ * A seed is bytes, and the width of those bytes comes from the type rather
+ * than from the runtime value: a `BN` holding 7 could be a `u8` or a `u64`,
+ * and picking the wrong one derives an address that exists but is not the
+ * account the program will look at.
+ */
+function structFieldType(where: string, type: IdlType, step: string): IdlType {
+  const name = typeof type === 'object' && 'defined' in type ? type.defined.name : undefined
+  const definition = name === undefined ? undefined : idl.types?.find((one) => one.name === name)
+  const body = definition?.type
+  const fields: readonly unknown[] =
+    body !== undefined && body.kind === 'struct' ? (body.fields ?? []) : []
+
+  for (const field of fields) {
+    if (
+      typeof field === 'object' &&
+      field !== null &&
+      'name' in field &&
+      typeof field.name === 'string' &&
+      names(field.name, step) &&
+      'type' in field
+    ) {
+      return field.type as IdlType
+    }
+  }
+  throw new Error(`seed \`${where}\` reads field \`${step}\`, which ${name ?? 'the type'} has not`)
+}
+
+/**
+ * The value and width of an argument seed, following a dotted path into a
+ * struct argument when the program declares one — Anchor writes
+ * `params.cell_id` whenever the seed comes out of a parameter object.
+ */
+function argSeedValue(account: string, path: string, ctx: Resolution): Uint8Array {
+  const [root, ...rest] = path.split('.')
+  const argument =
+    root === undefined
+      ? undefined
+      : ctx.instruction.args.find((candidate) => names(candidate.name, root))
+  if (root === undefined || argument === undefined) {
+    throw new Error(`\`${account}\` is seeded by argument \`${path}\`, which is unknown`)
+  }
+
+  const where = `${account}.${path}`
+  let type: IdlType = argument.type
+  let value: unknown = pick(ctx.args, root)
+
+  for (const step of rest) {
+    if (typeof value !== 'object' || value === null) {
+      throw new Error(`seed \`${where}\` reads \`${step}\` of something that is not a struct`)
+    }
+    type = structFieldType(where, type, step)
+    value = pick(value as Record<string, unknown>, step)
+  }
+
+  return argSeedBytes(where, type, value)
+}
+
 function seedBytes(account: string, seed: IdlSeed, ctx: Resolution): Uint8Array {
   switch (seed.kind) {
     case 'const':
@@ -88,19 +177,14 @@ function seedBytes(account: string, seed: IdlSeed, ctx: Resolution): Uint8Array 
             'supply the address instead',
         )
       }
-      const address = ctx.resolved.get(seed.path)
+      const address = ctx.resolved.get(seed.path) ?? ctx.resolved.get(camelSegment(seed.path))
       if (address === undefined) {
         throw new Error(`\`${account}\` is seeded by account \`${seed.path}\`, which is unknown`)
       }
       return address.toBytes()
     }
-    case 'arg': {
-      const field = ctx.instruction.args.find((candidate) => candidate.name === seed.path)
-      if (field === undefined) {
-        throw new Error(`\`${account}\` is seeded by argument \`${seed.path}\`, which is unknown`)
-      }
-      return argSeedBytes(`${account}.${seed.path}`, field.type, ctx.args[seed.path])
-    }
+    case 'arg':
+      return argSeedValue(account, seed.path, ctx)
   }
 }
 
@@ -263,5 +347,74 @@ export function depositCapitalInstruction(input: DepositCapitalInput): Transacti
       tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
     },
     args: { amount: new BN(input.amount.toString()) },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* issue_policy                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The terms of one policy — the TypeScript twin of `PolicyParams` in
+ * `instructions/policy.rs`.
+ *
+ * Days are indices, not dates (`FR-049`), so they stay plain numbers; every
+ * amount is a `u64` and stays `bigint`.
+ */
+export interface PolicyTerms {
+  /** Distinguishes several policies of one buyer; part of the seeds. */
+  nonce: bigint
+  cellId: bigint
+  /** `FR-046`: consecutive dry days that trigger the event. */
+  spellDaysThreshold: number
+  payout: bigint
+  /** `FR-021` will compute this; the program still takes what it is told. */
+  premium: bigint
+  windowStartDay: number
+  windowEndDay: number
+}
+
+export interface IssuePolicyInput {
+  /** `FR-025`, `FR-067`: buyer, owner and payer are one account. */
+  owner: PublicKey
+  /** Must equal `pool.asset_mint`; the program checks it. */
+  assetMint: PublicKey
+  /** The buyer's own token account, with the buyer as its authority. */
+  ownerTokens: PublicKey
+  terms: PolicyTerms
+  /** Defaults to the pool's capital vault, derived from the seeds. */
+  vault?: PublicKey
+  tokenProgram?: PublicKey
+  programId?: PublicKey
+}
+
+/**
+ * Buys cover — `FR-018`. The cell and the policy addresses come out of the
+ * terms, because the program seeds them from the same two numbers.
+ */
+export function issuePolicyInstruction(input: IssuePolicyInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  const pool = poolPda(programId).address
+  const { terms } = input
+  return buildInstruction('issuePolicy', {
+    programId,
+    accounts: {
+      owner: input.owner,
+      assetMint: input.assetMint,
+      vault: input.vault ?? vaultPda(pool, programId).address,
+      ownerTokens: input.ownerTokens,
+      tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
+    },
+    args: {
+      params: {
+        nonce: new BN(terms.nonce.toString()),
+        cellId: new BN(terms.cellId.toString()),
+        spellDaysThreshold: terms.spellDaysThreshold,
+        payout: new BN(terms.payout.toString()),
+        premium: new BN(terms.premium.toString()),
+        windowStartDay: terms.windowStartDay,
+        windowEndDay: terms.windowEndDay,
+      },
+    },
   })
 }

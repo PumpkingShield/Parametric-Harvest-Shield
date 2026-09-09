@@ -1,13 +1,14 @@
-import { BorshInstructionCoder, type Idl } from '@coral-xyz/anchor'
+import { BN, BorshInstructionCoder, type Idl } from '@coral-xyz/anchor'
 import { describe, expect, it } from 'vitest'
 import { PUMPKING_IDL } from './idl/idl.ts'
 import {
   buildInstruction,
   depositCapitalInstruction,
   initializePoolInstruction,
+  issuePolicyInstruction,
   type PoolParams,
 } from './instructions.ts'
-import { capitalPositionPda, poolPda, stakeVaultPda, vaultPda } from './pda.ts'
+import { capitalPositionPda, cellPda, poolPda, stakeVaultPda, vaultPda } from './pda.ts'
 import { PROGRAM_ID } from './program.ts'
 import { PublicKey, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from './web3.ts'
 
@@ -206,7 +207,54 @@ describe('buildInstruction', () => {
   })
 
   it('refuses an instruction the IDL does not describe', () => {
-    expect(() => buildInstruction('issuePolicy')).toThrow(/no instruction `issuePolicy`/)
+    // Deliberately not a name from the roadmap: settlePolicy and closePolicy
+    // are coming, and a test that fails the day they land tests the calendar.
+    expect(() => buildInstruction('reticulateSplines')).toThrow(
+      /no instruction `reticulateSplines`/,
+    )
+  })
+
+  /**
+   * `issue_policy` seeds two accounts out of fields of its `params` argument,
+   * and Anchor writes those paths in the Rust spelling (`params.cell_id`)
+   * while naming the field itself `cellId`. Both halves have to line up or the
+   * derived address is silently somebody else's.
+   */
+  it('follows a dotted argument path into a struct', () => {
+    const terms = {
+      nonce: 7n,
+      cellId: 0x871e701b3ffffffn,
+      spellDaysThreshold: 14,
+      payout: 50_000n,
+      premium: 2_500n,
+      windowStartDay: 13,
+      windowEndDay: 42,
+    }
+    const { keys } = issuePolicyInstruction({
+      owner: depositor,
+      assetMint,
+      ownerTokens: depositorTokens,
+      programId,
+      terms,
+    })
+    const index = accountNames('issuePolicy').indexOf('cell')
+    expect(keys[index]?.pubkey.equals(cellPda(terms.cellId, programId).address)).toBe(true)
+  })
+
+  it('says which seed it is missing rather than deriving a wrong address', () => {
+    expect(() =>
+      buildInstruction('issuePolicy', {
+        programId,
+        accounts: {
+          owner: depositor,
+          assetMint,
+          vault: key(9),
+          ownerTokens: depositorTokens,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        },
+        args: { params: { nonce: new BN(1) } },
+      }),
+    ).toThrow(/cell_id/)
   })
 
   it('fills a fixed address from the IDL rather than from the caller', () => {

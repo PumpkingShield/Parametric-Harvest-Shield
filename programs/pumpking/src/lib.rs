@@ -24,4 +24,11 @@ pub mod pumpking {
     pub fn deposit_capital(ctx: Context<DepositCapital>, amount: u64) -> Result<()> {
         instructions::pool::deposit_capital(ctx, amount)
     }
+
+    /// Sells cover — `FR-018`. Once this returns, the payout is owed the
+    /// moment the index says so: `settle_policy` has no discretion, so every
+    /// question the pool gets to ask is asked here.
+    pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<()> {
+        instructions::policy::issue_policy(ctx, params)
+    }
 }

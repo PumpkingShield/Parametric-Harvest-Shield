@@ -5,6 +5,7 @@ import {
   buildInstruction,
   depositCapitalInstruction,
   initializePoolInstruction,
+  issuePolicyInstruction,
 } from './instructions.ts'
 import {
   CAPITAL_SEED,
@@ -53,10 +54,10 @@ describe('u64Seed', () => {
 
 describe('derived addresses', () => {
   /**
-   * Frozen vectors. `cell`, `sensor` and `policy` have no instruction yet, so
-   * the IDL cannot confirm them the way it confirms the rest below, and these
-   * lines are all that stands between a seed edit and a client that quietly
-   * addresses an account nobody ever created.
+   * Frozen vectors. Everything but `sensor` is also checked against the IDL
+   * below, now that `issue_policy` describes the cell and the policy; `sensor`
+   * has no instruction yet, so this line is all that stands between a seed
+   * edit and a client that quietly addresses an account nobody ever created.
    */
   it('matches the recorded vectors', () => {
     const pool = poolPda(programId)
@@ -210,7 +211,37 @@ describe('agreement with the IDL', () => {
     ).toBe(true)
   })
 
+  /**
+   * The seeds `issue_policy` brought under the IDL's description: `cell` is
+   * seeded by a `u64` out of the terms and `policy` by the owner and a `u64`
+   * nonce. Until this instruction existed both were only frozen vectors.
+   */
+  it('derives the cell and the policy the way issue_policy declares them', () => {
+    const nonce = 7n
+    const { keys } = issuePolicyInstruction({
+      owner,
+      assetMint: key(4),
+      ownerTokens: key(6),
+      programId,
+      terms: {
+        nonce,
+        cellId,
+        spellDaysThreshold: 14,
+        payout: 50_000n,
+        premium: 2_500n,
+        windowStartDay: 13,
+        windowEndDay: 42,
+      },
+    })
+    expect(addressAt('issuePolicy', 'cell', keys).equals(cellPda(cellId, programId).address)).toBe(
+      true,
+    )
+    expect(
+      addressAt('issuePolicy', 'policy', keys).equals(policyPda(owner, nonce, programId).address),
+    ).toBe(true)
+  })
+
   it('refuses an instruction the program does not have', () => {
-    expect(() => buildInstruction('settlePolicy')).toThrow(/no instruction/)
+    expect(() => buildInstruction('reticulateSplines')).toThrow(/no instruction/)
   })
 })
