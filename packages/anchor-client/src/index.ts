@@ -1,19 +1,24 @@
 export { PUMPKING_IDL } from './idl/idl.ts'
 export type { Pumpking } from './idl/pumpking.ts'
 export type {
+  DayClassification,
+  DayRecord,
   DepositCapitalInput,
   InitializePoolInput,
   InstructionInput,
   IssuePolicyInput,
   PolicyTerms,
   PoolParams,
+  SubmitDayRecordInput,
 } from './instructions.ts'
 export {
   buildInstruction,
+  DayState,
   depositCapitalInstruction,
   derivePdaFromIdl,
   initializePoolInstruction,
   issuePolicyInstruction,
+  submitDayRecordInstruction,
 } from './instructions.ts'
 export type { Pda } from './pda.ts'
 export {

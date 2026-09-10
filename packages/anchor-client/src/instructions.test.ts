@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { PUMPKING_IDL } from './idl/idl.ts'
 import {
   buildInstruction,
+  DayState,
   depositCapitalInstruction,
   initializePoolInstruction,
   issuePolicyInstruction,
   type PoolParams,
+  submitDayRecordInstruction,
 } from './instructions.ts'
 import { capitalPositionPda, cellPda, poolPda, stakeVaultPda, vaultPda } from './pda.ts'
 import { PROGRAM_ID } from './program.ts'
@@ -341,5 +343,108 @@ describe('issuePolicyInstruction', () => {
     const encoded = data.params as Record<string, unknown>
     expect(String(encoded.payout)).toBe(payout.toString())
     expect(String(encoded.maxPremium)).toBe(maxPremium.toString())
+  })
+})
+
+describe('submitDayRecordInstruction', () => {
+  const aggregator = key(11)
+  const cellId = 0x871e701b3ffffffn
+  const readingsRoot = Uint8Array.from({ length: 32 }, (_value, index) => index)
+
+  const record = {
+    cellId,
+    dayIndex: 9,
+    state: DayState.Dry,
+    contributors: 0b111,
+    readingsRoot,
+    rainfallX100: 50,
+    coveredIntervals: 24,
+    totalIntervals: 24,
+  }
+  const input = { aggregator, record, programId }
+
+  it('carries the discriminator the program compiled', () => {
+    const instruction = submitDayRecordInstruction(input)
+    const expected = idl.instructions.find((one) => one.name === 'submitDayRecord')?.discriminator
+    expect(expected).toHaveLength(8)
+    expect([...instruction.data.subarray(0, 8)]).toEqual(expected)
+  })
+
+  it('round-trips every field through the wire format', () => {
+    const { name, data } = decode(submitDayRecordInstruction(input).data)
+    expect(name).toBe('submitDayRecord')
+
+    const encoded = data.params as Record<string, unknown>
+    expect(Object.keys(encoded).sort()).toEqual([
+      'cellId',
+      'contributors',
+      'coveredIntervals',
+      'dayIndex',
+      'rainfallX100',
+      'readingsRoot',
+      'state',
+      'totalIntervals',
+    ])
+    expect(String(encoded.cellId)).toBe(cellId.toString())
+    expect(encoded.dayIndex).toBe(9)
+    expect(encoded.state).toBe(DayState.Dry)
+    expect(encoded.contributors).toBe(0b111)
+    expect([...(encoded.readingsRoot as number[])]).toEqual([...readingsRoot])
+    expect(encoded.rainfallX100).toBe(50)
+    expect(encoded.coveredIntervals).toBe(24)
+    expect(encoded.totalIntervals).toBe(24)
+  })
+
+  /**
+   * `null` and `0` are different days: one is silence, the other is a real
+   * reading of a dry sky. Borsh encodes the option as a leading byte, so a
+   * client that collapsed them would submit a day the program then refuses —
+   * or worse, one it accepts as measured.
+   */
+  it('keeps a day without coverage apart from a day that measured nothing', () => {
+    const silent = { ...record, state: DayState.NoCoverage, rainfallX100: null, contributors: 0 }
+    const { data: none } = decode(submitDayRecordInstruction({ ...input, record: silent }).data)
+    expect((none.params as Record<string, unknown>).rainfallX100).toBeNull()
+
+    const measured = { ...record, rainfallX100: 0 }
+    const { data: zero } = decode(submitDayRecordInstruction({ ...input, record: measured }).data)
+    expect((zero.params as Record<string, unknown>).rainfallX100).toBe(0)
+  })
+
+  it('derives the cell from the id and lists the accounts in order', () => {
+    const instruction = submitDayRecordInstruction(input)
+    expect(accountNames('submitDayRecord')).toEqual([
+      'aggregator',
+      'pool',
+      'cell',
+      'systemProgram',
+    ])
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      aggregator.toBase58(),
+      poolPda(programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      SYSTEM_PROGRAM_ID.toBase58(),
+    ])
+  })
+
+  it('marks the aggregator the only signer', () => {
+    const { keys } = submitDayRecordInstruction(input)
+    expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
+      aggregator.toBase58(),
+    ])
+  })
+
+  /**
+   * Borsh writes a fixed-width array without a length, so a short root would
+   * be padded and a long one would silently eat the fields after it. Refusing
+   * at the edge names the mistake where it was made.
+   */
+  it('refuses a root that is not 32 bytes', () => {
+    expect(() =>
+      submitDayRecordInstruction({
+        ...input,
+        record: { ...record, readingsRoot: new Uint8Array(31) },
+      }),
+    ).toThrow(/32 bytes, got 31/)
   })
 })

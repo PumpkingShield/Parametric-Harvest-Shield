@@ -427,3 +427,79 @@ export function issuePolicyInstruction(input: IssuePolicyInput): TransactionInst
     },
   })
 }
+
+/* -------------------------------------------------------------------------- */
+/* submit_day_record                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Classification of one day, as the on-chain log stores it. The same three
+ * values as `DayState` in `@pumpking/shared`, restated here only so the client
+ * package does not depend on the shared one for a wire constant.
+ */
+export const DayState = {
+  NoCoverage: 0,
+  Dry: 1,
+  Wet: 2,
+} as const
+
+export type DayClassification = (typeof DayState)[keyof typeof DayState]
+
+/**
+ * One day of one cell — the TypeScript twin of `DayRecordParams` in
+ * `instructions/day.rs`.
+ *
+ * `rainfallX100` is `null` for a day without coverage and a number otherwise,
+ * and the program refuses any other pairing. Null and not zero: zero is a real,
+ * dry reading of the sky, and silence is not.
+ */
+export interface DayRecord {
+  cellId: bigint
+  /** Day index on the pool's clock — `FR-049`, never a date. */
+  dayIndex: number
+  state: DayClassification
+  /** Bit per sensor slot whose readings entered the day's medians. */
+  contributors: number
+  /** Merkle root of the cell values the day was summed from — `FR-037`. */
+  readingsRoot: Uint8Array
+  rainfallX100: number | null
+  coveredIntervals: number
+  totalIntervals: number
+}
+
+export interface SubmitDayRecordInput {
+  /** `FR-015`: must be `pool.aggregator`; the program checks the key. */
+  aggregator: PublicKey
+  record: DayRecord
+  programId?: PublicKey
+}
+
+/**
+ * Writes one day — `FR-015`. The cell account is derived from `cellId` and
+ * opened by the first day the network publishes for it, so there is no
+ * separate registration call to make first.
+ */
+export function submitDayRecordInstruction(
+  input: SubmitDayRecordInput,
+): TransactionInstruction {
+  const { record } = input
+  if (record.readingsRoot.length !== 32) {
+    throw new Error(`the readings root must be 32 bytes, got ${record.readingsRoot.length}`)
+  }
+  return buildInstruction('submitDayRecord', {
+    programId: input.programId ?? PROGRAM_ID,
+    accounts: { aggregator: input.aggregator },
+    args: {
+      params: {
+        cellId: new BN(record.cellId.toString()),
+        dayIndex: record.dayIndex,
+        state: record.state,
+        contributors: record.contributors,
+        readingsRoot: Array.from(record.readingsRoot),
+        rainfallX100: record.rainfallX100,
+        coveredIntervals: record.coveredIntervals,
+        totalIntervals: record.totalIntervals,
+      },
+    },
+  })
+}

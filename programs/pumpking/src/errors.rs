@@ -75,4 +75,46 @@ pub enum PumpkingError {
 
     #[msg("The floor rate must be between 1 and 10000 basis points")]
     MinRateOutOfRange,
+
+    #[msg("Only the aggregator may write a day record")]
+    NotTheAggregator,
+
+    #[msg("The day classification is not one the log knows")]
+    UnknownDayState,
+
+    #[msg("A day can only be recorded once it is over")]
+    DayNotOver,
+
+    #[msg("The day log only grows forwards")]
+    DayNotNewer,
+
+    #[msg("A day must have had intervals to be measured from")]
+    DayHasNoIntervals,
+
+    #[msg("More intervals were covered than the day had")]
+    CoverageCountsDisagree,
+
+    #[msg("A day with a value must have had a covered interval")]
+    DayHasNoCoverage,
+
+    #[msg("A day without coverage cannot carry rainfall")]
+    UncoveredDayHasRainfall,
+
+    #[msg("A measured day must carry the rainfall it was measured as")]
+    MeasuredDayHasNoRainfall,
+
+    #[msg("A day without coverage earns nobody a contribution")]
+    UncoveredDayHasContributors,
+
+    #[msg("The contributor mask addresses a sensor slot the cell has not")]
+    ContributorsOutOfRange,
+
+    #[msg("A day with a value needs the minimum number of independent votes")]
+    TooFewContributors,
+
+    #[msg("Rainfall cannot be negative")]
+    RainfallNegative,
+
+    #[msg("The day classification disagrees with the rainfall it came from")]
+    DayStateContradictsRainfall,
 }

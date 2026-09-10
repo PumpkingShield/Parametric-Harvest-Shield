@@ -32,4 +32,15 @@ pub mod pumpking {
     pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<()> {
         instructions::policy::issue_policy(ctx, params)
     }
+
+    /// Writes one day of a cell — `FR-015`. The only door the day log has, and
+    /// the aggregator is the only key that opens it. The Merkle root of the
+    /// values the day was summed from goes out as an event, which is what
+    /// makes the day auditable rather than merely asserted (`FR-037`).
+    pub fn submit_day_record(
+        ctx: Context<SubmitDayRecord>,
+        params: DayRecordParams,
+    ) -> Result<()> {
+        instructions::day::submit_day_record(ctx, params)
+    }
 }

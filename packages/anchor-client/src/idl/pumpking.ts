@@ -365,6 +365,94 @@ export type Pumpking = {
           }
         }
       ]
+    },
+    {
+      "name": "submitDayRecord",
+      "docs": [
+        "Writes one day of a cell — `FR-015`. The only door the day log has, and",
+        "the aggregator is the only key that opens it. The Merkle root of the",
+        "values the day was summed from goes out as an event, which is what",
+        "makes the day auditable rather than merely asserted (`FR-037`)."
+      ],
+      "discriminator": [
+        44,
+        39,
+        117,
+        161,
+        74,
+        198,
+        100,
+        180
+      ],
+      "accounts": [
+        {
+          "name": "aggregator",
+          "docs": [
+            "`FR-015`: the aggregator is the only role that may write a day, and it",
+            "cannot spend. The constraint is on the key rather than on a list, so",
+            "there is exactly one of it and rotating it is a pool parameter change."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "docs": [
+            "Opened by the first day the network publishes for this cell. A cell is",
+            "exactly \"somewhere readings come from\", so there is nothing to register",
+            "before the readings arrive — and only the aggregator reaches this",
+            "instruction, so `init_if_needed` opens nothing a stranger could."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.cell_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "dayRecordParams"
+            }
+          }
+        }
+      ]
     }
   ],
   "accounts": [
@@ -418,6 +506,21 @@ export type Pumpking = {
         177,
         109,
         188
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "dayRecorded",
+      "discriminator": [
+        65,
+        62,
+        166,
+        104,
+        108,
+        221,
+        163,
+        182
       ]
     }
   ],
@@ -541,6 +644,76 @@ export type Pumpking = {
       "code": 6023,
       "name": "minRateOutOfRange",
       "msg": "The floor rate must be between 1 and 10000 basis points"
+    },
+    {
+      "code": 6024,
+      "name": "notTheAggregator",
+      "msg": "Only the aggregator may write a day record"
+    },
+    {
+      "code": 6025,
+      "name": "unknownDayState",
+      "msg": "The day classification is not one the log knows"
+    },
+    {
+      "code": 6026,
+      "name": "dayNotOver",
+      "msg": "A day can only be recorded once it is over"
+    },
+    {
+      "code": 6027,
+      "name": "dayNotNewer",
+      "msg": "The day log only grows forwards"
+    },
+    {
+      "code": 6028,
+      "name": "dayHasNoIntervals",
+      "msg": "A day must have had intervals to be measured from"
+    },
+    {
+      "code": 6029,
+      "name": "coverageCountsDisagree",
+      "msg": "More intervals were covered than the day had"
+    },
+    {
+      "code": 6030,
+      "name": "dayHasNoCoverage",
+      "msg": "A day with a value must have had a covered interval"
+    },
+    {
+      "code": 6031,
+      "name": "uncoveredDayHasRainfall",
+      "msg": "A day without coverage cannot carry rainfall"
+    },
+    {
+      "code": 6032,
+      "name": "measuredDayHasNoRainfall",
+      "msg": "A measured day must carry the rainfall it was measured as"
+    },
+    {
+      "code": 6033,
+      "name": "uncoveredDayHasContributors",
+      "msg": "A day without coverage earns nobody a contribution"
+    },
+    {
+      "code": 6034,
+      "name": "contributorsOutOfRange",
+      "msg": "The contributor mask addresses a sensor slot the cell has not"
+    },
+    {
+      "code": 6035,
+      "name": "tooFewContributors",
+      "msg": "A day with a value needs the minimum number of independent votes"
+    },
+    {
+      "code": 6036,
+      "name": "rainfallNegative",
+      "msg": "Rainfall cannot be negative"
+    },
+    {
+      "code": 6037,
+      "name": "dayStateContradictsRainfall",
+      "msg": "The day classification disagrees with the rainfall it came from"
     }
   ],
   "types": [
@@ -660,6 +833,157 @@ export type Pumpking = {
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dayRecordParams",
+      "docs": [
+        "One day of one cell, written by the aggregator — `FR-015`.",
+        "",
+        "This is the only door the day log has. Everything downstream reads it and",
+        "nothing else: `price_of` counts dry days in it, `dry_spell` finds the run",
+        "in it, and `settle_policy` owes money because of what it says. So the",
+        "questions worth asking are asked here, once, on the way in.",
+        "",
+        "**What the chain checks and what it takes on trust.** The classification",
+        "arrives already made — the aggregator collected the intervals, took the",
+        "median of each (`FR-008`, `FR-010`) and summed the day — because the",
+        "intervals themselves never reach the chain. But the pool publishes the dry",
+        "threshold, so the chain re-derives dry from wet itself rather than",
+        "believing the label: mislabelling a wet day as dry is the cheapest way to",
+        "fabricate a payout, and it is the one thing here the chain already knows",
+        "enough to refuse.",
+        "",
+        "The share of intervals a day needs to count as measured (`FR-048`) stays",
+        "the aggregator's call, because that parameter lives in the registry rather",
+        "than in the pool. The asymmetry is deliberate and it leans one way: a day",
+        "wrongly called uncovered denies cover, which `FR-047` is already",
+        "conservative about, while a day wrongly called dry pays money out.",
+        "",
+        "What makes the rest auditable is `readings_root`: the Merkle root of the",
+        "cell values the day was summed from, emitted with the record. `FR-037` and",
+        "`SC-010` are that root plus the API that serves the leaves — a stranger",
+        "redoes the arithmetic and proves any one value belongs to the day."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "dayIndex",
+            "docs": [
+              "Day index, on the pool's clock — `FR-049`."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "state",
+            "docs": [
+              "`DayState` as the log stores it: 0 none, 1 dry, 2 wet."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "contributors",
+            "docs": [
+              "Bit per sensor slot whose readings entered the day's medians."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "readingsRoot",
+            "docs": [
+              "Merkle root of the cell values this day was summed from — `FR-037`."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rainfallX100",
+            "docs": [
+              "Sum of the covered intervals, `None` when the day has no value. Not",
+              "zero: zero is a real, dry reading of the sky, and silence is not."
+            ],
+            "type": {
+              "option": "i32"
+            }
+          },
+          {
+            "name": "coveredIntervals",
+            "docs": [
+              "Intervals that carried a value, and intervals the day had at all.",
+              "Shown in the trace, because a day measured from half its hours is a",
+              "different claim than one measured from all of them — `FR-048`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "totalIntervals",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dayRecorded",
+      "docs": [
+        "What a recorded day says, for anyone reconstructing the trace — `FR-016`,",
+        "`FR-037`.",
+        "",
+        "An event rather than an account: 32 bytes of root per day per cell would be",
+        "four kilobytes of rent on every cell to hold what the transaction log",
+        "already keeps, and the trace is read off-chain by definition."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "dayIndex",
+            "type": "u32"
+          },
+          {
+            "name": "state",
+            "type": "u8"
+          },
+          {
+            "name": "contributors",
+            "type": "u32"
+          },
+          {
+            "name": "readingsRoot",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rainfallX100",
+            "type": {
+              "option": "i32"
+            }
+          },
+          {
+            "name": "coveredIntervals",
+            "type": "u16"
+          },
+          {
+            "name": "totalIntervals",
+            "type": "u16"
           }
         ]
       }
