@@ -8,9 +8,17 @@ import {
   initializePoolInstruction,
   issuePolicyInstruction,
   type PoolParams,
+  settlePolicyInstruction,
   submitDayRecordInstruction,
 } from './instructions.ts'
-import { capitalPositionPda, cellPda, poolPda, stakeVaultPda, vaultPda } from './pda.ts'
+import {
+  capitalPositionPda,
+  cellPda,
+  policyPda,
+  poolPda,
+  stakeVaultPda,
+  vaultPda,
+} from './pda.ts'
 import { PROGRAM_ID } from './program.ts'
 import { PublicKey, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from './web3.ts'
 
@@ -446,5 +454,79 @@ describe('submitDayRecordInstruction', () => {
         record: { ...record, readingsRoot: new Uint8Array(31) },
       }),
     ).toThrow(/32 bytes, got 31/)
+  })
+})
+
+describe('settlePolicyInstruction', () => {
+  const caller = key(12)
+  const owner = key(13)
+  const ownerTokens = key(14)
+  const nonce = 7n
+  const cellId = 0x871e701b3ffffffn
+  const input = { caller, owner, nonce, cellId, assetMint, ownerTokens, programId }
+
+  it('carries the discriminator the program compiled', () => {
+    const instruction = settlePolicyInstruction(input)
+    const expected = idl.instructions.find((one) => one.name === 'settlePolicy')?.discriminator
+    expect(expected).toHaveLength(8)
+    expect([...instruction.data.subarray(0, 8)]).toEqual(expected)
+  })
+
+  /**
+   * `FR-026`: nothing about the payout is negotiable at the call site, so
+   * there is nothing on the wire but the discriminator. A future argument
+   * would be a future way to influence the outcome, and this is the test that
+   * would notice one arriving.
+   */
+  it('sends the discriminator and not one byte more', () => {
+    const { name, data } = decode(settlePolicyInstruction(input).data)
+    expect(name).toBe('settlePolicy')
+    expect(data).toEqual({})
+    expect(settlePolicyInstruction(input).data).toHaveLength(8)
+  })
+
+  it('lists the accounts in the order the program reads them', () => {
+    const instruction = settlePolicyInstruction(input)
+    const pool = poolPda(programId).address
+    expect(accountNames('settlePolicy')).toEqual([
+      'caller',
+      'pool',
+      'cell',
+      'policy',
+      'assetMint',
+      'vault',
+      'ownerTokens',
+      'tokenProgram',
+    ])
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      caller.toBase58(),
+      pool.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      policyPda(owner, nonce, programId).address.toBase58(),
+      assetMint.toBase58(),
+      vaultPda(pool, programId).address.toBase58(),
+      ownerTokens.toBase58(),
+      TOKEN_PROGRAM_ID.toBase58(),
+    ])
+  })
+
+  /**
+   * `FR-030`: the caller is the only signer and is checked against nothing.
+   * A second required signature — the owner's, an authority's — would be a
+   * key that could withhold a payout by declining to sign.
+   */
+  it('needs one signature, and it is not the owner or an authority', () => {
+    const { keys } = settlePolicyInstruction(input)
+    expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
+      caller.toBase58(),
+    ])
+    expect(keys.some((meta) => meta.pubkey.equals(owner))).toBe(false)
+  })
+
+  it('builds the same instruction whoever the caller is', () => {
+    const stranger = settlePolicyInstruction({ ...input, caller: key(15) })
+    const worker = settlePolicyInstruction(input)
+    expect(stranger.data).toEqual(worker.data)
+    expect(stranger.keys.slice(1)).toEqual(worker.keys.slice(1))
   })
 })

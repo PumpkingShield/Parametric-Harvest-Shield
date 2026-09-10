@@ -117,4 +117,13 @@ pub enum PumpkingError {
 
     #[msg("The day classification disagrees with the rainfall it came from")]
     DayStateContradictsRainfall,
+
+    #[msg("The policy is not active")]
+    PolicyNotActive,
+
+    #[msg("The policy was written on a different cell")]
+    PolicyCellMismatch,
+
+    #[msg("The index has not reached the policy's threshold")]
+    EventHasNotHappened,
 }

@@ -9,6 +9,7 @@ export type {
   IssuePolicyInput,
   PolicyTerms,
   PoolParams,
+  SettlePolicyInput,
   SubmitDayRecordInput,
 } from './instructions.ts'
 export {
@@ -18,6 +19,7 @@ export {
   derivePdaFromIdl,
   initializePoolInstruction,
   issuePolicyInstruction,
+  settlePolicyInstruction,
   submitDayRecordInstruction,
 } from './instructions.ts'
 export type { Pda } from './pda.ts'

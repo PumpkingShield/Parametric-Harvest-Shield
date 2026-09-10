@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::errors::PumpkingError;
+use crate::index::spell_in_window;
 use crate::premium::{dry_day_frequency_bps, premium_for, premium_rate_bps};
 use crate::state::{
     CellState, Policy, PolicyState, Pool, BPS_DENOMINATOR, CELL_SEED, MAX_COVERAGE_DAYS,
@@ -312,6 +313,182 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
         window_end_day: params.window_end_day,
         state: PolicyState::Active,
         bump: ctx.bumps.policy,
+    });
+
+    Ok(())
+}
+
+/* -------------------------------------------------------------------------- */
+/* settle_policy                                                              */
+/* -------------------------------------------------------------------------- */
+
+/// The event, recorded where anyone can read it — `FR-016`, `FR-037`.
+///
+/// `spell_days` is the index that crossed the threshold, and the window says
+/// which days it was found in. Together with the `DayRecorded` events of those
+/// days and the Merkle roots they carry, this is the whole trace: readings →
+/// cell values → days → index → this transaction.
+#[event]
+pub struct PolicySettled {
+    pub policy: Pubkey,
+    pub owner: Pubkey,
+    pub cell_id: u64,
+    pub payout: u64,
+    /// The run that triggered it, and the threshold it had to reach.
+    pub spell_days: u32,
+    pub spell_days_threshold: u8,
+    pub window_start_day: u32,
+    pub window_end_day: u32,
+}
+
+/// Whether the policy is owed its payout, and the run that says so —
+/// `FR-026`, `FR-046`.
+///
+/// **This function asks no permission and reads no clock.** It is a function
+/// of two accounts and nothing else: the policy's terms, fixed at issue, and
+/// the cell's day log, written by the aggregator. There is no parameter a
+/// caller could supply to change the answer, which is `FR-030` stated as a
+/// signature rather than as a promise.
+///
+/// The window does not have to be over. A run that has reached the threshold
+/// cannot be un-reached by the days after it, so waiting for the window to
+/// close would delay a payout that is already owed — and `SC-001` measures
+/// exactly that delay.
+pub fn check_settlement(policy: &Policy, cell: &CellState) -> Result<u32> {
+    // `FR-027`: once. A policy that has already paid, closed or been left
+    // unclaimed is not a policy the index can trigger again.
+    require!(
+        policy.state == PolicyState::Active,
+        PumpkingError::PolicyNotActive
+    );
+    require!(
+        policy.cell_id == cell.cell_id,
+        PumpkingError::PolicyCellMismatch
+    );
+
+    let reading = spell_in_window(cell, policy.window_start_day, policy.window_end_day);
+    require!(
+        reading.longest >= u32::from(policy.spell_days_threshold),
+        PumpkingError::EventHasNotHappened
+    );
+    Ok(reading.longest)
+}
+
+#[derive(Accounts)]
+pub struct SettlePolicy<'info> {
+    /// `FR-030`: anybody. The caller pays the transaction fee and gets
+    /// nothing, and is checked against nothing — a payout that needed a
+    /// particular key to arrive would be a payout that key could withhold.
+    /// In practice the worker calls it; the owner, a neighbour or a bot
+    /// calling it instead changes nothing about the outcome.
+    pub caller: Signer<'info>,
+
+    #[account(mut, seeds = [POOL_SEED], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [CELL_SEED, policy.cell_id.to_le_bytes().as_ref()],
+        bump = cell.bump,
+    )]
+    pub cell: Account<'info, CellState>,
+
+    #[account(
+        mut,
+        seeds = [POLICY_SEED, policy.owner.as_ref(), policy.nonce.to_le_bytes().as_ref()],
+        bump = policy.bump,
+    )]
+    pub policy: Account<'info, Policy>,
+
+    #[account(address = pool.asset_mint)]
+    pub asset_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, address = pool.vault)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-066`: an account the policy's owner holds the authority over, and
+    /// the constraint is the whole of "the recipient cannot be changed". The
+    /// caller chooses which of the owner's accounts, never whose.
+    #[account(
+        mut,
+        token::mint = asset_mint,
+        token::authority = policy.owner,
+    )]
+    pub owner_tokens: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+/// Pays a policy whose index crossed its threshold — `FR-026`, `FR-027`,
+/// `FR-030`.
+///
+/// Nothing here is discretionary, and that is the point: every question the
+/// pool was entitled to ask was asked at `issue_policy`, where it could still
+/// say no. By the time the log says the spell happened, the obligation exists
+/// and this instruction only carries it out.
+///
+/// A failed delivery costs nothing. The whole transaction reverts, the policy
+/// stays active and the payout stays reserved, so the call can simply be made
+/// again — `FR-029` turns that into a claimable balance for the case where
+/// delivery cannot succeed at all.
+pub fn settle_policy(ctx: Context<SettlePolicy>) -> Result<()> {
+    let spell_days = check_settlement(&ctx.accounts.policy, &ctx.accounts.cell)?;
+    let payout = ctx.accounts.policy.payout;
+
+    let pool_bump = ctx.accounts.pool.bump;
+    let seeds: &[&[u8]] = &[POOL_SEED, &[pool_bump]];
+
+    // Money first, accounting second — the same order as every other transfer
+    // here. A policy marked paid against a transfer that did not happen is the
+    // one bookkeeping error nobody can undo.
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.vault.to_account_info(),
+                mint: ctx.accounts.asset_mint.to_account_info(),
+                to: ctx.accounts.owner_tokens.to_account_info(),
+                authority: ctx.accounts.pool.to_account_info(),
+            },
+            &[seeds],
+        ),
+        payout,
+        ctx.accounts.asset_mint.decimals,
+    )?;
+
+    let pool = &mut ctx.accounts.pool;
+    // Both totals fall by the same amount, so free liquidity does not move:
+    // this money was committed the day the policy was sold and was never
+    // available to underwrite anything else. The reward reserves sitting in
+    // the same vault are untouched, because they were never in `capital_total`
+    // for a payout to reach.
+    pool.capital_total = pool
+        .capital_total
+        .checked_sub(payout)
+        .ok_or(PumpkingError::MathOverflow)?;
+    pool.reserved_total = pool
+        .reserved_total
+        .checked_sub(payout)
+        .ok_or(PumpkingError::MathOverflow)?;
+
+    let cell = &mut ctx.accounts.cell;
+    cell.reserved = cell
+        .reserved
+        .checked_sub(payout)
+        .ok_or(PumpkingError::MathOverflow)?;
+
+    let policy = &mut ctx.accounts.policy;
+    policy.state = PolicyState::PaidOut;
+
+    emit!(PolicySettled {
+        policy: policy.key(),
+        owner: policy.owner,
+        cell_id: policy.cell_id,
+        payout,
+        spell_days,
+        spell_days_threshold: policy.spell_days_threshold,
+        window_start_day: policy.window_start_day,
+        window_end_day: policy.window_end_day,
     });
 
     Ok(())
@@ -696,6 +873,175 @@ mod tests {
         assert_eq!(to_rewards, 1_000);
         assert_eq!(pool.free_liquidity(), 9_000);
         assert_eq!(pool.cell_exposure_limit(), 900);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* FR-026, FR-027, FR-030: settlement asks nobody                    */
+    /* ---------------------------------------------------------------- */
+
+    /// A cell whose log holds `days` from day zero.
+    fn cell_of(days: &[DayState]) -> CellState {
+        let mut cell = CellState {
+            cell_id: 0x871e701b3ffffff,
+            sensor_count: 3,
+            under_investigation: false,
+            reserved: 50_000,
+            rewards_reserve: 250,
+            first_day_index: 0,
+            last_day_index: None,
+            day_log: [0u8; DAY_LOG_LEN],
+            contributors: [0u32; DAY_LOG_LEN],
+            bump: 253,
+        };
+        for (day, state) in days.iter().enumerate() {
+            cell.record_day(day as u32, *state, 0b111)
+                .expect("the log grows forwards");
+        }
+        cell
+    }
+
+    /// An active policy over days 0..9, triggered by three dry days.
+    fn active_policy() -> Policy {
+        Policy {
+            owner: Pubkey::new_unique(),
+            nonce: 0,
+            cell_id: 0x871e701b3ffffff,
+            spell_days_threshold: 3,
+            payout: 50_000,
+            premium: 2_500,
+            window_start_day: 0,
+            window_end_day: 9,
+            state: PolicyState::Active,
+            bump: 252,
+        }
+    }
+
+    #[test]
+    fn a_spell_that_reaches_the_threshold_is_owed() {
+        use DayState::{Dry, Wet};
+        let cell = cell_of(&[Wet, Dry, Dry, Dry, Wet]);
+        assert_eq!(check_settlement(&active_policy(), &cell).unwrap(), 3);
+    }
+
+    #[test]
+    fn a_spell_one_day_short_is_not_an_event() {
+        use DayState::{Dry, Wet};
+        let cell = cell_of(&[Wet, Dry, Dry, Wet, Dry, Dry]);
+        assert_eq!(
+            code_of(check_settlement(&active_policy(), &cell).unwrap_err()),
+            u32::from(PumpkingError::EventHasNotHappened)
+        );
+    }
+
+    #[test]
+    fn the_window_does_not_have_to_be_over() {
+        use DayState::Dry;
+        // SC-001 measures the delay between the day closing and the money
+        // arriving. A run that reached the threshold cannot be un-reached by
+        // the days after it, so waiting for the window to end would be
+        // delaying a payout that is already owed.
+        let cell = cell_of(&[Dry, Dry, Dry]);
+        assert_eq!(check_settlement(&active_policy(), &cell).unwrap(), 3);
+    }
+
+    #[test]
+    fn a_gap_in_the_middle_of_the_run_is_not_a_spell() {
+        use DayState::{Dry, NoCoverage};
+        // FR-047 where it costs the insured: the network went quiet on day 2,
+        // so the run is two and two, not five.
+        let cell = cell_of(&[Dry, Dry, NoCoverage, Dry, Dry]);
+        assert_eq!(
+            code_of(check_settlement(&active_policy(), &cell).unwrap_err()),
+            u32::from(PumpkingError::EventHasNotHappened)
+        );
+    }
+
+    #[test]
+    fn a_policy_pays_once_and_not_twice() {
+        use DayState::Dry;
+        // FR-027. The same log, the same spell, and the second call is
+        // refused by the policy's own state rather than by a ledger of who
+        // has been paid.
+        let cell = cell_of(&[Dry, Dry, Dry, Dry]);
+        for state in [
+            PolicyState::PaidOut,
+            PolicyState::ClosedNoEvent,
+            PolicyState::Unclaimed,
+        ] {
+            let mut policy = active_policy();
+            policy.state = state;
+            assert_eq!(
+                code_of(check_settlement(&policy, &cell).unwrap_err()),
+                u32::from(PumpkingError::PolicyNotActive),
+                "state {state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_policy_is_settled_off_its_own_cell_and_no_other() {
+        use DayState::Dry;
+        // The account constraint seeds the cell from `policy.cell_id`, so a
+        // substituted cell cannot be passed in; this is the same rule stated
+        // where the arithmetic can see it.
+        let mut cell = cell_of(&[Dry, Dry, Dry, Dry]);
+        cell.cell_id = 0x871e701b3fffffe;
+        assert_eq!(
+            code_of(check_settlement(&active_policy(), &cell).unwrap_err()),
+            u32::from(PumpkingError::PolicyCellMismatch)
+        );
+    }
+
+    #[test]
+    fn a_cell_under_investigation_still_pays_what_it_owes() {
+        use DayState::Dry;
+        // FR-045: the reference moves future underwriting, never a live
+        // obligation. A lever that could stop a payout would be exactly the
+        // role FR-030 says must not exist.
+        let mut cell = cell_of(&[Dry, Dry, Dry]);
+        cell.under_investigation = true;
+        assert_eq!(check_settlement(&active_policy(), &cell).unwrap(), 3);
+    }
+
+    #[test]
+    fn a_spell_outside_the_window_does_not_trigger_the_policy() {
+        use DayState::{Dry, Wet};
+        // Ten wet days of cover, then a drought the week after it ended.
+        let mut days = vec![Wet; 10];
+        days.extend([Dry, Dry, Dry, Dry, Dry]);
+        let cell = cell_of(&days);
+        assert_eq!(
+            code_of(check_settlement(&active_policy(), &cell).unwrap_err()),
+            u32::from(PumpkingError::EventHasNotHappened)
+        );
+    }
+
+    #[test]
+    fn a_policy_whose_days_have_left_the_ring_cannot_be_settled_off_it() {
+        use DayState::Dry;
+        // Two hundred days of record in a 128-slot ring. The policy's window
+        // is gone, and reading the days that replaced it would settle one
+        // policy off another fortnight's weather.
+        let cell = cell_of(&vec![Dry; 200]);
+        assert_eq!(
+            code_of(check_settlement(&active_policy(), &cell).unwrap_err()),
+            u32::from(PumpkingError::EventHasNotHappened)
+        );
+    }
+
+    #[test]
+    fn settlement_reads_the_terms_and_the_log_and_nothing_else() {
+        use DayState::Dry;
+        // FR-030 as a signature: there is no key, no clock and no parameter
+        // in this call, so there is nothing for a role to hold. Two callers
+        // on the same state get the same answer because there is no third
+        // input for them to differ on.
+        let cell = cell_of(&[Dry, Dry, Dry]);
+        let policy = active_policy();
+        assert_eq!(
+            check_settlement(&policy, &cell).unwrap(),
+            check_settlement(&policy, &cell).unwrap()
+        );
     }
 
     #[test]

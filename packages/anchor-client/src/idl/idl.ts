@@ -363,6 +363,126 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "settlePolicy",
+      "docs": [
+        "Pays a policy the index has triggered — `FR-026`, `FR-027`, `FR-030`.",
+        "Permissionless by construction: there is no authority account in the",
+        "context, so there is no key that could withhold a payout that is owed",
+        "and none that could produce one the day log does not support."
+      ],
+      "discriminator": [
+        180,
+        234,
+        21,
+        174,
+        50,
+        214,
+        91,
+        113
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "`FR-030`: anybody. The caller pays the transaction fee and gets",
+            "nothing, and is checked against nothing — a payout that needed a",
+            "particular key to arrive would be a payout that key could withhold.",
+            "In practice the worker calls it; the owner, a neighbour or a bot",
+            "calling it instead changes nothing about the outcome."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.cell_id",
+                "account": "policy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.owner",
+                "account": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "policy.nonce",
+                "account": "policy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "assetMint"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "ownerTokens",
+          "docs": [
+            "`FR-066`: an account the policy's owner holds the authority over, and",
+            "the constraint is the whole of \"the recipient cannot be changed\". The",
+            "caller chooses which of the owner's accounts, never whose."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "submitDayRecord",
       "docs": [
         "Writes one day of a cell — `FR-015`. The only door the day log has, and",
@@ -517,6 +637,19 @@ export const PUMPKING_IDL: Pumpking = {
         221,
         163,
         182
+      ]
+    },
+    {
+      "name": "policySettled",
+      "discriminator": [
+        67,
+        45,
+        149,
+        235,
+        199,
+        184,
+        83,
+        77
       ]
     }
   ],
@@ -710,6 +843,21 @@ export const PUMPKING_IDL: Pumpking = {
       "code": 6037,
       "name": "dayStateContradictsRainfall",
       "msg": "The day classification disagrees with the rainfall it came from"
+    },
+    {
+      "code": 6038,
+      "name": "policyNotActive",
+      "msg": "The policy is not active"
+    },
+    {
+      "code": 6039,
+      "name": "policyCellMismatch",
+      "msg": "The policy was written on a different cell"
+    },
+    {
+      "code": 6040,
+      "name": "eventHasNotHappened",
+      "msg": "The index has not reached the policy's threshold"
     }
   ],
   "types": [
@@ -1115,6 +1263,57 @@ export const PUMPKING_IDL: Pumpking = {
             "docs": [
               "Day indices, both ends inclusive — `FR-024`."
             ],
+            "type": "u32"
+          },
+          {
+            "name": "windowEndDay",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "policySettled",
+      "docs": [
+        "The event, recorded where anyone can read it — `FR-016`, `FR-037`.",
+        "",
+        "`spell_days` is the index that crossed the threshold, and the window says",
+        "which days it was found in. Together with the `DayRecorded` events of those",
+        "days and the Merkle roots they carry, this is the whole trace: readings →",
+        "cell values → days → index → this transaction."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          },
+          {
+            "name": "spellDays",
+            "docs": [
+              "The run that triggered it, and the threshold it had to reach."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "spellDaysThreshold",
+            "type": "u8"
+          },
+          {
+            "name": "windowStartDay",
             "type": "u32"
           },
           {

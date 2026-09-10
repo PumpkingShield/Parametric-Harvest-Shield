@@ -1,6 +1,6 @@
 import { BN, BorshInstructionCoder, type Idl } from '@coral-xyz/anchor'
 import { PUMPKING_IDL } from './idl/idl.ts'
-import { poolPda, vaultPda } from './pda.ts'
+import { cellPda, policyPda, poolPda, vaultPda } from './pda.ts'
 import { PROGRAM_ID } from './program.ts'
 import { type AccountMeta, PublicKey, TOKEN_PROGRAM_ID, TransactionInstruction } from './web3.ts'
 
@@ -500,6 +500,59 @@ export function submitDayRecordInstruction(
         coveredIntervals: record.coveredIntervals,
         totalIntervals: record.totalIntervals,
       },
+    },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* settle_policy                                                              */
+/* -------------------------------------------------------------------------- */
+
+export interface SettlePolicyInput {
+  /**
+   * Whoever is sending the transaction — `FR-030`. The program checks this
+   * key against nothing, so the worker, the owner, a neighbour or a bot are
+   * all the same caller as far as the payout is concerned.
+   */
+  caller: PublicKey
+  /** Fixed at issue; the policy address is derived from it and the nonce. */
+  owner: PublicKey
+  nonce: bigint
+  cellId: bigint
+  /** Must equal `pool.asset_mint`; the program checks it. */
+  assetMint: PublicKey
+  /**
+   * A token account the **owner** holds the authority over — `FR-066`. The
+   * caller picks which of the owner's accounts the money lands in, never
+   * whose.
+   */
+  ownerTokens: PublicKey
+  /** Defaults to the pool's capital vault, derived from the seeds. */
+  vault?: PublicKey
+  tokenProgram?: PublicKey
+  programId?: PublicKey
+}
+
+/**
+ * Pays a policy the index has triggered — `FR-026`.
+ *
+ * The instruction takes no arguments at all: everything it decides on is
+ * already in the two accounts it reads. That is why this builder needs the
+ * policy's seeds rather than its terms — there is nothing else to pass.
+ */
+export function settlePolicyInstruction(input: SettlePolicyInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  const pool = poolPda(programId).address
+  return buildInstruction('settlePolicy', {
+    programId,
+    accounts: {
+      caller: input.caller,
+      policy: policyPda(input.owner, input.nonce, programId).address,
+      cell: cellPda(input.cellId, programId).address,
+      assetMint: input.assetMint,
+      vault: input.vault ?? vaultPda(pool, programId).address,
+      ownerTokens: input.ownerTokens,
+      tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
     },
   })
 }

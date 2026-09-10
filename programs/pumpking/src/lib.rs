@@ -43,4 +43,12 @@ pub mod pumpking {
     ) -> Result<()> {
         instructions::day::submit_day_record(ctx, params)
     }
+
+    /// Pays a policy the index has triggered — `FR-026`, `FR-027`, `FR-030`.
+    /// Permissionless by construction: there is no authority account in the
+    /// context, so there is no key that could withhold a payout that is owed
+    /// and none that could produce one the day log does not support.
+    pub fn settle_policy(ctx: Context<SettlePolicy>) -> Result<()> {
+        instructions::policy::settle_policy(ctx)
+    }
 }
