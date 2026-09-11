@@ -51,4 +51,18 @@ pub mod pumpking {
     pub fn settle_policy(ctx: Context<SettlePolicy>) -> Result<()> {
         instructions::policy::settle_policy(ctx)
     }
+
+    /// Closes a policy whose window ended without the event — `FR-028`. No
+    /// money moves: the premium became capital at issue. What is released is
+    /// the reservation, which is the pool's capacity to sell more cover.
+    pub fn close_policy(ctx: Context<ClosePolicy>) -> Result<()> {
+        instructions::policy::close_policy(ctx)
+    }
+
+    /// Delivers a payout settlement could not — `FR-029`. Reachable only for
+    /// a policy whose owner's account was frozen when the event landed; the
+    /// money waited in the vault, reserved, the whole time.
+    pub fn claim_unclaimed_payout(ctx: Context<ClaimUnclaimedPayout>) -> Result<()> {
+        instructions::policy::claim_unclaimed_payout(ctx)
+    }
 }

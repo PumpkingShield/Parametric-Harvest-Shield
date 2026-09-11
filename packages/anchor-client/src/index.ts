@@ -1,6 +1,8 @@
 export { PUMPKING_IDL } from './idl/idl.ts'
 export type { Pumpking } from './idl/pumpking.ts'
 export type {
+  ClaimUnclaimedPayoutInput,
+  ClosePolicyInput,
   DayClassification,
   DayRecord,
   DepositCapitalInput,
@@ -14,6 +16,8 @@ export type {
 } from './instructions.ts'
 export {
   buildInstruction,
+  claimUnclaimedPayoutInstruction,
+  closePolicyInstruction,
   DayState,
   depositCapitalInstruction,
   derivePdaFromIdl,

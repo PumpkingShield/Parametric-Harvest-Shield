@@ -556,3 +556,77 @@ export function settlePolicyInstruction(input: SettlePolicyInput): TransactionIn
     },
   })
 }
+
+/* -------------------------------------------------------------------------- */
+/* close_policy                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface ClosePolicyInput {
+  /** Anybody — `FR-028` closes capacity, not money. */
+  caller: PublicKey
+  owner: PublicKey
+  nonce: bigint
+  cellId: bigint
+  programId?: PublicKey
+}
+
+/**
+ * Closes a policy whose window ended without the event — `FR-028`.
+ *
+ * No vault, no mint, no token program: nothing moves. What the call releases
+ * is the reservation the payout held against the pool's free liquidity, and
+ * the absence of those accounts is the shape of that fact.
+ */
+export function closePolicyInstruction(input: ClosePolicyInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  return buildInstruction('closePolicy', {
+    programId,
+    accounts: {
+      caller: input.caller,
+      policy: policyPda(input.owner, input.nonce, programId).address,
+      cell: cellPda(input.cellId, programId).address,
+    },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* claim_unclaimed_payout                                                     */
+/* -------------------------------------------------------------------------- */
+
+export interface ClaimUnclaimedPayoutInput {
+  /** Anybody: the destination is bound to the owner either way — `FR-066`. */
+  caller: PublicKey
+  owner: PublicKey
+  nonce: bigint
+  cellId: bigint
+  assetMint: PublicKey
+  /** A token account the owner holds the authority over. */
+  ownerTokens: PublicKey
+  vault?: PublicKey
+  tokenProgram?: PublicKey
+  programId?: PublicKey
+}
+
+/**
+ * Delivers a payout settlement could not — `FR-029`. Reachable only for a
+ * policy whose owner's token account was frozen when the event landed; the
+ * money waited in the vault, reserved, the whole time.
+ */
+export function claimUnclaimedPayoutInstruction(
+  input: ClaimUnclaimedPayoutInput,
+): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  const pool = poolPda(programId).address
+  return buildInstruction('claimUnclaimedPayout', {
+    programId,
+    accounts: {
+      caller: input.caller,
+      policy: policyPda(input.owner, input.nonce, programId).address,
+      cell: cellPda(input.cellId, programId).address,
+      assetMint: input.assetMint,
+      vault: input.vault ?? vaultPda(pool, programId).address,
+      ownerTokens: input.ownerTokens,
+      tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
+    },
+  })
+}

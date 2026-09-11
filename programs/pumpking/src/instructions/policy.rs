@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::spl_token_2022::state::AccountState;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::errors::PumpkingError;
@@ -374,6 +375,36 @@ pub fn check_settlement(policy: &Policy, cell: &CellState) -> Result<u32> {
     Ok(reading.longest)
 }
 
+/// The books after a payout has left the vault, shared by the two ways one
+/// can — settlement and a deferred claim.
+///
+/// Both totals fall by the same amount, so free liquidity does not move: this
+/// money was committed the day the policy was sold and was never available to
+/// underwrite anything else. The reward reserves sitting in the same vault are
+/// untouched, because they were never in `capital_total` for a payout to
+/// reach.
+fn release_payout(
+    pool: &mut Pool,
+    cell: &mut CellState,
+    policy: &mut Policy,
+    payout: u64,
+) -> Result<()> {
+    pool.capital_total = pool
+        .capital_total
+        .checked_sub(payout)
+        .ok_or(PumpkingError::MathOverflow)?;
+    pool.reserved_total = pool
+        .reserved_total
+        .checked_sub(payout)
+        .ok_or(PumpkingError::MathOverflow)?;
+    cell.reserved = cell
+        .reserved
+        .checked_sub(payout)
+        .ok_or(PumpkingError::MathOverflow)?;
+    policy.state = PolicyState::PaidOut;
+    Ok(())
+}
+
 #[derive(Accounts)]
 pub struct SettlePolicy<'info> {
     /// `FR-030`: anybody. The caller pays the transaction fee and gets
@@ -435,6 +466,27 @@ pub fn settle_policy(ctx: Context<SettlePolicy>) -> Result<()> {
     let spell_days = check_settlement(&ctx.accounts.policy, &ctx.accounts.cell)?;
     let payout = ctx.accounts.policy.payout;
 
+    // `FR-029`: a destination the token program will not accept. The money
+    // stays in the vault and stays reserved — nothing is released and nothing
+    // is lost — and the obligation is recorded as owed so the index never has
+    // to be re-derived from a window the ring may have dropped by then.
+    //
+    // This is the only route to `Unclaimed`, and it is a fact about an
+    // account rather than anybody's judgement: no caller can choose to defer
+    // a payout that would have gone through, which is what keeps `FR-030`
+    // true of this branch as well.
+    if ctx.accounts.owner_tokens.state == AccountState::Frozen {
+        let policy = &mut ctx.accounts.policy;
+        policy.state = PolicyState::Unclaimed;
+        emit!(PayoutUnclaimed {
+            policy: policy.key(),
+            owner: policy.owner,
+            payout,
+            spell_days,
+        });
+        return Ok(());
+    }
+
     let pool_bump = ctx.accounts.pool.bump;
     let seeds: &[&[u8]] = &[POOL_SEED, &[pool_bump]];
 
@@ -456,16 +508,110 @@ pub fn settle_policy(ctx: Context<SettlePolicy>) -> Result<()> {
         ctx.accounts.asset_mint.decimals,
     )?;
 
+    release_payout(
+        &mut ctx.accounts.pool,
+        &mut ctx.accounts.cell,
+        &mut ctx.accounts.policy,
+        payout,
+    )?;
+
+    let policy = &ctx.accounts.policy;
+    emit!(PolicySettled {
+        policy: policy.key(),
+        owner: policy.owner,
+        cell_id: policy.cell_id,
+        payout,
+        spell_days,
+        spell_days_threshold: policy.spell_days_threshold,
+        window_start_day: policy.window_start_day,
+        window_end_day: policy.window_end_day,
+    });
+
+    Ok(())
+}
+
+/* -------------------------------------------------------------------------- */
+/* close_policy                                                               */
+/* -------------------------------------------------------------------------- */
+
+/// A window that ended without the event — `FR-028`.
+#[event]
+pub struct PolicyClosed {
+    pub policy: Pubkey,
+    pub owner: Pubkey,
+    pub cell_id: u64,
+    /// The longest run the window did hold, and the one it needed.
+    pub spell_days: u32,
+    pub spell_days_threshold: u8,
+}
+
+/// Whether the policy can be closed without paying — `FR-028`.
+///
+/// Two conditions, and the second is the one that matters: the window has to
+/// be **finished**, not merely past. A day the log has not answered for could
+/// still turn out to be dry, and closing on the strength of an incomplete
+/// window would be settling a bet before the last card is turned over. This is
+/// what `WindowSpell::complete` was carried out of `spell_in_window` for.
+pub fn check_closure(policy: &Policy, cell: &CellState) -> Result<u32> {
+    require!(
+        policy.state == PolicyState::Active,
+        PumpkingError::PolicyNotActive
+    );
+    require!(
+        policy.cell_id == cell.cell_id,
+        PumpkingError::PolicyCellMismatch
+    );
+
+    let reading = spell_in_window(cell, policy.window_start_day, policy.window_end_day);
+    require!(reading.complete, PumpkingError::WindowNotOver);
+    // The event happened; this policy owes money and `settle_policy` is the
+    // instruction that says so. Closing it here would be the payout-denying
+    // role `FR-030` exists to make impossible.
+    require!(
+        reading.longest < u32::from(policy.spell_days_threshold),
+        PumpkingError::EventHasHappened
+    );
+    Ok(reading.longest)
+}
+
+#[derive(Accounts)]
+pub struct ClosePolicy<'info> {
+    /// Anybody, for the same reason settlement is: a policy that needed a
+    /// particular key to be closed would tie up the pool's capacity at that
+    /// key's convenience.
+    pub caller: Signer<'info>,
+
+    #[account(mut, seeds = [POOL_SEED], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [CELL_SEED, policy.cell_id.to_le_bytes().as_ref()],
+        bump = cell.bump,
+    )]
+    pub cell: Account<'info, CellState>,
+
+    #[account(
+        mut,
+        seeds = [POLICY_SEED, policy.owner.as_ref(), policy.nonce.to_le_bytes().as_ref()],
+        bump = policy.bump,
+    )]
+    pub policy: Account<'info, Policy>,
+}
+
+/// Closes a policy whose window ended without the event — `FR-028`.
+///
+/// No money moves. The premium became capital the day the policy was issued
+/// (`FR-034`), so there is nothing here to distribute: what this instruction
+/// releases is the **reservation**, which is capacity rather than money. Until
+/// it runs, the payout that will never happen still counts against
+/// `free_liquidity` and against the cell's exposure limit, and the pool sells
+/// less cover than it could.
+pub fn close_policy(ctx: Context<ClosePolicy>) -> Result<()> {
+    let spell_days = check_closure(&ctx.accounts.policy, &ctx.accounts.cell)?;
+    let payout = ctx.accounts.policy.payout;
+
     let pool = &mut ctx.accounts.pool;
-    // Both totals fall by the same amount, so free liquidity does not move:
-    // this money was committed the day the policy was sold and was never
-    // available to underwrite anything else. The reward reserves sitting in
-    // the same vault are untouched, because they were never in `capital_total`
-    // for a payout to reach.
-    pool.capital_total = pool
-        .capital_total
-        .checked_sub(payout)
-        .ok_or(PumpkingError::MathOverflow)?;
     pool.reserved_total = pool
         .reserved_total
         .checked_sub(payout)
@@ -476,19 +622,131 @@ pub fn settle_policy(ctx: Context<SettlePolicy>) -> Result<()> {
         .reserved
         .checked_sub(payout)
         .ok_or(PumpkingError::MathOverflow)?;
+    // `FR-064` returns a cell's unspent reward reserve to capital when its
+    // last policy ends; `cell.reserved == 0` is that moment. The sweep lands
+    // with the reward lifecycle in `T036`, which is what knows how much of
+    // the reserve the intervals actually spent.
 
     let policy = &mut ctx.accounts.policy;
-    policy.state = PolicyState::PaidOut;
+    policy.state = PolicyState::ClosedNoEvent;
 
-    emit!(PolicySettled {
+    emit!(PolicyClosed {
         policy: policy.key(),
         owner: policy.owner,
         cell_id: policy.cell_id,
-        payout,
         spell_days,
         spell_days_threshold: policy.spell_days_threshold,
-        window_start_day: policy.window_start_day,
-        window_end_day: policy.window_end_day,
+    });
+
+    Ok(())
+}
+
+/* -------------------------------------------------------------------------- */
+/* claim_unclaimed_payout                                                     */
+/* -------------------------------------------------------------------------- */
+
+/// A payout that was owed and could not be delivered — `FR-029`. The money is
+/// still in the vault and still reserved against this policy; what the event
+/// records is that the obligation was recognised and delivery deferred.
+#[event]
+pub struct PayoutUnclaimed {
+    pub policy: Pubkey,
+    pub owner: Pubkey,
+    pub payout: u64,
+    /// The run that triggered it, kept here so the trace does not have to
+    /// re-derive an index from a window the ring may no longer hold.
+    pub spell_days: u32,
+}
+
+/// A deferred payout, finally delivered — `FR-029`.
+#[event]
+pub struct PayoutClaimed {
+    pub policy: Pubkey,
+    pub owner: Pubkey,
+    pub payout: u64,
+}
+
+#[derive(Accounts)]
+pub struct ClaimUnclaimedPayout<'info> {
+    /// Anybody again. The destination is bound to the owner either way, so a
+    /// stranger completing the delivery for a farmer is help, not a risk.
+    pub caller: Signer<'info>,
+
+    #[account(mut, seeds = [POOL_SEED], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [CELL_SEED, policy.cell_id.to_le_bytes().as_ref()],
+        bump = cell.bump,
+    )]
+    pub cell: Account<'info, CellState>,
+
+    #[account(
+        mut,
+        seeds = [POLICY_SEED, policy.owner.as_ref(), policy.nonce.to_le_bytes().as_ref()],
+        bump = policy.bump,
+    )]
+    pub policy: Account<'info, Policy>,
+
+    #[account(address = pool.asset_mint)]
+    pub asset_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, address = pool.vault)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-066` once more: the owner's account, and the money has nowhere
+    /// else it could go.
+    #[account(
+        mut,
+        token::mint = asset_mint,
+        token::authority = policy.owner,
+    )]
+    pub owner_tokens: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+/// Delivers a payout that settlement could not — `FR-029`.
+///
+/// The money never left the vault and never stopped being reserved, so this
+/// instruction is the delivery attempt repeated with an account that works.
+/// The accounting it does is the accounting `settle_policy` skipped.
+pub fn claim_unclaimed_payout(ctx: Context<ClaimUnclaimedPayout>) -> Result<()> {
+    require!(
+        ctx.accounts.policy.state == PolicyState::Unclaimed,
+        PumpkingError::PolicyNotUnclaimed
+    );
+    let payout = ctx.accounts.policy.payout;
+    let pool_bump = ctx.accounts.pool.bump;
+    let seeds: &[&[u8]] = &[POOL_SEED, &[pool_bump]];
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.vault.to_account_info(),
+                mint: ctx.accounts.asset_mint.to_account_info(),
+                to: ctx.accounts.owner_tokens.to_account_info(),
+                authority: ctx.accounts.pool.to_account_info(),
+            },
+            &[seeds],
+        ),
+        payout,
+        ctx.accounts.asset_mint.decimals,
+    )?;
+
+    release_payout(
+        &mut ctx.accounts.pool,
+        &mut ctx.accounts.cell,
+        &mut ctx.accounts.policy,
+        payout,
+    )?;
+
+    emit!(PayoutClaimed {
+        policy: ctx.accounts.policy.key(),
+        owner: ctx.accounts.policy.owner,
+        payout,
     });
 
     Ok(())
@@ -1042,6 +1300,189 @@ mod tests {
             check_settlement(&policy, &cell).unwrap(),
             check_settlement(&policy, &cell).unwrap()
         );
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* FR-028: a window that ended without the event                     */
+    /* ---------------------------------------------------------------- */
+
+    #[test]
+    fn a_finished_window_without_the_event_closes() {
+        use DayState::{Dry, Wet};
+        // Ten days, the longest run two, the threshold three.
+        let mut days = vec![Wet; 10];
+        days[3] = Dry;
+        days[4] = Dry;
+        let cell = cell_of(&days);
+        assert_eq!(check_closure(&active_policy(), &cell).unwrap(), 2);
+    }
+
+    #[test]
+    fn a_window_with_a_day_still_unanswered_does_not_close() {
+        use DayState::Wet;
+        // The log stops at day 4 and the policy runs to day 9. Day 7 could
+        // still be dry; closing now would be settling a bet before the last
+        // card is turned over.
+        let cell = cell_of(&vec![Wet; 5]);
+        assert_eq!(
+            code_of(check_closure(&active_policy(), &cell).unwrap_err()),
+            u32::from(PumpkingError::WindowNotOver)
+        );
+    }
+
+    #[test]
+    fn a_window_that_paid_cannot_be_closed_instead() {
+        use DayState::{Dry, Wet};
+        // FR-030 from the other side: closing a triggered policy would be
+        // exactly the payout-denying lever that must not exist.
+        let mut days = vec![Wet; 10];
+        days[2] = Dry;
+        days[3] = Dry;
+        days[4] = Dry;
+        let cell = cell_of(&days);
+        assert_eq!(
+            code_of(check_closure(&active_policy(), &cell).unwrap_err()),
+            u32::from(PumpkingError::EventHasHappened)
+        );
+    }
+
+    #[test]
+    fn a_policy_closes_once_and_not_twice() {
+        use DayState::Wet;
+        let cell = cell_of(&vec![Wet; 10]);
+        for state in [
+            PolicyState::PaidOut,
+            PolicyState::ClosedNoEvent,
+            PolicyState::Unclaimed,
+        ] {
+            let mut policy = active_policy();
+            policy.state = state;
+            assert_eq!(
+                code_of(check_closure(&policy, &cell).unwrap_err()),
+                u32::from(PumpkingError::PolicyNotActive),
+                "state {state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn closing_releases_capacity_and_not_money() {
+        use DayState::Wet;
+        // FR-028: the premium stayed in the pool at issue, so there is
+        // nothing here to hand back. What moves is the reservation — until it
+        // does, a payout that will never happen still counts against every
+        // solvency check the pool runs.
+        let mut pool = pool();
+        pool.capital_total = 1_000_000;
+        pool.reserved_total = 50_000;
+        let mut cell = cell_of(&vec![Wet; 10]);
+        let mut policy = active_policy();
+
+        let before = pool.capital_total;
+        pool.reserved_total -= policy.payout;
+        cell.reserved -= policy.payout;
+        policy.state = PolicyState::ClosedNoEvent;
+
+        assert_eq!(pool.capital_total, before);
+        assert_eq!(pool.free_liquidity(), 1_000_000);
+        assert_eq!(cell.reserved, 0);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* FR-029: a payout that could not be delivered                      */
+    /* ---------------------------------------------------------------- */
+
+    #[test]
+    fn an_undelivered_payout_stays_owed_and_stays_reserved() {
+        // The frozen branch of `settle_policy` writes `Unclaimed` and returns
+        // before touching the books: the money is still in the vault, still
+        // reserved against this policy, and still the owner's.
+        let mut pool = pool();
+        pool.reserved_total = 50_000;
+        let cell = cell_of(&[DayState::Dry, DayState::Dry, DayState::Dry]);
+        let mut policy = active_policy();
+
+        assert_eq!(check_settlement(&policy, &cell).unwrap(), 3);
+        policy.state = PolicyState::Unclaimed;
+
+        assert_eq!(pool.reserved_total, 50_000);
+        assert_eq!(cell.reserved, 50_000);
+        assert_eq!(policy.payout, 50_000);
+    }
+
+    #[test]
+    fn a_deferred_payout_is_released_exactly_like_a_delivered_one() {
+        // `release_payout` is shared, so the two routes to the money cannot
+        // book it differently.
+        let mut pool = pool();
+        pool.capital_total = 1_000_000;
+        pool.reserved_total = 50_000;
+        let mut cell = cell_of(&[DayState::Dry]);
+        let mut policy = active_policy();
+        policy.state = PolicyState::Unclaimed;
+
+        let payout = policy.payout;
+        release_payout(&mut pool, &mut cell, &mut policy, payout).unwrap();
+
+        assert_eq!(pool.capital_total, 950_000);
+        assert_eq!(pool.reserved_total, 0);
+        assert_eq!(cell.reserved, 0);
+        assert_eq!(policy.state, PolicyState::PaidOut);
+        // Free liquidity is unchanged: this money was never available to sell
+        // against, whether it left today or a month late.
+        assert_eq!(pool.free_liquidity(), 950_000);
+    }
+
+    #[test]
+    fn a_payout_cannot_be_released_past_what_was_reserved() {
+        let mut pool = pool();
+        pool.capital_total = 1_000_000;
+        pool.reserved_total = 10;
+        let mut cell = cell_of(&[DayState::Dry]);
+        let mut policy = active_policy();
+        assert_eq!(
+            code_of(release_payout(&mut pool, &mut cell, &mut policy, 50_000).unwrap_err()),
+            u32::from(PumpkingError::MathOverflow)
+        );
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* FR-066: the recipient is fixed at issue                           */
+    /* ---------------------------------------------------------------- */
+
+    #[test]
+    fn a_policy_has_no_field_that_could_redirect_its_payout() {
+        // FR-066 in the only form that cannot be forgotten: there is no field
+        // to change. `owner` is written once, by `issue_policy`; every
+        // instruction that moves money binds its destination to
+        // `token::authority = policy.owner`; and the address of the policy is
+        // derived from that key, so a payout sent somewhere else would have to
+        // belong to a different account.
+        //
+        // The size is the guard. A later `payee`, `beneficiary` or `recipient`
+        // would turn FR-066 into a rule somebody has to remember instead of
+        // one the layout enforces — and it would fail here first.
+        const OWNER: usize = 32;
+        const NONCE: usize = 8;
+        const CELL_ID: usize = 8;
+        const THRESHOLD: usize = 1;
+        const PAYOUT: usize = 8;
+        const PREMIUM: usize = 8;
+        const WINDOW: usize = 4 + 4;
+        const STATE: usize = 1;
+        const BUMP: usize = 1;
+        assert_eq!(
+            Policy::INIT_SPACE,
+            OWNER + NONCE + CELL_ID + THRESHOLD + PAYOUT + PREMIUM + WINDOW + STATE + BUMP
+        );
+
+        // Two owners, two addresses: a policy cannot be handed over, only
+        // reissued to somebody else from the start.
+        let nonce = 7u64.to_le_bytes();
+        let address_of = |owner: &Pubkey| {
+            Pubkey::find_program_address(&[POLICY_SEED, owner.as_ref(), &nonce], &crate::ID).0
+        };
+        assert_ne!(address_of(&Pubkey::new_unique()), address_of(&Pubkey::new_unique()));
     }
 
     #[test]

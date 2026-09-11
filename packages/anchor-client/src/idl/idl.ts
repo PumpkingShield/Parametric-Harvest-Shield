@@ -15,6 +15,219 @@ export const PUMPKING_IDL: Pumpking = {
   },
   "instructions": [
     {
+      "name": "claimUnclaimedPayout",
+      "docs": [
+        "Delivers a payout settlement could not — `FR-029`. Reachable only for",
+        "a policy whose owner's account was frozen when the event landed; the",
+        "money waited in the vault, reserved, the whole time."
+      ],
+      "discriminator": [
+        254,
+        75,
+        48,
+        47,
+        12,
+        77,
+        124,
+        113
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Anybody again. The destination is bound to the owner either way, so a",
+            "stranger completing the delivery for a farmer is help, not a risk."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.cell_id",
+                "account": "policy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.owner",
+                "account": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "policy.nonce",
+                "account": "policy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "assetMint"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "ownerTokens",
+          "docs": [
+            "`FR-066` once more: the owner's account, and the money has nowhere",
+            "else it could go."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "closePolicy",
+      "docs": [
+        "Closes a policy whose window ended without the event — `FR-028`. No",
+        "money moves: the premium became capital at issue. What is released is",
+        "the reservation, which is the pool's capacity to sell more cover."
+      ],
+      "discriminator": [
+        55,
+        42,
+        248,
+        229,
+        222,
+        138,
+        26,
+        252
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Anybody, for the same reason settlement is: a policy that needed a",
+            "particular key to be closed would tie up the pool's capacity at that",
+            "key's convenience."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.cell_id",
+                "account": "policy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.owner",
+                "account": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "policy.nonce",
+                "account": "policy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "depositCapital",
       "docs": [
         "Puts capital in and takes a proportional share out — `FR-032`. The same",
@@ -640,6 +853,45 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "payoutClaimed",
+      "discriminator": [
+        200,
+        39,
+        105,
+        112,
+        116,
+        63,
+        58,
+        149
+      ]
+    },
+    {
+      "name": "payoutUnclaimed",
+      "discriminator": [
+        22,
+        150,
+        189,
+        238,
+        181,
+        9,
+        61,
+        85
+      ]
+    },
+    {
+      "name": "policyClosed",
+      "discriminator": [
+        19,
+        126,
+        82,
+        173,
+        79,
+        86,
+        50,
+        51
+      ]
+    },
+    {
       "name": "policySettled",
       "discriminator": [
         67,
@@ -858,6 +1110,21 @@ export const PUMPKING_IDL: Pumpking = {
       "code": 6040,
       "name": "eventHasNotHappened",
       "msg": "The index has not reached the policy's threshold"
+    },
+    {
+      "code": 6041,
+      "name": "windowNotOver",
+      "msg": "The coverage window still has a day the log has not answered for"
+    },
+    {
+      "code": 6042,
+      "name": "eventHasHappened",
+      "msg": "The event happened; this policy is settled, not closed"
+    },
+    {
+      "code": 6043,
+      "name": "policyNotUnclaimed",
+      "msg": "The policy has no undelivered payout waiting"
     }
   ],
   "types": [
@@ -1133,6 +1400,62 @@ export const PUMPKING_IDL: Pumpking = {
       }
     },
     {
+      "name": "payoutClaimed",
+      "docs": [
+        "A deferred payout, finally delivered — `FR-029`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "payoutUnclaimed",
+      "docs": [
+        "A payout that was owed and could not be delivered — `FR-029`. The money is",
+        "still in the vault and still reserved against this policy; what the event",
+        "records is that the obligation was recognised and delivery deferred."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          },
+          {
+            "name": "spellDays",
+            "docs": [
+              "The run that triggered it, kept here so the trace does not have to",
+              "re-derive an index from a window the ring may no longer hold."
+            ],
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
       "name": "policy",
       "docs": [
         "PDA `[\"policy\", owner, nonce]`."
@@ -1201,6 +1524,40 @@ export const PUMPKING_IDL: Pumpking = {
           },
           {
             "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "policyClosed",
+      "docs": [
+        "A window that ended without the event — `FR-028`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "spellDays",
+            "docs": [
+              "The longest run the window did hold, and the one it needed."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "spellDaysThreshold",
             "type": "u8"
           }
         ]

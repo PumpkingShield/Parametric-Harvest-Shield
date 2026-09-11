@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { PUMPKING_IDL } from './idl/idl.ts'
 import {
   buildInstruction,
+  claimUnclaimedPayoutInstruction,
+  closePolicyInstruction,
   DayState,
   depositCapitalInstruction,
   initializePoolInstruction,
@@ -528,5 +530,102 @@ describe('settlePolicyInstruction', () => {
     const worker = settlePolicyInstruction(input)
     expect(stranger.data).toEqual(worker.data)
     expect(stranger.keys.slice(1)).toEqual(worker.keys.slice(1))
+  })
+})
+
+describe('closePolicyInstruction', () => {
+  const caller = key(16)
+  const owner = key(13)
+  const nonce = 7n
+  const cellId = 0x871e701b3ffffffn
+  const input = { caller, owner, nonce, cellId, programId }
+
+  it('carries the discriminator and no arguments', () => {
+    const instruction = closePolicyInstruction(input)
+    const expected = idl.instructions.find((one) => one.name === 'closePolicy')?.discriminator
+    expect([...instruction.data.subarray(0, 8)]).toEqual(expected)
+    expect(instruction.data).toHaveLength(8)
+  })
+
+  /**
+   * `FR-028`: the premium became capital at issue, so closing hands nothing
+   * back. The absence of a vault, a mint and a token program from the account
+   * list is that fact in the shape of the instruction — a future version that
+   * moved money would have to add them, and this test would say so.
+   */
+  it('touches no vault, no mint and no token program', () => {
+    const names = accountNames('closePolicy')
+    expect(names).toEqual(['caller', 'pool', 'cell', 'policy'])
+    expect(names).not.toContain('vault')
+    expect(names).not.toContain('assetMint')
+    expect(names).not.toContain('tokenProgram')
+  })
+
+  it('derives the policy and the cell and signs with the caller alone', () => {
+    const { keys } = closePolicyInstruction(input)
+    expect(keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      caller.toBase58(),
+      poolPda(programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      policyPda(owner, nonce, programId).address.toBase58(),
+    ])
+    expect(keys.filter((meta) => meta.isSigner)).toHaveLength(1)
+    expect(keys.some((meta) => meta.pubkey.equals(owner))).toBe(false)
+  })
+})
+
+describe('claimUnclaimedPayoutInstruction', () => {
+  const caller = key(17)
+  const owner = key(13)
+  const ownerTokens = key(14)
+  const nonce = 7n
+  const cellId = 0x871e701b3ffffffn
+  const input = { caller, owner, nonce, cellId, assetMint, ownerTokens, programId }
+
+  it('carries the discriminator and no arguments', () => {
+    const instruction = claimUnclaimedPayoutInstruction(input)
+    const expected = idl.instructions.find(
+      (one) => one.name === 'claimUnclaimedPayout',
+    )?.discriminator
+    expect([...instruction.data.subarray(0, 8)]).toEqual(expected)
+    expect(instruction.data).toHaveLength(8)
+  })
+
+  it('lists the accounts in the order the program reads them', () => {
+    const instruction = claimUnclaimedPayoutInstruction(input)
+    const pool = poolPda(programId).address
+    expect(accountNames('claimUnclaimedPayout')).toEqual([
+      'caller',
+      'pool',
+      'cell',
+      'policy',
+      'assetMint',
+      'vault',
+      'ownerTokens',
+      'tokenProgram',
+    ])
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      caller.toBase58(),
+      pool.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      policyPda(owner, nonce, programId).address.toBase58(),
+      assetMint.toBase58(),
+      vaultPda(pool, programId).address.toBase58(),
+      ownerTokens.toBase58(),
+      TOKEN_PROGRAM_ID.toBase58(),
+    ])
+  })
+
+  /**
+   * `FR-029` is a delivery that was deferred, not a payout that changed
+   * hands: the claimer signs, the owner receives, and the owner never has to
+   * be present for it.
+   */
+  it('does not need the owner to sign for their own money', () => {
+    const { keys } = claimUnclaimedPayoutInstruction(input)
+    expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
+      caller.toBase58(),
+    ])
+    expect(keys.some((meta) => meta.pubkey.equals(owner))).toBe(false)
   })
 })

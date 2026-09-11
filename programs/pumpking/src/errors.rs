@@ -126,4 +126,13 @@ pub enum PumpkingError {
 
     #[msg("The index has not reached the policy's threshold")]
     EventHasNotHappened,
+
+    #[msg("The coverage window still has a day the log has not answered for")]
+    WindowNotOver,
+
+    #[msg("The event happened; this policy is settled, not closed")]
+    EventHasHappened,
+
+    #[msg("The policy has no undelivered payout waiting")]
+    PolicyNotUnclaimed,
 }
