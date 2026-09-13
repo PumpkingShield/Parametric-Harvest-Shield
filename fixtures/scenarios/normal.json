@@ -1,0 +1,16 @@
+{
+  "name": "normal",
+  "synthetic": true,
+  "note": "Ordinary weather over the same window and the same network as 'drought'. Every day rains, no run ever starts, and the policy ends through close_policy with the premium staying in the pool. The counterpart matters as much as the drought does: a system that pays on this scenario is worse than one that never pays at all, and SC-004 is the milestone that measures it on a longer record.",
+  "clock": { "secondsPerDay": 2, "intervalsPerDay": 24 },
+  "cell": "871e701b3ffffff",
+  "kind": "precipitation_mm",
+  "params": { "minimumVotes": 3, "dryThresholdX100": 100, "minimumCoverageX100": 75 },
+  "sensors": [
+    { "seed": 11, "operator": "operator-a", "slotInCell": 0, "offsetX100": -5 },
+    { "seed": 12, "operator": "operator-b", "slotInCell": 1, "offsetX100": 0 },
+    { "seed": 13, "operator": "operator-c", "slotInCell": 2, "offsetX100": 5 }
+  ],
+  "programme": [{ "days": 29, "intervalX100": 30 }],
+  "expected": { "days": 29, "longestDrySpell": 0 }
+}

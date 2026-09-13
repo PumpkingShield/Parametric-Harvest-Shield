@@ -1,0 +1,22 @@
+{
+  "name": "gaps",
+  "synthetic": true,
+  "note": "Fourteen days with no rain at all, of which only nine count. Two of them sit exactly on the coverage floor of FR-048 — 18 of 24 intervals is 75 per cent, and the comparison is inclusive, so they are measured; two sit one interval below it and are not. Three more have full intervals and only two operators, which FR-010 leaves without a value however dry the sky was. The point of the fixture is that a dry sky is not a dry day: silence breaks the run, and the run this scenario pays for is five days rather than fourteen.",
+  "clock": { "secondsPerDay": 2, "intervalsPerDay": 24 },
+  "cell": "871e701b3ffffff",
+  "kind": "precipitation_mm",
+  "params": { "minimumVotes": 3, "dryThresholdX100": 100, "minimumCoverageX100": 75 },
+  "sensors": [
+    { "seed": 11, "operator": "operator-a", "slotInCell": 0, "offsetX100": -5 },
+    { "seed": 12, "operator": "operator-b", "slotInCell": 1, "offsetX100": 0 },
+    { "seed": 13, "operator": "operator-c", "slotInCell": 2, "offsetX100": 5 }
+  ],
+  "programme": [
+    { "days": 3, "intervalX100": 0 },
+    { "days": 2, "intervalX100": 0, "silentIntervals": 6 },
+    { "days": 2, "intervalX100": 0, "silentIntervals": 7 },
+    { "days": 3, "intervalX100": 0, "silentSensors": [13] },
+    { "days": 4, "intervalX100": 0 }
+  ],
+  "expected": { "days": 14, "longestDrySpell": 5 }
+}

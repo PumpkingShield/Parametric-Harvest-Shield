@@ -1,0 +1,23 @@
+{
+  "name": "drought",
+  "synthetic": true,
+  "note": "The reference trace. Its day sequence is case 'policy window of the reference trace' in fixtures/index-cases.json, the file the Rust program and the TypeScript twin both run — so this scenario is not a new claim about the index, it is the golden case played back through the real signing, aggregation and settlement path. 29 days at 2 seconds each is 58 seconds of compressed time, inside the 90 SC-011 allows. Four wet days open it, two days of silence break early, a three-day run is cut short by rain, and the run that pays is the last 18.",
+  "clock": { "secondsPerDay": 2, "intervalsPerDay": 24 },
+  "cell": "871e701b3ffffff",
+  "kind": "precipitation_mm",
+  "params": { "minimumVotes": 3, "dryThresholdX100": 100, "minimumCoverageX100": 75 },
+  "sensors": [
+    { "seed": 11, "operator": "operator-a", "slotInCell": 0, "offsetX100": -5 },
+    { "seed": 12, "operator": "operator-b", "slotInCell": 1, "offsetX100": 0 },
+    { "seed": 13, "operator": "operator-c", "slotInCell": 2, "offsetX100": 5 }
+  ],
+  "programme": [
+    { "days": 4, "intervalX100": 30 },
+    { "days": 2, "intervalX100": 0, "silentIntervals": 24 },
+    { "days": 1, "intervalX100": 30 },
+    { "days": 3, "intervalX100": 0 },
+    { "days": 1, "intervalX100": 30 },
+    { "days": 18, "intervalX100": 0 }
+  ],
+  "expected": { "days": 29, "longestDrySpell": 18 }
+}

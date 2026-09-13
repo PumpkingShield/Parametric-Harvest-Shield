@@ -1,0 +1,422 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import type { AcceptedReading } from '@pumpking/db'
+import {
+  type DayClassification,
+  drySpell,
+  type Reading,
+  type SignedReading,
+  verifyReadingSignature,
+} from '@pumpking/shared'
+import { describe, expect, it } from 'vitest'
+import { type ClosedInterval, closeDay, closeInterval, intervalStart } from './interval.ts'
+import {
+  compression,
+  loadScenario,
+  playScenario,
+  readScenario,
+  type Scenario,
+  type ScenarioSensor,
+  scenarioClock,
+  scenarioDuration,
+  scenarioParams,
+  scenarioReadings,
+  scenarioSensors,
+  signScenarioReadings,
+} from './scenario.ts'
+
+const GENESIS = new Date('2026-09-01T00:00:00.000Z')
+
+/* -------------------------------------------------------------------------- */
+/* The pipeline a scenario is meant to be read through                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The scenario played through the real aggregation — the same `closeInterval`
+ * and `closeDay` the worker calls on a live database. Nothing here predicts
+ * what the scenario should say; it runs it and reports what came out.
+ */
+function classifyRun(
+  scenario: Scenario,
+  sensors: readonly ScenarioSensor[],
+  readings: readonly Reading[],
+  genesisTs: Date = GENESIS,
+): DayClassification[] {
+  const clock = scenarioClock(scenario, genesisTs)
+  const params = scenarioParams(scenario)
+  const slots = new Map(sensors.map((sensor) => [sensor.pubkey, sensor]))
+
+  const accepted: AcceptedReading[] = readings.map((reading) => {
+    const sensor = slots.get(reading.sensor)
+    if (sensor === undefined) throw new Error(`no sensor ${reading.sensor}`)
+    return {
+      sensorPubkey: reading.sensor,
+      operator: sensor.operator,
+      slotInCell: sensor.slotInCell,
+      valueX100: reading.valueX100,
+      measuredAt: reading.measuredAt,
+      counter: reading.counter,
+      signature: 'unused',
+    }
+  })
+
+  const first = readings[0]
+  if (first === undefined) throw new Error('a scenario publishes at least one reading')
+  const cellId = first.cellId
+
+  const states: DayClassification[] = []
+  for (let dayIndex = 0; dayIndex < scenario.expected.days; dayIndex += 1) {
+    const intervals: ClosedInterval[] = []
+    for (let index = 0; index < clock.intervalsPerDay; index += 1) {
+      const start = intervalStart(clock, dayIndex, index)
+      const end = intervalStart(clock, dayIndex, index + 1)
+      const bucket = accepted.filter(
+        (reading) =>
+          reading.measuredAt.getTime() >= start.getTime() &&
+          reading.measuredAt.getTime() < end.getTime(),
+      )
+      intervals.push(
+        closeInterval(bucket, { cellId, dayIndex, intervalIndex: index, start }, params),
+      )
+    }
+    states.push(closeDay(intervals, params).state)
+  }
+  return states
+}
+
+async function run(name: string): Promise<{
+  scenario: Scenario
+  sensors: ScenarioSensor[]
+  readings: Reading[]
+  states: DayClassification[]
+}> {
+  const scenario = readScenario(name)
+  const sensors = await scenarioSensors(scenario)
+  const readings = scenarioReadings(scenario, GENESIS, sensors)
+  return { scenario, sensors, readings, states: classifyRun(scenario, sensors, readings) }
+}
+
+/* -------------------------------------------------------------------------- */
+
+describe('the fixtures', () => {
+  it('all load, and all declare themselves synthetic', () => {
+    for (const name of ['drought', 'normal', 'gaps']) {
+      expect(readScenario(name).synthetic).toBe(true)
+    }
+  })
+
+  /**
+   * The drought scenario is not a new claim about the index: its day sequence
+   * is the case `fixtures/index-cases.json` already shares between the Rust
+   * program and the TypeScript twin. This is that case played back through
+   * signing, bucketing, medians and classification.
+   */
+  it('drought reproduces the reference trace of index-cases.json', async () => {
+    const { states } = await run('drought')
+    const cases = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL('../../../fixtures/index-cases.json', import.meta.url)),
+        'utf8',
+      ),
+    ) as { cases: { name: string; days: number[]; drySpell: number }[] }
+    const reference = cases.cases.find((one) => one.name === 'policy window of the reference trace')
+    if (reference === undefined) throw new Error('the reference trace case is gone')
+
+    expect(states).toEqual(reference.days)
+    expect(drySpell(states)).toBe(reference.drySpell)
+  })
+
+  it('drought pays the run its fixture promises', async () => {
+    const { scenario, states } = await run('drought')
+    expect(drySpell(states)).toBe(scenario.expected.longestDrySpell)
+  })
+
+  it('normal never starts a run', async () => {
+    const { scenario, states } = await run('normal')
+    expect(new Set(states)).toEqual(new Set([2]))
+    expect(drySpell(states)).toBe(scenario.expected.longestDrySpell)
+  })
+
+  /**
+   * `FR-048` at the boundary: 18 of 24 intervals is exactly 75 per cent and the
+   * comparison is inclusive, so those days are measured; 17 is not. And
+   * `FR-010`: three days of full intervals with only two operators have no
+   * value however dry the sky was. A dry sky is not a dry day.
+   */
+  it('gaps counts nine of its fourteen dry days, and pays for five', async () => {
+    const { scenario, states } = await run('gaps')
+    expect(states).toEqual([1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1])
+    expect(drySpell(states)).toBe(scenario.expected.longestDrySpell)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+describe('compressed time', () => {
+  it('reports how much faster than the sky the run moves', () => {
+    // FR-049: the number the screen has to show beside the result.
+    expect(compression(readScenario('drought'))).toBe(43_200)
+  })
+
+  /** `SC-011`: from the first reading to the payout in under 90 seconds. */
+  it('plays the drought inside the budget SC-011 allows', () => {
+    expect(scenarioDuration(readScenario('drought'))).toBe(58)
+    expect(scenarioDuration(readScenario('drought'))).toBeLessThan(90)
+  })
+
+  it('puts a day on the pool clock, not on a calendar', () => {
+    const scenario = readScenario('drought')
+    const clock = scenarioClock(scenario, GENESIS)
+    expect(clock.secondsPerDay).toBe(2)
+    expect(intervalStart(clock, 1, 0).getTime()).toBe(GENESIS.getTime() + 2000)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+describe('scenarioReadings', () => {
+  it('produces the same readings every time — FR-042', async () => {
+    const scenario = readScenario('drought')
+    const sensors = await scenarioSensors(scenario)
+    expect(scenarioReadings(scenario, GENESIS, sensors)).toEqual(
+      scenarioReadings(scenario, GENESIS, sensors),
+    )
+  })
+
+  /**
+   * Determinism is over the day indices and the values, not over instants: a
+   * run anchored to a different genesis is the same weather, later.
+   */
+  it('gives the same run at a different genesis', async () => {
+    const scenario = readScenario('drought')
+    const sensors = await scenarioSensors(scenario)
+    const later = new Date(GENESIS.getTime() + 7 * 86_400_000)
+
+    const first = scenarioReadings(scenario, GENESIS, sensors)
+    const second = scenarioReadings(scenario, later, sensors)
+
+    expect(second.map((reading) => reading.valueX100)).toEqual(
+      first.map((reading) => reading.valueX100),
+    )
+    expect(classifyRun(scenario, sensors, second, later)).toEqual(
+      classifyRun(scenario, sensors, first),
+    )
+  })
+
+  it('gives every sensor a fixed key from its seed', async () => {
+    const sensors = await scenarioSensors(readScenario('drought'))
+    const again = await scenarioSensors(readScenario('drought'))
+    expect(sensors.map((sensor) => sensor.pubkey)).toEqual(again.map((sensor) => sensor.pubkey))
+    expect(new Set(sensors.map((sensor) => sensor.pubkey)).size).toBe(3)
+  })
+
+  it('counts each sensor up from one, in time order — FR-003', async () => {
+    const { readings, sensors } = await run('drought')
+    for (const sensor of sensors) {
+      const own = readings.filter((reading) => reading.sensor === sensor.pubkey)
+      expect(own.map((reading) => reading.counter)).toEqual(
+        own.map((_reading, index) => BigInt(index + 1)),
+      )
+      for (let i = 1; i < own.length; i += 1) {
+        const previous = own[i - 1]
+        const current = own[i]
+        if (previous === undefined || current === undefined) throw new Error('fixture')
+        expect(current.measuredAt.getTime()).toBeGreaterThanOrEqual(previous.measuredAt.getTime())
+      }
+    }
+  })
+
+  it('publishes nothing at all on a day of silence', async () => {
+    const { scenario, readings } = await run('drought')
+    const clock = scenarioClock(scenario, GENESIS)
+    // Days 4 and 5 are the two the reference trace records as no coverage.
+    for (const dayIndex of [4, 5]) {
+      const from = intervalStart(clock, dayIndex, 0).getTime()
+      const to = intervalStart(clock, dayIndex + 1, 0).getTime()
+      const inside = readings.filter(
+        (reading) => reading.measuredAt.getTime() >= from && reading.measuredAt.getTime() < to,
+      )
+      expect(inside).toEqual([])
+    }
+  })
+
+  it('keeps a silenced sensor quiet and the others publishing', async () => {
+    const { scenario, sensors, readings } = await run('gaps')
+    const clock = scenarioClock(scenario, GENESIS)
+    const quiet = sensors.find((sensor) => sensor.seed === 13)
+    if (quiet === undefined) throw new Error('fixture')
+
+    // Days 7..9 are the three the fixture silences the third operator through.
+    const from = intervalStart(clock, 7, 0).getTime()
+    const to = intervalStart(clock, 10, 0).getTime()
+    const inside = readings.filter(
+      (reading) => reading.measuredAt.getTime() >= from && reading.measuredAt.getTime() < to,
+    )
+    expect(inside.length).toBeGreaterThan(0)
+    expect(inside.some((reading) => reading.sensor === quiet.pubkey)).toBe(false)
+  })
+
+  it('never publishes negative rainfall', async () => {
+    const { readings } = await run('gaps')
+    expect(readings.every((reading) => reading.valueX100 >= 0)).toBe(true)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+describe('signScenarioReadings', () => {
+  it('signs the way a device signs, so the API cannot tell the difference', async () => {
+    const { readings, sensors } = await run('drought')
+    const signed = await signScenarioReadings(readings.slice(0, 6), sensors)
+    expect(signed).toHaveLength(6)
+    for (const reading of signed) {
+      expect(await verifyReadingSignature(reading)).toBe(true)
+    }
+  })
+
+  it('refuses to sign for a sensor it has no key for', async () => {
+    const { readings } = await run('drought')
+    await expect(signScenarioReadings(readings.slice(0, 1), [])).rejects.toThrow(/no key/)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+describe('playScenario', () => {
+  const signed = (measuredAt: Date, counter: bigint): SignedReading => ({
+    sensor: 'sensor',
+    cellId: 1n,
+    kind: 'precipitation_mm',
+    valueX100: 0,
+    measuredAt,
+    counter,
+    signature: 'signature',
+  })
+
+  it('publishes a reading when the compressed clock says it is due', async () => {
+    const slept: number[] = []
+    const published: bigint[] = []
+    let clock = GENESIS.getTime()
+
+    await playScenario(
+      [
+        signed(new Date(GENESIS.getTime() + 2000), 2n),
+        signed(new Date(GENESIS.getTime()), 1n),
+        signed(new Date(GENESIS.getTime() + 500), 3n),
+      ],
+      {
+        publish(reading) {
+          published.push(reading.counter)
+          return Promise.resolve()
+        },
+      },
+      {
+        genesisTs: GENESIS,
+        startedAt: GENESIS,
+        now: () => new Date(clock),
+        sleep: (ms) => {
+          slept.push(ms)
+          clock += ms
+          return Promise.resolve()
+        },
+      },
+    )
+
+    expect(published).toEqual([1n, 3n, 2n])
+    expect(slept).toEqual([500, 1500])
+  })
+
+  /**
+   * Due times come from `startedAt`, never from the previous sleep. A slow sink
+   * makes a run late rather than making every reading after it later still, and
+   * a finished run replays at full speed.
+   */
+  it('does not wait for a reading that is already due', async () => {
+    const slept: number[] = []
+    await playScenario(
+      [signed(new Date(GENESIS.getTime()), 1n), signed(new Date(GENESIS.getTime() + 1000), 2n)],
+      { publish: () => Promise.resolve() },
+      {
+        genesisTs: GENESIS,
+        // The run began a minute ago: every reading of it is overdue.
+        startedAt: new Date(GENESIS.getTime() - 60_000),
+        now: () => GENESIS,
+        sleep: (ms) => {
+          slept.push(ms)
+          return Promise.resolve()
+        },
+      },
+    )
+    expect(slept).toEqual([])
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+describe('loadScenario', () => {
+  const base = (): Record<string, unknown> =>
+    JSON.parse(JSON.stringify(readScenario('gaps'), (_key, value) => value)) as Record<
+      string,
+      unknown
+    >
+
+  it('refuses a file that does not declare its readings invented', () => {
+    // FR-039 with teeth: the badge on the screen cannot be switched off by a
+    // flag somebody forgot to set.
+    expect(() => loadScenario({ ...base(), synthetic: false })).toThrow()
+    const withoutFlag = base()
+    delete withoutFlag.synthetic
+    expect(() => loadScenario(withoutFlag)).toThrow()
+  })
+
+  it('refuses a programme that is not as long as it claims', () => {
+    expect(() => loadScenario({ ...base(), expected: { days: 99, longestDrySpell: 5 } })).toThrow(
+      /programme is/,
+    )
+  })
+
+  it('refuses two sensors in one slot', () => {
+    const scenario = base()
+    const sensors = scenario.sensors as { slotInCell: number }[]
+    const second = sensors[1]
+    if (second === undefined) throw new Error('fixture')
+    second.slotInCell = 0
+    expect(() => loadScenario(scenario)).toThrow(/share a slot/)
+  })
+
+  it('refuses two sensors sharing a seed, and therefore a key', () => {
+    const scenario = base()
+    const sensors = scenario.sensors as { seed: number }[]
+    const second = sensors[1]
+    if (second === undefined) throw new Error('fixture')
+    second.seed = 11
+    expect(() => loadScenario(scenario)).toThrow(/share a seed/)
+  })
+
+  it('refuses to silence a sensor the scenario does not have', () => {
+    const scenario = base()
+    const programme = scenario.programme as { silentSensors?: number[] }[]
+    const first = programme[0]
+    if (first === undefined) throw new Error('fixture')
+    first.silentSensors = [99]
+    expect(() => loadScenario(scenario)).toThrow(/no sensor with seed 99/)
+  })
+
+  it('refuses more silent intervals than a day has', () => {
+    const scenario = base()
+    const programme = scenario.programme as { silentIntervals?: number }[]
+    const first = programme[0]
+    if (first === undefined) throw new Error('fixture')
+    first.silentIntervals = 25
+    expect(() => loadScenario(scenario)).toThrow(/cannot have 25 silent/)
+  })
+
+  it('refuses an unknown field rather than dropping it', () => {
+    expect(() => loadScenario({ ...base(), rainfall: 'lots' })).toThrow()
+  })
+
+  it('refuses a name that is a path', () => {
+    expect(() => readScenario('../../secrets')).toThrow(RangeError)
+    expect(() => readScenario('Drought')).toThrow(RangeError)
+  })
+})
