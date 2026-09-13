@@ -103,6 +103,15 @@ class FakeStore implements IntervalStore {
     return Promise.resolve(this.days.get(`${cellId}/${dayIndex}`) ?? null)
   }
 
+  dayRecords(cellId: bigint, fromDay: number, toDay: number): Promise<DayRow[]> {
+    const rows: DayRow[] = []
+    for (let day = fromDay; day <= toDay; day += 1) {
+      const row = this.days.get(`${cellId}/${day}`)
+      if (row !== undefined) rows.push(row)
+    }
+    return Promise.resolve(rows)
+  }
+
   saveIntervals(rows: readonly IntervalRow[]): Promise<void> {
     this.calls.push('saveIntervals')
     this.intervals.push(...rows)

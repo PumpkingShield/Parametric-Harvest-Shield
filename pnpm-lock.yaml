@@ -143,6 +143,27 @@ importers:
         specifier: ^4.5.2
         version: 4.5.2
 
+  tests:
+    dependencies:
+      '@pumpking/anchor-client':
+        specifier: workspace:^
+        version: link:../packages/anchor-client
+      '@pumpking/api':
+        specifier: workspace:^
+        version: link:../apps/api
+      '@pumpking/db':
+        specifier: workspace:^
+        version: link:../packages/db
+      '@pumpking/shared':
+        specifier: workspace:^
+        version: link:../packages/shared
+      '@pumpking/worker':
+        specifier: workspace:^
+        version: link:../apps/worker
+      hono:
+        specifier: ^4.13.5
+        version: 4.13.5
+
 packages:
 
   '@babel/runtime@7.29.7':

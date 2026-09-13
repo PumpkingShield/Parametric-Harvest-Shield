@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./routes/readings": "./src/routes/readings.ts"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=../../.env src/index.ts",
     "build": "tsc -p tsconfig.json",

@@ -1,0 +1,19 @@
+{
+  "name": "@pumpking/tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@pumpking/anchor-client": "workspace:^",
+    "@pumpking/api": "workspace:^",
+    "@pumpking/db": "workspace:^",
+    "@pumpking/shared": "workspace:^",
+    "@pumpking/worker": "workspace:^",
+    "hono": "^4.13.5"
+  }
+}

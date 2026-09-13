@@ -428,6 +428,23 @@ export function issuePolicyInstruction(input: IssuePolicyInput): TransactionInst
   })
 }
 
+/**
+ * The instruction an encoded payload carries, read back through the same IDL
+ * that wrote it, or null when the discriminator names nothing.
+ *
+ * The round trip is not a nicety. `BorshInstructionCoder` encodes a field the
+ * arguments do not carry as `0` — silently, without throwing — so a builder
+ * whose argument names have drifted from the IDL produces a valid transaction
+ * that means something else. Every builder in this file is tested by decoding
+ * what it produced, and the trace (`FR-037`) reads transactions the same way.
+ */
+export type DecodedInstruction = { name: string; data: Record<string, unknown> }
+
+export function decodeInstruction(data: Uint8Array): DecodedInstruction | null {
+  const decoded = coder.decode(Buffer.from(data))
+  return decoded === null ? null : (decoded as unknown as DecodedInstruction)
+}
+
 /* -------------------------------------------------------------------------- */
 /* submit_day_record                                                          */
 /* -------------------------------------------------------------------------- */
@@ -479,9 +496,7 @@ export interface SubmitDayRecordInput {
  * opened by the first day the network publishes for it, so there is no
  * separate registration call to make first.
  */
-export function submitDayRecordInstruction(
-  input: SubmitDayRecordInput,
-): TransactionInstruction {
+export function submitDayRecordInstruction(input: SubmitDayRecordInput): TransactionInstruction {
   const { record } = input
   if (record.readingsRoot.length !== 32) {
     throw new Error(`the readings root must be 32 bytes, got ${record.readingsRoot.length}`)

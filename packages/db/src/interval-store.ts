@@ -1,5 +1,5 @@
 import type { DayClassification, ReadingKindName } from '@pumpking/shared'
-import { and, asc, eq, gte, lt, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, gte, lt, lte, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cellDays, cellHours, cells, operators, readings, sensors } from './schema.ts'
 
@@ -87,6 +87,16 @@ export interface IntervalStore {
   ): Promise<AcceptedReading[]>
   /** The stored day, or null when it has not been closed yet. */
   dayRecord(cellId: bigint, dayIndex: number): Promise<DayRow | null>
+  /**
+   * The stored days of a cell in `[fromDay, toDay]`, both ends inclusive and
+   * ascending — a policy's coverage window, in one query.
+   *
+   * Days the cell has no row for are simply absent rather than filled in. The
+   * caller decides what a missing day means, and for settlement it means the
+   * same thing the on-chain ring means by `None`: not an answer, and a break
+   * in the run.
+   */
+  dayRecords(cellId: bigint, fromDay: number, toDay: number): Promise<DayRow[]>
   saveIntervals(rows: readonly IntervalRow[]): Promise<void>
   saveDay(row: DayRow): Promise<void>
   markDaySubmitted(cellId: bigint, dayIndex: number, txSignature: string): Promise<void>
@@ -157,6 +167,28 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
         .where(and(eq(cellDays.cellId, cellId), eq(cellDays.dayIndex, dayIndex)))
         .limit(1)
       return row ?? null
+    },
+
+    async dayRecords(cellId, fromDay, toDay) {
+      return await db
+        .select({
+          cellId: cellDays.cellId,
+          dayIndex: cellDays.dayIndex,
+          state: cellDays.state,
+          rainfallX100: cellDays.rainfallX100,
+          coveredHours: cellDays.coveredHours,
+          merkleRoot: cellDays.merkleRoot,
+          txSignature: cellDays.txSignature,
+        })
+        .from(cellDays)
+        .where(
+          and(
+            eq(cellDays.cellId, cellId),
+            gte(cellDays.dayIndex, fromDay),
+            lte(cellDays.dayIndex, toDay),
+          ),
+        )
+        .orderBy(asc(cellDays.dayIndex))
     },
 
     async saveIntervals(rows) {
