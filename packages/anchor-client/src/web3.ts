@@ -19,6 +19,29 @@ export type TransactionInstruction = web3.TransactionInstruction
 
 export type AccountMeta = web3.AccountMeta
 
+/**
+ * Sending, as opposed to encoding. Re-exported for the same reason as
+ * `PublicKey`: the worker builds an instruction here and signs it there, and
+ * two copies of `@solana/web3.js` in one graph produce a `Transaction` the
+ * other copy's `sendAndConfirmTransaction` rejects as a foreign object.
+ *
+ * The type annotations are not decoration. Without them `tsc` cannot name the
+ * inferred type without pointing inside `.pnpm` and fails with `TS2883`.
+ */
+export const Connection: typeof web3.Connection = web3.Connection
+export type Connection = web3.Connection
+
+export const Keypair: typeof web3.Keypair = web3.Keypair
+export type Keypair = web3.Keypair
+
+export const Transaction: typeof web3.Transaction = web3.Transaction
+export type Transaction = web3.Transaction
+
+export const sendAndConfirmTransaction: typeof web3.sendAndConfirmTransaction =
+  web3.sendAndConfirmTransaction
+
+export type Commitment = web3.Commitment
+
 /** `11111111111111111111111111111111` — every `init` needs it. */
 export const SYSTEM_PROGRAM_ID: PublicKey = web3.SystemProgram.programId
 

@@ -13,10 +13,19 @@ export {
 export type { DayClassification, DayParams, DayResult } from './day.ts'
 export { classifyDay, DayState } from './day.ts'
 export { drySpell } from './index-math.ts'
+export type { IntervalCommitment } from './interval-leaf.ts'
+export { CANONICAL_INTERVAL_BYTES, canonicalIntervalBytes } from './interval-leaf.ts'
 export type { CellMedian, MedianParams, OperatorVote, SensorReading } from './median.ts'
 export { cellMedian, medianX100 } from './median.ts'
 export type { MerkleProof } from './merkle.ts'
 export { MERKLE_HASH_BYTES, merkleProof, merkleRoot, verifyMerkleProof } from './merkle.ts'
+export {
+  BPS_DENOMINATOR,
+  dryDayFrequencyBps,
+  MIN_HISTORY_DAYS,
+  premiumFor,
+  premiumRateBps,
+} from './premium.ts'
 export type {
   Reading,
   ReadingKindName,
@@ -37,11 +46,4 @@ export {
   toReadingWire,
   toSignedReadingWire,
 } from './reading.ts'
-export {
-  BPS_DENOMINATOR,
-  dryDayFrequencyBps,
-  MIN_HISTORY_DAYS,
-  premiumFor,
-  premiumRateBps,
-} from './premium.ts'
 export { sensorPublicKey, signReading, verifyReadingSignature } from './signature.ts'
