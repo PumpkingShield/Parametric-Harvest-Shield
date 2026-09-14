@@ -63,7 +63,7 @@ impl PolicyParams {
 pub fn check_underwriting(
     params: &PolicyParams,
     pool: &Pool,
-    cell_sensor_count: u8,
+    cell_votes: u32,
     cell_reserved: u64,
     today: u32,
 ) -> Result<()> {
@@ -105,8 +105,18 @@ pub fn check_underwriting(
 
     // FR-022: a cell the network cannot reach a value on would never settle,
     // and selling there is selling a policy guaranteed not to work.
+    //
+    // Coverage is counted from what the cell **published**, not from what is
+    // registered on it. `CellState::sensor_count` is the registry, and the
+    // instruction that fills it (`register_sensor`) does not exist yet — so
+    // reading it here made `issue_policy` unreachable for the whole of M1 and
+    // nothing said so: every test that touched underwriting built its own
+    // `CellState` with the field already set. The day log cannot be faked that
+    // way. It is also the stronger question of the two: a sensor that is
+    // registered and silent is not coverage, and `FR-010` is about votes on an
+    // interval rather than names on a list.
     require!(
-        cell_sensor_count >= pool.min_sensors_per_cell,
+        cell_votes >= u32::from(pool.min_sensors_per_cell),
         PumpkingError::CellNotCovered
     );
 
@@ -238,7 +248,7 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
     check_underwriting(
         &params,
         &ctx.accounts.pool,
-        ctx.accounts.cell.sensor_count,
+        ctx.accounts.cell.latest_votes(),
         ctx.accounts.cell.reserved,
         today,
     )?;
@@ -921,7 +931,9 @@ mod tests {
 
     #[test]
     fn a_cell_the_network_cannot_read_sells_nothing() {
-        // FR-022: three sensors are the minimum, two are not coverage.
+        // FR-022: three independent votes are the minimum, two are not
+        // coverage. The number comes from the cell's last recorded day, so
+        // this is what the network did rather than who signed up.
         let p = params();
         assert_eq!(
             code_of(check_underwriting(&p, &pool(), 2, 0, TODAY).unwrap_err()),

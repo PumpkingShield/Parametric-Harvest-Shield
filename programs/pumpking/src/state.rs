@@ -206,6 +206,27 @@ impl CellState {
         Some(self.contributors[Self::slot(day_index)])
     }
 
+    /// Independent votes the cell's most recent recorded day carried —
+    /// `FR-022` as a fact about what the network published.
+    ///
+    /// `sensor_count` next door is the **registry**, and it is filled by
+    /// `register_sensor`, which does not exist yet. Underwriting used to read
+    /// it and therefore refused every policy: the field is zero on a cell that
+    /// `submit_day_record` opened, and that is every cell there is. The day
+    /// log answers the same question with evidence — `check_contributors`
+    /// already refuses a measured day below the pool's minimum, so a day that
+    /// carries votes carries enough of them.
+    ///
+    /// Zero when the cell has no record yet, and zero when its last day had no
+    /// coverage: a network that has gone quiet is not coverage either, and
+    /// erring towards refusing to sell is the safe direction.
+    pub fn latest_votes(&self) -> u32 {
+        match self.last_day_index {
+            Some(last) => self.contributors_of(last).map_or(0, u32::count_ones),
+            None => 0,
+        }
+    }
+
     /// Whether one sensor slot voted in a day.
     pub fn slot_voted(&self, day_index: u32, slot_in_cell: u8) -> bool {
         match self.contributors_of(day_index) {
@@ -643,6 +664,27 @@ mod tests {
         // FR-012: excluded for outliers. The readings keep arriving and keep
         // being stored; they stop counting.
         assert!(!sensor(1_000_000, false).votes(1_000));
+    }
+
+    #[test]
+    fn coverage_is_what_the_last_recorded_day_carried() {
+        // FR-022. Zero on a cell nothing has been written to — which is every
+        // cell the moment `submit_day_record` opens it.
+        let mut cell = empty_cell();
+        assert_eq!(cell.latest_votes(), 0);
+
+        cell.record_day(0, DayState::Dry, 0b111).unwrap();
+        assert_eq!(cell.latest_votes(), 3);
+
+        // The **last** day, not the best one: a cell that has gone quiet stops
+        // being coverage the day it does, not at the end of the season.
+        cell.record_day(1, DayState::Wet, 0b1).unwrap();
+        assert_eq!(cell.latest_votes(), 1);
+
+        // A day without coverage carries no contributors at all, so the answer
+        // is zero rather than the last number that happened to be there.
+        cell.record_day(2, DayState::NoCoverage, 0).unwrap();
+        assert_eq!(cell.latest_votes(), 0);
     }
 
     #[test]
