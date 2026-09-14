@@ -7,6 +7,7 @@
     "./interval": "./src/interval.ts",
     "./scenario": "./src/scenario.ts",
     "./settle": "./src/settle.ts",
+    "./close": "./src/close.ts",
     "./chain": "./src/chain.ts"
   },
   "scripts": {
