@@ -11,6 +11,13 @@
 //! настільки готовий, наскільки йому треба, і всі попередні кроки в ньому —
 //! справжні виконані інструкції, а не викладений руками стан. Там, де стан
 //! таки викладається руками, це сказано в коментарі й названо причину.
+//!
+//! **Друга черга** додала три гілки, яких головний шлях не торкається:
+//! закриття поліса на завершеному вікні (`FR-028`), другий поліс тієї самої
+//! комірки проти ліміту експозиції (`FR-020`) і межу кільця `day_log` на 128
+//! діб — єдине місце, де `advance_window` чистить слоти, і воно не
+//! виконувалося жодного разу за весь шлях M1, бо той закінчується на
+//! тридцятій добі.
 
 mod harness;
 
@@ -18,7 +25,8 @@ use anchor_lang::prelude::Pubkey as AnchorPubkey;
 use harness::*;
 use pumpking::errors::PumpkingError;
 use pumpking::instructions::{DayRecordParams, PolicyParams, PoolParams};
-use pumpking::state::{CapitalPosition, CellState, Policy, PolicyState, Pool};
+use pumpking::index::DayState;
+use pumpking::state::{CapitalPosition, CellState, Policy, PolicyState, Pool, DAY_LOG_LEN};
 
 /* -------------------------------------------------------------------------- */
 /* Сценарій                                                                   */
@@ -118,6 +126,31 @@ fn day_params(day_index: u32, dry: bool) -> DayRecordParams {
         readings_root: [0x5a; 32],
         rainfall_x100: Some(if dry { 0 } else { 500 }),
         covered_intervals: 24,
+        total_intervals: 24,
+    }
+}
+
+/// Та сама доба, але іншої комірки — `FR-020` міряється по комірці, тож
+/// друга комірка потрібна, щоб побачити, чого ліміт **не** обмежує.
+fn day_params_for(cell_id: u64, day_index: u32, dry: bool) -> DayRecordParams {
+    DayRecordParams {
+        cell_id,
+        ..day_params(day_index, dry)
+    }
+}
+
+/// Доба, яку мережа не виміряла: жодного голосу, жодного значення. Записана
+/// доба без покриття — це **відповідь** журналу, а не мовчання (`FR-047`), і
+/// саме тим вона відрізняється від доби, якої в журналі немає.
+fn silent_day_params(day_index: u32) -> DayRecordParams {
+    DayRecordParams {
+        cell_id: CELL_ID,
+        day_index,
+        state: 0,
+        contributors: 0,
+        readings_root: [0; 32],
+        rainfall_x100: None,
+        covered_intervals: 0,
         total_intervals: 24,
     }
 }
@@ -235,6 +268,21 @@ fn settle_policy(caller: AnchorPubkey, owner_tokens: AnchorPubkey) -> solana_ins
     )
 }
 
+/// `close_policy` не має ані токен-акаунтів, ані активу: закриття не рухає
+/// грошей узагалі, воно повертає **місткість**. Порожній список — це і є
+/// `FR-028` як факт про акаунти.
+fn close_policy(caller: AnchorPubkey, nonce: u64) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::ClosePolicy {
+            caller,
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+            policy: policy_pda(farmer(), nonce),
+        },
+        pumpking::instruction::ClosePolicy {},
+    )
+}
+
 fn claim_payout(caller: AnchorPubkey, owner_tokens: AnchorPubkey) -> solana_instruction::Instruction {
     instruction(
         pumpking::accounts::ClaimUnclaimedPayout {
@@ -278,13 +326,20 @@ fn funded_world() -> World {
 /// `HISTORY_DAYS`.
 fn world_with_history() -> World {
     let mut world = funded_world();
+    record_history(&mut world, CELL_ID);
+    world
+}
+
+/// Двадцять діб історії одній комірці. Годинник іде вперед разом із записом —
+/// `submit_day_record` вимагає, щоб доба вже завершилась, — і повертається у
+/// добу `HISTORY_DAYS`, звідки далі торгують поліси.
+fn record_history(world: &mut World, cell_id: u64) {
     for day in 0..HISTORY_DAYS {
         world.set_day(day + 1);
-        let ix = submit_day(day_params(day, history_is_dry(day)));
+        let ix = submit_day(day_params_for(cell_id, day, history_is_dry(day)));
         world.exec_ok(&ix);
     }
     world.set_day(HISTORY_DAYS);
-    world
 }
 
 /// Історія плюс проданий поліс. Годинник лишається у добі `HISTORY_DAYS`.
@@ -303,6 +358,23 @@ fn world_with_spell(dry: u32) -> World {
         let day = WINDOW_START + offset;
         world.set_day(day + 1);
         let ix = submit_day(day_params(day, true));
+        world.exec_ok(&ix);
+    }
+    world
+}
+
+/// Поліс, чиє вікно **завершене**: записані всі доби від `WINDOW_START` до
+/// `WINDOW_END`, перші `dry` з них сухі, решта мокрі. Годинник лишається у
+/// добі, наступній за `WINDOW_END`.
+///
+/// Завершене вікно — єдиний стан, у якому `close_policy` взагалі має право
+/// щось зробити, і різниця між ним і `world_with_spell` рівно в цьому: там
+/// журнал ще не дійшов до кінця вікна, тут дійшов.
+fn world_with_finished_window(dry: u32) -> World {
+    let mut world = world_with_policy();
+    for day in WINDOW_START..=WINDOW_END {
+        world.set_day(day + 1);
+        let ix = submit_day(day_params(day, day - WINDOW_START < dry));
         world.exec_ok(&ix);
     }
     world
@@ -878,4 +950,393 @@ fn a_policy_that_was_paid_has_no_deferred_payout_to_claim() {
     let ix = claim_payout(stranger(), farmer_tokens());
     world.exec_err(&ix, PumpkingError::PolicyNotUnclaimed);
     assert_eq!(token_amount(world.account(farmer_tokens())), after_payout);
+}
+
+/* -------------------------------------------------------------------------- */
+/* close_policy                                                               */
+/* -------------------------------------------------------------------------- */
+
+#[test]
+fn a_window_that_ended_without_the_event_frees_the_capacity_and_moves_no_money() {
+    // `FR-028`. Закриття — єдина інструкція шляху M1, яка не переказує нічого:
+    // премія стала капіталом ще в день продажу (`FR-034`), тож ділити тут
+    // нема чого. Повертається **резервація**, тобто місткість, і доки її
+    // ніхто не повернув, пул продає менше покриття, ніж має.
+    //
+    // Чотири сухі доби з восьми: найдовша серія не дійшла порогу, вікно
+    // завершене — рівно та комбінація, за якої поліс закривається.
+    let mut world = world_with_finished_window(4);
+    let vault_before = token_amount(world.account(vault_pda()));
+    let farmer_before = token_amount(world.account(farmer_tokens()));
+
+    // Кличе чужак — з тієї самої причини, з якої виплату кличе будь-хто:
+    // поліс, що чекає на конкретний ключ, тримає місткість пулу на чиємусь
+    // зручному часі.
+    let ix = close_policy(stranger(), NONCE);
+    world.exec_ok(&ix);
+
+    let policy: Policy = world.read(policy_pda(farmer(), NONCE));
+    assert_eq!(policy.state, PolicyState::ClosedNoEvent);
+
+    let pool: Pool = world.read(pool_pda());
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(pool.reserved_total, 0, "місткість пулу не повернулась");
+    assert_eq!(cell.reserved, 0, "місткість комірки не повернулась");
+
+    // Жодна монета не зрушила: ні зі сховища, ні до фермера, ні між
+    // капіталом і резервом винагород.
+    assert_eq!(token_amount(world.account(vault_pda())), vault_before);
+    assert_eq!(token_amount(world.account(farmer_tokens())), farmer_before);
+    assert_eq!(pool.capital_total, CAPITAL + PREMIUM - PREMIUM / 10);
+    assert_eq!(cell.rewards_reserve, PREMIUM / 10);
+    assert_vault_matches_books(&world);
+}
+
+#[test]
+fn an_unfinished_window_closes_nothing() {
+    // Найдорожча помилка, яку тут можна зробити, — закрити поліс на вікні,
+    // яке ще триває: доба, за яку журнал не відповів, ще може виявитись
+    // сухою. Три сухі доби записані, п'ять останніх діб вікна — ні.
+    let mut world = world_with_spell(3);
+
+    let ix = close_policy(stranger(), NONCE);
+    world.exec_err(&ix, PumpkingError::WindowNotOver);
+
+    let policy: Policy = world.read(policy_pda(farmer(), NONCE));
+    assert_eq!(policy.state, PolicyState::Active);
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.reserved_total, PAYOUT, "місткість віддали завчасно");
+}
+
+#[test]
+fn a_day_the_network_missed_still_finishes_the_window() {
+    // Різниця, заради якої `day_state` повертає `Option`: **записана** доба
+    // без покриття — це відповідь журналу, і вікно з нею завершене; доба, якої
+    // в журналі немає, — це не відповідь, і вікно з нею не завершене.
+    // Перше рве серію (`FR-047`), друге не дає закрити поліс узагалі.
+    let mut world = world_with_policy();
+    for day in WINDOW_START..=WINDOW_END {
+        world.set_day(day + 1);
+        let ix = if day == WINDOW_START + 3 {
+            submit_day(silent_day_params(day))
+        } else {
+            submit_day(day_params(day, true))
+        };
+        world.exec_ok(&ix);
+    }
+
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.day_state(WINDOW_START + 3), Some(DayState::NoCoverage));
+
+    // Сім сухих діб із восьми, але не поспіль: три, мовчання, чотири. Порогу
+    // в п'ять не дійшла жодна серія, і вікно завершене.
+    let ix = settle_policy(stranger(), farmer_tokens());
+    world.exec_err(&ix, PumpkingError::EventHasNotHappened);
+
+    let ix = close_policy(stranger(), NONCE);
+    world.exec_ok(&ix);
+    let policy: Policy = world.read(policy_pda(farmer(), NONCE));
+    assert_eq!(policy.state, PolicyState::ClosedNoEvent);
+}
+
+#[test]
+fn a_window_the_spell_finished_in_pays_instead_of_closing() {
+    // `FR-030` з іншого боку: закриття не має ставати способом **не** платити.
+    // Вікно завершене, серія дійшла порогу — і `close_policy` відмовляє, а
+    // виплата після цієї відмови проходить у тому самому світі.
+    let mut world = world_with_finished_window(u32::from(SPELL_THRESHOLD));
+    let before = token_amount(world.account(farmer_tokens()));
+
+    let ix = close_policy(stranger(), NONCE);
+    world.exec_err(&ix, PumpkingError::EventHasHappened);
+
+    let ix = settle_policy(stranger(), farmer_tokens());
+    world.exec_ok(&ix);
+    assert_eq!(token_amount(world.account(farmer_tokens())), before + PAYOUT);
+    let policy: Policy = world.read(policy_pda(farmer(), NONCE));
+    assert_eq!(policy.state, PolicyState::PaidOut);
+}
+
+#[test]
+fn a_closed_policy_closes_once_and_pays_nothing() {
+    // `FR-027` для другого з двох виходів. Обидві двері до тих самих грошей
+    // перевіряють один стан, і після закриття не відчиняється жодна.
+    let mut world = world_with_finished_window(4);
+    let ix = close_policy(stranger(), NONCE);
+    world.exec_ok(&ix);
+    let after_close = token_amount(world.account(farmer_tokens()));
+
+    let ix = close_policy(stranger(), NONCE);
+    world.exec_err(&ix, PumpkingError::PolicyNotActive);
+
+    let ix = settle_policy(stranger(), farmer_tokens());
+    world.exec_err(&ix, PumpkingError::PolicyNotActive);
+
+    let ix = claim_payout(stranger(), farmer_tokens());
+    world.exec_err(&ix, PumpkingError::PolicyNotUnclaimed);
+
+    assert_eq!(token_amount(world.account(farmer_tokens())), after_close);
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.reserved_total, 0, "місткість повернулась двічі");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Ліміт експозиції комірки — FR-020                                          */
+/* -------------------------------------------------------------------------- */
+
+#[test]
+fn the_cell_sells_up_to_its_limit_and_not_one_unit_past_it() {
+    // `FR-020` на другому полісі тієї самої комірки — тобто там, де ліміт
+    // узагалі починає щось означати. Перший поліс сам по собі впирається у
+    // стелю (виплата = 10% капіталу), і далі комірка продає рівно стільки,
+    // скільки додала до капіталу її ж премія.
+    let mut world = world_with_history();
+    world.exec_ok(&issue_policy(policy_params()));
+
+    let pool: Pool = world.read(pool_pda());
+    let limit = pool.cell_exposure_limit();
+    // Капітал виріс на премію за відрахуванням резерву винагород, отже й
+    // стеля комірки — на десяту частину цього приросту.
+    assert_eq!(pool.capital_total, CAPITAL + PREMIUM - PREMIUM / 10);
+    assert_eq!(limit, 1_022_500);
+    let headroom = limit - PAYOUT;
+    assert_eq!(headroom, 22_500);
+
+    // На одиницю вище стелі — і поліса немає. Перевірка стоїть **до**
+    // ціноутворення, тож межа впирається у виплату, а не в премію.
+    let mut params = policy_params();
+    params.nonce = NONCE + 1;
+    params.payout = headroom + 1;
+    params.max_premium = u64::MAX;
+    let ix = issue_policy(params.clone());
+    world.exec_err(&ix, PumpkingError::CellExposureExceeded);
+    assert!(!world.exists(policy_pda(farmer(), NONCE + 1)));
+
+    // Рівно на стелі — проходить. Ціна тієї самої історії: ставка 2500 bps,
+    // премія ceil(22 500 × 0,25).
+    params.payout = headroom;
+    params.max_premium = 5_625;
+    let ix = issue_policy(params);
+    world.exec_ok(&ix);
+
+    let second: Policy = world.read(policy_pda(farmer(), NONCE + 1));
+    assert_eq!(second.payout, headroom);
+    assert_eq!(second.premium, 5_625);
+
+    let pool: Pool = world.read(pool_pda());
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.reserved, limit, "комірка зайшла за власну стелю");
+    assert_eq!(pool.reserved_total, PAYOUT + headroom);
+    // Друга премія підняла капітал ще раз, тож стеля вже вища за резервацію:
+    // ліміт міряється тим капіталом, який був **до** премії покупця.
+    assert!(pool.cell_exposure_limit() > cell.reserved);
+    assert_eq!(
+        token_amount(world.account(farmer_tokens())),
+        FARMER_BALANCE - PREMIUM - 5_625
+    );
+    assert_vault_matches_books(&world);
+}
+
+#[test]
+fn the_unit_of_concentration_is_the_cell_and_not_the_pool() {
+    // Друга половина `FR-020`: посуха корельована **всередині** комірки, тож
+    // вичерпана стеля однієї комірки не робить пул закритим. Та сама виплата,
+    // яка щойно не влізла поруч, продається сусідній комірці цілком.
+    const OTHER_CELL: u64 = 0x8712_3456_789a_bcd1;
+
+    let mut world = world_with_history();
+    record_history(&mut world, OTHER_CELL);
+    world.exec_ok(&issue_policy(policy_params()));
+
+    let mut params = policy_params();
+    params.nonce = NONCE + 1;
+    params.cell_id = OTHER_CELL;
+    let ix = issue_policy(params);
+    world.exec_ok(&ix);
+
+    let pool: Pool = world.read(pool_pda());
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    let other: CellState = world.read(cell_pda(OTHER_CELL));
+    assert_eq!(cell.reserved, PAYOUT);
+    assert_eq!(other.reserved, PAYOUT);
+    assert_eq!(pool.reserved_total, 2 * PAYOUT);
+
+    // Резерв винагород ділиться по комірках так само, як експозиція: кожна
+    // тримає премію власного поліса (`FR-061`, `FR-062`).
+    assert_eq!(cell.rewards_reserve, PREMIUM / 10);
+    assert_eq!(other.rewards_reserve, PREMIUM / 10);
+    assert_eq!(
+        token_amount(world.account(vault_pda())),
+        pool.capital_total + cell.rewards_reserve + other.rewards_reserve,
+        "баланс сховища розійшовся з обліком двох комірок"
+    );
+}
+
+#[test]
+fn closing_a_policy_gives_the_cell_its_capacity_back() {
+    // Заради чого `close_policy` взагалі існує: доки вона не виконана,
+    // виплата, якої вже не буде, займає стелю комірки. Після закриття
+    // комірка знову продає на повну.
+    let mut world = world_with_finished_window(4);
+
+    // Доки поліс не закритий, місця немає навіть на добу пізніше.
+    let mut params = policy_params();
+    params.nonce = NONCE + 1;
+    params.window_start_day = WINDOW_END + 4;
+    params.window_end_day = WINDOW_END + 11;
+    params.max_premium = u64::MAX;
+    let ix = issue_policy(params.clone());
+    world.exec_err(&ix, PumpkingError::CellExposureExceeded);
+
+    world.exec_ok(&close_policy(stranger(), NONCE));
+
+    // Ціна тим часом інша, і це не збіг: журнал побачив ще вісім діб, з них
+    // чотири сухі. Частота 8/28 = 2857 bps, ставка 3571 bps, премія
+    // ceil(1 000 000 × 0,3571) — комірка, що сохла частіше, коштує дорожче.
+    params.max_premium = 357_100;
+    let ix = issue_policy(params);
+    world.exec_ok(&ix);
+
+    let second: Policy = world.read(policy_pda(farmer(), NONCE + 1));
+    assert_eq!(second.premium, 357_100);
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.reserved, PAYOUT);
+    assert_vault_matches_books(&world);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Межа кільця day_log                                                        */
+/* -------------------------------------------------------------------------- */
+
+/// Довжина кільця в добах. Усе нижче — про єдину гілку програми, якої шлях M1
+/// не торкається жодного разу: `advance_window` чистить слоти лише тоді, коли
+/// журнал переріс власну довжину, а M1 закінчується на тридцятій добі.
+const RING: u32 = DAY_LOG_LEN as u32;
+
+#[test]
+fn the_day_a_ring_later_takes_the_first_day_s_slot() {
+    // Слот адресується залишком від ділення, тож доба `RING` сідає рівно туди,
+    // де лежала доба 0. Без чистки вікна той самий байт відповідав би на два
+    // питання одразу — і `dry_spell` рахував би серію зі стодвадцятивосьмиденною
+    // дірою всередині.
+    let mut world = world_with_history();
+    world.set_day(RING + 1);
+    // Доба 0 в історії мокра, ця — суха: якби слот не переписався, різниця
+    // була б не видна.
+    let ix = submit_day(day_params(RING, true));
+    world.exec_ok(&ix);
+
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.first_day_index, 1, "вікно не зрушило");
+    assert_eq!(cell.last_day_index, Some(RING));
+
+    // Доба 0 випала з журналу — і журнал каже саме це, а не «покриття не
+    // було». Різниця варта акаунта: `None` не рве серію, вона робить вікно
+    // незавершеним.
+    assert_eq!(cell.day_state(0), None);
+    assert_eq!(cell.contributors_of(0), None);
+
+    assert_eq!(cell.day_state(RING), Some(DayState::Dry));
+    assert_eq!(
+        cell.day_log[0],
+        DayState::Dry as u8,
+        "слот доби 0 відповідає за стару добу"
+    );
+
+    // Випала рівно одна доба, не більше: сусідня по журналу на місці.
+    assert_eq!(cell.day_state(1), Some(DayState::Wet));
+    assert_eq!(cell.day_state(HISTORY_DAYS - 1), Some(DayState::Dry));
+    assert_eq!(cell.latest_votes(), 3);
+}
+
+#[test]
+fn a_jump_past_the_whole_log_clears_it_and_the_cell_stops_being_priceable() {
+    // Стрибок довший за кільце — друга гілка `advance_window`: чистити слоти
+    // по одному нема сенсу, бо в живих не лишається жодного. Мережа, яка
+    // мовчала два кільця поспіль, повертається з коміркою без історії.
+    let far = HISTORY_DAYS + 2 * RING;
+    let mut world = world_with_history();
+    world.set_day(far + 1);
+    let ix = submit_day(day_params(far, true));
+    world.exec_ok(&ix);
+
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.first_day_index, far - RING + 1);
+    assert_eq!(cell.last_day_index, Some(far));
+    assert_eq!(cell.day_state(HISTORY_DAYS - 1), None);
+
+    let live = (far % RING) as usize;
+    for (slot, state) in cell.day_log.iter().enumerate() {
+        let expected = if slot == live { DayState::Dry as u8 } else { 0 };
+        assert_eq!(*state, expected, "слот {slot} лишився з минулого кільця");
+    }
+    for (slot, mask) in cell.contributors.iter().enumerate() {
+        let expected = if slot == live { 0b111 } else { 0 };
+        assert_eq!(*mask, expected, "голоси у слоті {slot} лишились з минулого");
+    }
+
+    // Одна покрита доба — це не історія: `price_of` відмовляється називати
+    // ціну, і комірка нічого не продає, доки не набере чотирнадцять діб.
+    // Покриття при цьому є (`latest_votes` = 3), тобто відмовляє саме ціна.
+    assert_eq!(cell.latest_votes(), 3);
+    let mut params = policy_params();
+    params.window_start_day = far + 4;
+    params.window_end_day = far + 11;
+    let ix = issue_policy(params);
+    world.exec_err(&ix, PumpkingError::CellHistoryTooShort);
+}
+
+#[test]
+fn the_window_survives_exactly_until_its_first_day_leaves_the_log() {
+    // Межа, за якою поліс перестає бути закриваним. Вікно живе, доки
+    // найновіша записана доба не перевищила `window_start + RING - 1`: саме
+    // на цій добі `first_day_index` дорівнює `WINDOW_START`.
+    //
+    // `MAX_COVERAGE_DAYS` (90) менший за кільце (128) навмисно — це і є той
+    // запас. Але запас скінченний, і за ним `close_policy` відмовляє
+    // **назавжди**: журнал росте лише вперед, тож доба, що випала, не
+    // повернеться. `T022` цього не бачив: чисті функції не мають кільця.
+    let last_day_the_window_survives = WINDOW_START + RING - 1;
+
+    let mut world = world_with_finished_window(4);
+    world.set_day(last_day_the_window_survives + 1);
+    let ix = submit_day(day_params(last_day_the_window_survives, false));
+    world.exec_ok(&ix);
+
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.first_day_index, WINDOW_START);
+    world.exec_ok(&close_policy(stranger(), NONCE));
+
+    // Та сама історія, але доба на одну новіша — і перша доба вікна випала.
+    let mut world = world_with_finished_window(4);
+    world.set_day(last_day_the_window_survives + 2);
+    let ix = submit_day(day_params(last_day_the_window_survives + 1, false));
+    world.exec_ok(&ix);
+
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.first_day_index, WINDOW_START + 1);
+    assert_eq!(cell.day_state(WINDOW_START), None, "доба вікна ще в журналі");
+    assert_eq!(cell.day_state(WINDOW_START + 1), Some(DayState::Dry));
+
+    // Вікно стало незавершеним заднім числом, тож не закривається; події в
+    // ньому теж більше не видно, тож і не виплачується.
+    world.exec_err(&close_policy(stranger(), NONCE), PumpkingError::WindowNotOver);
+    world.exec_err(
+        &settle_policy(stranger(), farmer_tokens()),
+        PumpkingError::EventHasNotHappened,
+    );
+
+    // Наслідок, заради якого цей тест написаний: місткість комірки лишається
+    // зайнятою полісом, який уже нічим не може закінчитись.
+    let pool: Pool = world.read(pool_pda());
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(pool.reserved_total, PAYOUT);
+    assert_eq!(cell.reserved, PAYOUT);
+
+    let mut params = policy_params();
+    params.nonce = NONCE + 1;
+    params.window_start_day = last_day_the_window_survives + 5;
+    params.window_end_day = last_day_the_window_survives + 12;
+    params.max_premium = u64::MAX;
+    world.exec_err(&issue_policy(params), PumpkingError::CellExposureExceeded);
 }
