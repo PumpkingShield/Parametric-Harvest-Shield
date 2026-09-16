@@ -1,4 +1,4 @@
-import { drySpell } from '@pumpking/shared'
+import { drySpell } from '@pumpking/shared/index-math'
 import { describe, expect, it } from 'vitest'
 import { PAID_BRACKET, PAID_WINDOW, POLICY_BRACKET, POLICY_WINDOW } from './rainfall.ts'
 

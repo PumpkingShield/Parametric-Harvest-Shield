@@ -1,29 +1,36 @@
-@import 'tailwindcss';
-
 /*
  * The prototype styles every element inline — see `components/Bits.tsx`. Only
  * the ground the page stands on and the one animation live here.
+ *
+ * There is no CSS framework: the design is flat, square and hand-drawn from
+ * exact hex values, and a utility layer would have been a dependency nothing
+ * imports. Anything that looks like a reset below is here on purpose.
  */
 
-@layer base {
-  html {
-    -webkit-text-size-adjust: 100%;
-  }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
-  body {
-    margin: 0;
-    background-color: #fbfaf7;
-    color: #141310;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    font-size: 17px;
-    line-height: 1.5;
-    -webkit-font-smoothing: antialiased;
-  }
+html {
+  -webkit-text-size-adjust: 100%;
+}
 
-  button {
-    font: inherit;
-    -webkit-tap-highlight-color: transparent;
-  }
+body {
+  margin: 0;
+  background-color: #fbfaf7;
+  color: #141310;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* the strip fills in one square at a time on first mount, then stays still */

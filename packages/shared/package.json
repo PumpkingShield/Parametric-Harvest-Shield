@@ -3,7 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./day": "./src/day.ts",
+    "./index-math": "./src/index-math.ts"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",

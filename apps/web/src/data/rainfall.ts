@@ -1,4 +1,4 @@
-import { classifyDay, type DayClassification, DayState } from '@pumpking/shared'
+import { classifyDay, type DayClassification, DayState } from '@pumpking/shared/day'
 
 /**
  * The mock windows the M0 prototype draws.
@@ -11,6 +11,11 @@ import { classifyDay, type DayClassification, DayState } from '@pumpking/shared'
  * answer the same question with the same code. Only the *position* of the run
  * is local, because the bracket has to be drawn somewhere and the index does
  * not care where.
+ *
+ * Both arrive by **subpath**, not from the barrel: the barrel reaches `cell.ts`
+ * and drags `h3-js` — 550 kB of asm.js — into a page that never asks where a
+ * cell is. `day.ts` imports nothing at all, and `index-math.ts` imports only
+ * `day.ts`.
  *
  * Every number below is synthetic. Nothing here reaches a chain.
  */
