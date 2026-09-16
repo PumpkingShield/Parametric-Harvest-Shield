@@ -11,13 +11,7 @@ import type { DayRow } from '@pumpking/db'
 import { DayState } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { DayOutcome } from './interval.ts'
-import {
-  type OpenPolicy,
-  type SettleDeps,
-  settleAfterDays,
-  settleTriggered,
-  spellInWindow,
-} from './settle.ts'
+import { type OpenPolicy, type SettleDeps, settleAfterDays, settleTriggered } from './settle.ts'
 
 const CELL_ID = 613_196_570_331_971_583n
 const OTHER_CELL = 613_196_570_331_971_584n
@@ -85,41 +79,6 @@ beforeEach(() => {
     caller: WORKER,
     assetMint: ASSET_MINT,
   }
-})
-
-/* -------------------------------------------------------------------------- */
-
-describe('spellInWindow', () => {
-  it('counts the longest run of dry days inside the window', () => {
-    const days = [
-      day(0, DayState.Dry),
-      day(1, DayState.Dry),
-      day(2, DayState.Wet),
-      day(3, DayState.Dry),
-      day(4, DayState.Dry),
-      day(5, DayState.Dry),
-    ]
-    expect(spellInWindow(days, 0, 5)).toBe(3)
-  })
-
-  /**
-   * The same answer the on-chain ring gives for a day it cannot speak for, and
-   * it errs in the only safe direction: a missing row makes the worker decline
-   * to call, never makes it pay.
-   */
-  it('reads a day the store has no row for as no coverage', () => {
-    const days = [day(0, DayState.Dry), day(1, DayState.Dry), day(3, DayState.Dry)]
-    expect(spellInWindow(days, 0, 3)).toBe(2)
-  })
-
-  it('has no spell in a window nothing was recorded for', () => {
-    expect(spellInWindow([], 0, 9)).toBe(0)
-  })
-
-  it('ignores days outside the window it was asked about', () => {
-    const days = [day(0, DayState.Dry), day(1, DayState.Dry), day(2, DayState.Dry)]
-    expect(spellInWindow(days, 1, 2)).toBe(2)
-  })
 })
 
 /* -------------------------------------------------------------------------- */

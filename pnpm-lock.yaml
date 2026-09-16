@@ -29,6 +29,9 @@ importers:
       '@hono/zod-validator':
         specifier: ^0.9.0
         version: 0.9.0(hono@4.13.5)(zod@4.5.2)
+      '@pumpking/anchor-client':
+        specifier: workspace:^
+        version: link:../../packages/anchor-client
       '@pumpking/db':
         specifier: workspace:^
         version: link:../../packages/db

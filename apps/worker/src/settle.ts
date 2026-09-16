@@ -10,8 +10,8 @@ import {
   settlePolicyInstruction,
   TOKEN_PROGRAM_ID,
 } from '@pumpking/anchor-client'
-import type { DayRow, IntervalStore } from '@pumpking/db'
-import { type DayClassification, DayState, drySpell, encodeBase58 } from '@pumpking/shared'
+import { type IntervalStore, spellInWindow } from '@pumpking/db'
+import { encodeBase58 } from '@pumpking/shared'
 import type { DayOutcome, DaySubmitter } from './interval.ts'
 
 /**
@@ -85,28 +85,6 @@ export function rpcPolicySource(connection: Connection, programId?: PublicKey): 
 /* -------------------------------------------------------------------------- */
 /* Deciding which are worth a call                                            */
 /* -------------------------------------------------------------------------- */
-
-/**
- * The run of dry days inside a policy's window, as the aggregator's own rows
- * see it.
- *
- * A day the store has no row for reads as no coverage, which breaks the run.
- * That is the same answer the on-chain ring gives for a day it cannot speak
- * for, and it errs in the only safe direction: a missing row makes the worker
- * decline to call, never makes it pay.
- */
-export function spellInWindow(
-  rows: readonly DayRow[],
-  windowStartDay: number,
-  windowEndDay: number,
-): number {
-  const byDay = new Map(rows.map((row) => [row.dayIndex, row.state]))
-  const days: DayClassification[] = []
-  for (let day = windowStartDay; day <= windowEndDay; day += 1) {
-    days.push(byDay.get(day) ?? DayState.NoCoverage)
-  }
-  return drySpell(days)
-}
 
 export type SettleDeps = {
   store: Pick<IntervalStore, 'dayRecords'>

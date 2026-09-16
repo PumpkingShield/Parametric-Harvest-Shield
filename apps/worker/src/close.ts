@@ -1,7 +1,7 @@
 import { closePolicyInstruction, type PublicKey } from '@pumpking/anchor-client'
-import type { DayRow, IntervalStore } from '@pumpking/db'
+import { type DayRow, type IntervalStore, spellInWindow } from '@pumpking/db'
 import type { DayOutcome, DaySubmitter } from './interval.ts'
-import { type PolicySource, spellInWindow } from './settle.ts'
+import type { PolicySource } from './settle.ts'
 
 /**
  * Calling `close_policy` on the policies whose window ended without the event
