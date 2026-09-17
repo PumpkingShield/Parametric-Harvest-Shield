@@ -38,6 +38,9 @@ importers:
       '@pumpking/shared':
         specifier: workspace:^
         version: link:../../packages/shared
+      '@pumpking/worker':
+        specifier: workspace:^
+        version: link:../worker
       hono:
         specifier: ^4.13.5
         version: 4.13.5

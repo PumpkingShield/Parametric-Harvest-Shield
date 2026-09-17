@@ -6,7 +6,8 @@
   "exports": {
     "./routes/cells": "./src/routes/cells.ts",
     "./routes/policies": "./src/routes/policies.ts",
-    "./routes/readings": "./src/routes/readings.ts"
+    "./routes/readings": "./src/routes/readings.ts",
+    "./routes/scenario": "./src/routes/scenario.ts"
   },
   "scripts": {
     "start": "node --env-file-if-exists=../../.env src/index.ts",
@@ -20,6 +21,7 @@
     "@pumpking/anchor-client": "workspace:^",
     "@pumpking/db": "workspace:^",
     "@pumpking/shared": "workspace:^",
+    "@pumpking/worker": "workspace:^",
     "hono": "^4.13.5",
     "pino": "^10.3.1",
     "zod": "^4.5.2"
