@@ -1,7 +1,8 @@
 import { classifyDay, type DayClassification, DayState } from '@pumpking/shared/day'
 
 /**
- * The mock windows the M0 prototype draws.
+ * The mock windows the remaining prototype screens draw, and the strip
+ * vocabulary all of them share.
  *
  * Numbers are hundredths of a millimetre, like everywhere else in the project:
  * the consensus has no floating point, and a screen that teaches `2.0` while
@@ -166,55 +167,6 @@ export function longestDryRun(days: ReadonlyArray<DayClassification>): Bracket |
     label: `${bestLength} days`,
   }
 }
-
-/* ---------------------------------------------------------------- */
-/* Screen 1 — the farmer's open policy, 1 Aug – 30 Sep 2026          */
-/* ---------------------------------------------------------------- */
-
-/** 1–11 Aug day by day, then the 18-day run of 12–29 Aug that is still going. */
-const POLICY_READINGS: ReadonlyArray<number | null> = [
-  0,
-  20,
-  160,
-  0,
-  null,
-  null,
-  890,
-  40,
-  0,
-  170,
-  460,
-  0,
-  0,
-  30,
-  0,
-  110,
-  0,
-  0,
-  60,
-  0,
-  0,
-  0,
-  140,
-  20,
-  0,
-  0,
-  0,
-  90,
-  0,
-]
-
-export const POLICY_WINDOW: StripWindow = buildWindow({
-  startYear: 2026,
-  startMonthIndex: 7,
-  startDay: 1,
-  totalDays: 61,
-  readings: POLICY_READINGS,
-  tailState: 'future',
-  tailNote: 'not yet reached',
-})
-
-export const POLICY_BRACKET = longestDryRun(POLICY_WINDOW.days)
 
 /* ---------------------------------------------------------------- */
 /* Screen 3 — the closed policy that paid, 15 May – 12 Aug 2026      */

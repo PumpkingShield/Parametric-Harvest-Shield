@@ -1,0 +1,201 @@
+import { DayState } from '@pumpking/shared/day'
+import { drySpell } from '@pumpking/shared/index-math'
+import { describe, expect, it } from 'vitest'
+import type { Day, Policy } from '../api/policy.ts'
+import { formatAmount, policyFacts, policyWindow, runCaption } from './policy.ts'
+import { longestDryRun } from './rainfall.ts'
+
+const POLICY: Policy = {
+  policy: 'BPFLoaderUpgradeab1e11111111111111111111111',
+  owner: 'Vote111111111111111111111111111111111111111',
+  nonce: '1',
+  cellId: '871e701b3ffffff',
+  spellDaysThreshold: 5,
+  payout: '120000000',
+  premium: '9000000',
+  windowStartDay: 10,
+  windowEndDay: 19,
+  windowDays: 10,
+  state: 'active',
+  spell: 3,
+  recordedDays: 8,
+}
+
+function day(dayIndex: number, state: number, rainfallX100: number | null): Day {
+  return {
+    dayIndex,
+    state,
+    rainfallX100,
+    coveredHours: rainfallX100 === null ? 3 : 24,
+    merkleRoot: 'root',
+    txSignature: 'tx',
+  }
+}
+
+/**
+ * Days 10–17 recorded, 18 and 19 not. Wet, then three dry, then a day nobody
+ * measured, then three dry again — a gap in the middle so the run cannot be
+ * stitched through silence.
+ */
+const ROWS: Day[] = [
+  day(10, DayState.Wet, 640),
+  day(11, DayState.Dry, 0),
+  day(12, DayState.Dry, 20),
+  day(13, DayState.Dry, 0),
+  day(14, DayState.NoCoverage, null),
+  day(15, DayState.Dry, 0),
+  day(16, DayState.Dry, 0),
+  day(17, DayState.Dry, 0),
+]
+
+describe('policyWindow', () => {
+  it('draws one square per day of the window, recorded or not', () => {
+    const { cells } = policyWindow(POLICY, ROWS)
+    expect(cells).toHaveLength(POLICY.windowDays)
+  })
+
+  it('leaves a day with no row as not recorded, never as dry', () => {
+    const { cells } = policyWindow(POLICY, ROWS)
+
+    // Days 18 and 19 have no row. Silence is not drought, and a screen that
+    // painted them dry would show a run the chain would not pay on.
+    expect(cells[8]?.state).toBe('future')
+    expect(cells[9]?.state).toBe('future')
+    expect(cells[8]?.detail).toContain('not recorded yet')
+  })
+
+  it('shows a recorded day without coverage as its own thing', () => {
+    const { cells } = policyWindow(POLICY, ROWS)
+
+    // A day the aggregator wrote as "nobody measured" is an answer; a day it
+    // has not written is not. The two look different and read different.
+    expect(cells[4]?.state).toBe('none')
+    expect(cells[4]?.detail).toContain('no value')
+    expect(cells[4]?.detail).toContain('3 intervals')
+  })
+
+  it('prints rainfall in millimetres from the hundredths on the wire', () => {
+    const { cells } = policyWindow(POLICY, ROWS)
+    expect(cells[0]?.detail).toBe('Day 10 — 6.4 mm — 24 intervals')
+  })
+
+  it('addresses a day by index, because the wire carries no date', () => {
+    const { cells } = policyWindow(POLICY, ROWS)
+    expect(cells[0]?.topLabel).toBe('10')
+    expect(cells[1]?.topLabel).toBeUndefined()
+  })
+
+  it('counts a missing day as a break in the run, like the chain does', () => {
+    const { days } = policyWindow(POLICY, ROWS)
+
+    // Three at the start and three at the end, with the gap and the two
+    // unrecorded days breaking both. Written out rather than derived, so a
+    // fill that skipped missing days instead of breaking on them fails here.
+    expect(days).toEqual([
+      DayState.Wet,
+      DayState.Dry,
+      DayState.Dry,
+      DayState.Dry,
+      DayState.NoCoverage,
+      DayState.Dry,
+      DayState.Dry,
+      DayState.Dry,
+      DayState.NoCoverage,
+      DayState.NoCoverage,
+    ])
+    expect(drySpell(days)).toBe(3)
+  })
+
+  it('places the bracket on the run the index counts', () => {
+    const { days } = policyWindow(POLICY, ROWS)
+    const bracket = longestDryRun(days)
+
+    // The seam: the bracket is drawn positionally here, and its length is the
+    // index, which only `drySpell` defines. A disagreement is a screen
+    // promising a payout the program refuses.
+    expect(bracket?.length).toBe(drySpell(days))
+    expect(bracket?.length).toBe(POLICY.spell)
+    expect(bracket?.start).toBe(1)
+    expect(bracket?.end).toBe(3)
+  })
+
+  it('has no bracket on a window with no dry day at all', () => {
+    const wet = [day(10, DayState.Wet, 640)]
+    const { days } = policyWindow({ ...POLICY, spell: 0 }, wet)
+    expect(longestDryRun(days)).toBeUndefined()
+  })
+
+  it('ignores a row outside the window', () => {
+    // The route is asked for exactly the window, but a row from elsewhere must
+    // not shift the strip by a square.
+    const { cells } = policyWindow(POLICY, [...ROWS, day(99, DayState.Dry, 0)])
+    expect(cells).toHaveLength(POLICY.windowDays)
+  })
+})
+
+describe('formatAmount', () => {
+  it('reads base units at the mint’s decimals', () => {
+    expect(formatAmount('120000000', 6)).toBe('120.00')
+    expect(formatAmount('9500000', 6)).toBe('9.50')
+  })
+
+  it('does not round a payout into a different number', () => {
+    // The chain moves base units; the screen may shorten them for reading but
+    // must never show more than was moved.
+    expect(formatAmount('9999999', 6)).toBe('9.99')
+  })
+
+  it('handles a sum too large for a JS number', () => {
+    expect(formatAmount('18446744073709551615', 6)).toBe('18446744073709.55')
+  })
+
+  it('handles a mint with no decimals at all', () => {
+    expect(formatAmount('7', 0)).toBe('7.00')
+  })
+
+  it('handles a sum smaller than one unit', () => {
+    expect(formatAmount('1', 6)).toBe('0.00')
+    expect(formatAmount('0', 6)).toBe('0.00')
+  })
+})
+
+describe('runCaption', () => {
+  it('says how many days are left when the run is short', () => {
+    expect(runCaption(POLICY)).toBe('dry days in a row — 2 more and you are paid')
+  })
+
+  it('says the threshold is met once it is', () => {
+    expect(runCaption({ ...POLICY, spell: 5 })).toBe('dry days in a row — the threshold is met')
+    expect(runCaption({ ...POLICY, spell: 6 })).toBe('dry days in a row — the threshold is met')
+  })
+
+  it('speaks in the past once the policy is no longer active', () => {
+    expect(runCaption({ ...POLICY, state: 'settled', spell: 5 })).toBe(
+      'dry days in a row — this policy has been settled',
+    )
+    expect(runCaption({ ...POLICY, state: 'closed', spell: 3 })).toBe(
+      'dry days in a row — this policy closed without paying',
+    )
+  })
+})
+
+describe('policyFacts', () => {
+  it('names every term FR-018 says a policy has', () => {
+    expect(policyFacts(POLICY, 6)).toEqual([
+      ['Pays out', '120.00 mock USDC'],
+      ['When', '5 dry days in a row'],
+      ['Cover period', 'days 10–19 (10 days)'],
+      ['Premium paid', '9.00 mock USDC'],
+      ['Days recorded', '8 of 10'],
+    ])
+  })
+
+  it('marks the money as mock wherever a sum appears', () => {
+    // `FR-056`: a demo where a mock balance looks like money is false
+    // testimony whatever the accompanying material says.
+    const sums = policyFacts(POLICY, 6).filter(
+      ([label]) => label.includes('out') || label.includes('Premium'),
+    )
+    expect(sums.every(([, value]) => value.includes('mock'))).toBe(true)
+  })
+})

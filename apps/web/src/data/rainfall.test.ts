@@ -1,6 +1,6 @@
 import { drySpell } from '@pumpking/shared/index-math'
 import { describe, expect, it } from 'vitest'
-import { PAID_BRACKET, PAID_WINDOW, POLICY_BRACKET, POLICY_WINDOW } from './rainfall.ts'
+import { PAID_BRACKET, PAID_WINDOW } from './rainfall.ts'
 
 /**
  * `longestDryRun` exists only to place the bracket. Its length is the index,
@@ -10,46 +10,27 @@ import { PAID_BRACKET, PAID_WINDOW, POLICY_BRACKET, POLICY_WINDOW } from './rain
  * interface promised and the program refuses.
  */
 describe('the strip agrees with the index', () => {
-  it('brackets the run drySpell counts on the open policy', () => {
-    expect(POLICY_BRACKET?.length).toBe(drySpell(POLICY_WINDOW.days))
-  })
-
   it('brackets the run drySpell counts on the closed policy', () => {
     expect(PAID_BRACKET?.length).toBe(drySpell(PAID_WINDOW.days))
-  })
-
-  it('draws the run the prompt describes: 18 days, 12–29 August', () => {
-    expect(POLICY_BRACKET).toEqual({ start: 11, end: 28, length: 18, label: '18 days' })
   })
 
   it('draws the run that paid: 21 days ending 14 July, day 61 of the window', () => {
     expect(PAID_BRACKET).toEqual({ start: 40, end: 60, length: 21, label: '21 days' })
   })
-
-  it('leaves the policy three days short of its threshold', () => {
-    expect(21 - drySpell(POLICY_WINDOW.days)).toBe(3)
-  })
 })
 
-describe('the windows are the ones the policies bought', () => {
-  it('runs the open policy over 1 Aug – 30 Sep, 29 of them elapsed', () => {
-    expect(POLICY_WINDOW.cells).toHaveLength(61)
-    expect(POLICY_WINDOW.days).toHaveLength(29)
-    expect(POLICY_WINDOW.cells[60]?.state).toBe('future')
-  })
-
+describe('the window is the one the policy bought', () => {
   it('keeps the closed policy inside MAX_COVERAGE_DAYS', () => {
     expect(PAID_WINDOW.cells).toHaveLength(90)
   })
 
-  it('breaks a run on the days nobody measured', () => {
-    expect(POLICY_WINDOW.cells[4]?.state).toBe('none')
-    expect(POLICY_WINDOW.cells[5]?.state).toBe('none')
+  it('breaks a run on the day nobody measured', () => {
+    expect(PAID_WINDOW.cells[18]?.state).toBe('none')
   })
 
   it('splits dry from wet on the side of the threshold the chain uses', () => {
-    // 3 Aug measured 1.6 mm — under 2.0, dry; 11 Aug measured 4.6 mm — wet
-    expect(POLICY_WINDOW.cells[2]?.state).toBe('dry')
-    expect(POLICY_WINDOW.cells[10]?.state).toBe('wet')
+    // 16 May measured 0.0 mm — dry; 15 May measured 6.4 mm — wet
+    expect(PAID_WINDOW.cells[1]?.state).toBe('dry')
+    expect(PAID_WINDOW.cells[0]?.state).toBe('wet')
   })
 })

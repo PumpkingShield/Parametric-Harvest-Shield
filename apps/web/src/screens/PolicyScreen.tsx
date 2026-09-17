@@ -1,3 +1,6 @@
+import { DayState } from '@pumpking/shared/day'
+import { useEffect, useState } from 'react'
+import { type Day, fetchDays, fetchPolicy, type Policy } from '../api/policy.ts'
 import {
   Block,
   FactRows,
@@ -9,63 +12,137 @@ import {
   SyntheticNote,
 } from '../components/Bits.tsx'
 import DayStrip from '../components/DayStrip.tsx'
-import { CELL_ID, POLICY_BRACKET, POLICY_WINDOW } from '../data/rainfall.ts'
+import { policyFacts, policyWindow, runCaption } from '../data/policy.ts'
+import { longestDryRun } from '../data/rainfall.ts'
 
-/** Screen 1 — what the farmer opens: the run, then the terms, then the catch. */
-const PolicyScreen = () => (
-  <div>
-    <Headline figure="18" caption="dry days in a row — 3 more and you are paid" />
+/**
+ * Screen 1 — the owner's open policy, on the live journal.
+ *
+ * Two reads, and the split is the API's: the policy comes from the chain
+ * (`GET /v1/policies/:pubkey`), its days come from Postgres
+ * (`GET /v1/cells/:cellId/days`), because the on-chain ring holds 128 days and
+ * this window has to stay drawable after it has rolled out of it.
+ *
+ * **The address is a parameter, not a fixture.** `?policy=<pubkey>`, falling
+ * back to `VITE_POLICY_PUBKEY` so a deployed demo opens on the policy the show
+ * is about. With neither, the screen says which one it wants rather than
+ * drawing numbers nobody bought.
+ */
 
-    <DayStrip
-      id="policy"
-      cells={POLICY_WINDOW.cells}
-      bracket={POLICY_BRACKET}
-      hint="Tap any day to see its rainfall and how many sensors reported."
-    />
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
 
-    <Block>
-      <FactRows
-        rows={[
-          ['Pays out', '120 USDC'],
-          ['When', '21 dry days in a row'],
-          ['Cover period', '1 Aug – 30 Sep 2026'],
-          ['Premium paid', '9 USDC'],
-        ]}
-      />
-    </Block>
+/**
+ * Decimals of the pool's asset mint. Not on the wire — the mint is a pool
+ * parameter (`FR-055`) and the policy route does not read it — so it is
+ * configured beside the API it belongs to.
+ */
+const ASSET_DECIMALS = Number(import.meta.env.VITE_ASSET_DECIMALS ?? '6')
 
-    <Block>
-      <Prose>
-        This policy pays on measured rainfall in your cell, not on what happened to your field. It
-        can pay when your crop is fine, and it can stay silent when your crop is lost. That is the
-        trade for having no inspector and no claim form.
-      </Prose>
-    </Block>
+function policyAddress(): string | null {
+  const asked = new URLSearchParams(window.location.search).get('policy')
+  return asked ?? import.meta.env.VITE_POLICY_PUBKEY ?? null
+}
 
-    <Block>
-      <Prose>
-        5 and 6 August had no coverage — only 1 sensor reported. Those two days ended a 4-day dry
-        run.
-      </Prose>
-    </Block>
+type Loaded = { policy: Policy; rows: Day[] }
 
-    <p
-      style={{
-        margin: '28px 0 0',
-        paddingTop: 14,
-        borderTop: `1px solid ${RULE}`,
-        fontFamily: MONO,
-        fontSize: 13,
-        lineHeight: 1.6,
-        color: INK,
-        wordBreak: 'break-word',
-      }}
-    >
-      Cell {CELL_ID} · 5 sensors registered, 4 voting
-    </p>
-
-    <SyntheticNote />
+const Note = ({ children }: { children: string }) => (
+  <div style={{ paddingTop: 8 }}>
+    <Prose>{children}</Prose>
   </div>
 )
+
+const PolicyScreen = () => {
+  const [address] = useState(policyAddress)
+  const [loaded, setLoaded] = useState<Loaded | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (address === null) return
+    const abort = new AbortController()
+
+    const load = async () => {
+      const policy = await fetchPolicy(API_URL, address, { signal: abort.signal })
+      const rows = await fetchDays(
+        API_URL,
+        policy.cellId,
+        policy.windowStartDay,
+        policy.windowEndDay,
+        { signal: abort.signal },
+      )
+      setLoaded({ policy, rows })
+    }
+
+    load().catch((cause: unknown) => {
+      if (abort.signal.aborted) return
+      setFailure(cause instanceof Error ? cause.message : String(cause))
+    })
+
+    return () => abort.abort()
+  }, [address])
+
+  if (address === null) {
+    return <Note>No policy asked for. Open this page with ?policy=&lt;address&gt;.</Note>
+  }
+  if (failure !== null) {
+    return <Note>{`Could not load the policy: ${failure}`}</Note>
+  }
+  if (loaded === null) {
+    return <Note>Loading the policy and its days…</Note>
+  }
+
+  const { policy, rows } = loaded
+  const { cells, days } = policyWindow(policy, rows)
+  const uncovered = rows.filter((row) => row.state === DayState.NoCoverage).length
+
+  return (
+    <div>
+      <Headline figure={String(policy.spell)} caption={runCaption(policy)} />
+
+      <DayStrip
+        id="policy"
+        cells={cells}
+        bracket={longestDryRun(days)}
+        hint="Tap any day to see its rainfall and how many intervals carried a value."
+      />
+
+      <Block>
+        <FactRows rows={policyFacts(policy, ASSET_DECIMALS)} />
+      </Block>
+
+      <Block>
+        <Prose>
+          This policy pays on measured rainfall in your cell, not on what happened to your field. It
+          can pay when your crop is fine, and it can stay silent when your crop is lost. That is the
+          trade for having no inspector and no claim form.
+        </Prose>
+      </Block>
+
+      {uncovered > 0 ? (
+        <Block>
+          <Prose>
+            {`${uncovered} ${uncovered === 1 ? 'day' : 'days'} in this window had too few sensors reporting to get a value. A day with no value is not a dry day — it ends the run.`}
+          </Prose>
+        </Block>
+      ) : null}
+
+      <p
+        style={{
+          margin: '28px 0 0',
+          paddingTop: 14,
+          borderTop: `1px solid ${RULE}`,
+          fontFamily: MONO,
+          fontSize: 13,
+          lineHeight: 1.6,
+          color: INK,
+          wordBreak: 'break-word',
+        }}
+      >
+        Cell {policy.cellId} · owner {policy.owner}
+      </p>
+
+      <SyntheticNote />
+    </div>
+  )
+}
 
 export default PolicyScreen
