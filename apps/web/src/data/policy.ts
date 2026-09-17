@@ -125,3 +125,67 @@ export function policyFacts(policy: Policy, decimals: number): [string, string][
     ['Days recorded', `${policy.recordedDays} of ${policy.windowDays}`],
   ]
 }
+
+/**
+ * `FR-040` — what decides the money, and the two ways it can part from what
+ * happened in the field.
+ *
+ * This is the one thing on the screen the owner cannot learn from the numbers:
+ * a parametric policy pays on an index, and an index is not the damage. Said
+ * as a paragraph it was deletable and nothing would have noticed, so it is
+ * said as structure instead. Each case carries `paid` and `harmed` as flags,
+ * and `FR-040` becomes an assertion: both cases exist, and in each of them the
+ * two disagree — one pays a field that is fine, the other pays nothing to a
+ * field that is lost.
+ *
+ * The numbers are this policy's own — its threshold, its cell, its payout —
+ * because a disclosure written about parametric insurance in general is the
+ * small print this requirement exists to refuse.
+ */
+export interface BasisRiskCase {
+  /** What the index does. */
+  index: string
+  /** What the field does while it does it. */
+  field: string
+  /** What the money does. */
+  money: string
+  /** Does this policy pay in this case? */
+  paid: boolean
+  /** Is the crop lost in this case? */
+  harmed: boolean
+}
+
+export interface BasisRisk {
+  /** What the payout is decided by, and what it is not decided by. */
+  trigger: string
+  /** The divergence, both ways round. */
+  cases: readonly [BasisRiskCase, BasisRiskCase]
+  /** What the owner gets in exchange for carrying it. */
+  trade: string
+}
+
+export function basisRisk(policy: Policy, decimals: number): BasisRisk {
+  const threshold = `${policy.spellDaysThreshold} dry days in a row`
+
+  return {
+    trigger: `This policy pays on rainfall measured across cell ${policy.cellId}, not on what happens in your field. Nobody comes to look at the crop, and there is nothing to claim.`,
+    cases: [
+      {
+        index: `The cell records ${threshold}`,
+        field: 'while your crop comes through fine',
+        money: `you are paid ${formatAmount(policy.payout, decimals)} ${ASSET}`,
+        paid: true,
+        harmed: false,
+      },
+      {
+        index: `The cell never records ${threshold}`,
+        field: 'while your crop is lost anyway',
+        money: 'you are paid nothing',
+        paid: false,
+        harmed: true,
+      },
+    ],
+    trade:
+      'Both of these happen, and neither is a fault to be fixed. The gauges measure a cell, your field is smaller than the cell, and rain does not fall evenly across either. It is what a payout with no claim form, no inspector and no argument costs.',
+  }
+}

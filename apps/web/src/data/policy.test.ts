@@ -2,7 +2,7 @@ import { DayState } from '@pumpking/shared/day'
 import { drySpell } from '@pumpking/shared/index-math'
 import { describe, expect, it } from 'vitest'
 import type { Day, Policy } from '../api/policy.ts'
-import { formatAmount, policyFacts, policyWindow, runCaption } from './policy.ts'
+import { basisRisk, formatAmount, policyFacts, policyWindow, runCaption } from './policy.ts'
 import { longestDryRun } from './rainfall.ts'
 
 const POLICY: Policy = {
@@ -197,5 +197,55 @@ describe('policyFacts', () => {
       ([label]) => label.includes('out') || label.includes('Premium'),
     )
     expect(sums.every(([, value]) => value.includes('mock'))).toBe(true)
+  })
+})
+
+describe('basisRisk', () => {
+  it('says the divergence goes both ways, as structure and not as prose', () => {
+    // `FR-040` in one assertion. Two cases, and in each of them the index and
+    // the field disagree — one pays a farmer who lost nothing, the other pays
+    // nothing to a farmer who lost the crop. A disclosure that dropped either
+    // corner would still read like a warning and would only be half true.
+    const { cases } = basisRisk(POLICY, 6)
+
+    expect(cases.map((entry) => entry.paid)).toEqual([true, false])
+    expect(cases.map((entry) => entry.harmed)).toEqual([false, true])
+    expect(cases.every((entry) => entry.paid !== entry.harmed)).toBe(true)
+  })
+
+  it('names what actually decides the money — the cell, not the field', () => {
+    const { trigger } = basisRisk(POLICY, 6)
+    expect(trigger).toContain(POLICY.cellId)
+    expect(trigger).toContain('not on what happens in your field')
+  })
+
+  it('speaks in this policy’s own numbers, not about parametric cover in general', () => {
+    // Small print about the product is what this requirement exists to refuse:
+    // the owner is told the threshold that decides *their* payout and the sum
+    // that arrives if it is crossed.
+    const { cases } = basisRisk(POLICY, 6)
+
+    expect(cases[0].index).toContain('5 dry days in a row')
+    expect(cases[1].index).toContain('5 dry days in a row')
+    expect(cases[0].money).toContain('120.00 mock USDC')
+    expect(cases[1].money).toContain('nothing')
+  })
+
+  it('follows the payout when the terms do', () => {
+    const bigger = basisRisk({ ...POLICY, spellDaysThreshold: 9, payout: '250000000' }, 6)
+    expect(bigger.cases[0].index).toContain('9 dry days in a row')
+    expect(bigger.cases[0].money).toContain('250.00 mock USDC')
+  })
+
+  it('does not soften once the policy is settled or closed', () => {
+    // The disclosure is about how the product decides, and that does not change
+    // with the state of one policy: a settled owner who was paid without a loss
+    // is told the same thing as a closed one who lost a crop and was not.
+    expect(basisRisk({ ...POLICY, state: 'settled' }, 6)).toEqual(basisRisk(POLICY, 6))
+    expect(basisRisk({ ...POLICY, state: 'closed' }, 6)).toEqual(basisRisk(POLICY, 6))
+  })
+
+  it('says what the owner gets for carrying it', () => {
+    expect(basisRisk(POLICY, 6).trade).toContain('no claim form')
   })
 })
