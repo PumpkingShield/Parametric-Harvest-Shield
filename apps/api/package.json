@@ -7,7 +7,9 @@
     "./routes/cells": "./src/routes/cells.ts",
     "./routes/policies": "./src/routes/policies.ts",
     "./routes/readings": "./src/routes/readings.ts",
-    "./routes/scenario": "./src/routes/scenario.ts"
+    "./routes/scenario": "./src/routes/scenario.ts",
+    "./server": "./src/server.ts",
+    "./config": "./src/config.ts"
   },
   "scripts": {
     "start": "node --env-file-if-exists=../../.env src/index.ts",

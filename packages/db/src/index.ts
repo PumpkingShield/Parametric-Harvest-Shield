@@ -1,3 +1,4 @@
+export * from './client.ts'
 export * from './day-window.ts'
 export * from './interval-store.ts'
 export * from './reading-store.ts'

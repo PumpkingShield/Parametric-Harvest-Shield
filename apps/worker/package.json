@@ -8,7 +8,10 @@
     "./scenario": "./src/scenario.ts",
     "./settle": "./src/settle.ts",
     "./close": "./src/close.ts",
-    "./chain": "./src/chain.ts"
+    "./chain": "./src/chain.ts",
+    "./cycle": "./src/cycle.ts",
+    "./health": "./src/health.ts",
+    "./config": "./src/config.ts"
   },
   "scripts": {
     "start": "node --env-file-if-exists=../../.env src/index.ts",
