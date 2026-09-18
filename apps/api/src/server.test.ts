@@ -81,6 +81,56 @@ describe('GET /health', () => {
     expect(await response.json()).toMatchObject({ scenarioMode: true })
   })
 
+  it('says nothing about a worker when the loop is not in this process', async () => {
+    // The two-process deployment: the worker answers for itself on its own
+    // port, and an empty `worker` here would read as a loop that exists and
+    // has never turned.
+    const body = (await (await app({}).request('/health')).json()) as Record<string, unknown>
+    expect('worker' in body).toBe(false)
+  })
+
+  it('carries the loop when the loop turns here', async () => {
+    // `T056`: on the free plan there is one port, so this is the only place the
+    // aggregator is visible from outside at all.
+    const response = await app({
+      worker: () => ({
+        status: 'ok',
+        uptimeSeconds: 12,
+        cycles: 3,
+        lastCycleAgoSeconds: 1,
+        lastCycle: { submitted: 2, settled: 1, closed: 0, failed: 0 },
+        lastSkipped: null,
+        lastError: null,
+      }),
+    }).request('/health')
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      status: 'ok',
+      worker: { status: 'ok', cycles: 3, lastCycle: { settled: 1 } },
+    })
+  })
+
+  it('stays 200 while the loop is stalled', async () => {
+    // A failing probe would have the platform restart the API, taking down the
+    // routes that still work and the only voice able to say what went wrong.
+    // The state is in the body for whoever is reading it.
+    const response = await app({
+      worker: () => ({
+        status: 'stalled',
+        uptimeSeconds: 600,
+        cycles: 4,
+        lastCycleAgoSeconds: 300,
+        lastCycle: null,
+        lastSkipped: 'no-pool',
+        lastError: 'the pooler went away',
+      }),
+    }).request('/health')
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ worker: { status: 'stalled' } })
+  })
+
   it('counts uptime from the moment it was built', async () => {
     let now = new Date('2026-08-30T10:00:00Z')
     const server = app({ now: () => now })

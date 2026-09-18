@@ -1,4 +1,5 @@
 import type { IntervalStore, ReadingStore, RegistryStore } from '@pumpking/db'
+import type { HealthWire as WorkerHealthWire } from '@pumpking/worker/health'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { createCellsRoute } from './routes/cells.ts'
@@ -38,6 +39,16 @@ export type ApiDeps = {
   scenarioMode: boolean
   /** `*` or the origins the interface is served from. */
   webOrigin?: string | string[]
+  /**
+   * `T056`: the loop's own health, when the loop turns in this process.
+   *
+   * Absent on a deployment where the worker is its own service and answers for
+   * itself. Present on the free one, where there is a single port and the
+   * aggregator would otherwise be invisible — and a cycle that has quietly
+   * stopped looking exactly like a cycle with nothing to do is the failure this
+   * project has kept finding.
+   */
+  worker?: () => WorkerHealthWire
   now?: () => Date
 }
 
@@ -47,6 +58,8 @@ export type HealthWire = {
   uptimeSeconds: number
   /** `FR-039`, `FR-056`: whether this deployment can invent weather. */
   scenarioMode: boolean
+  /** `T056`: the loop, when it turns here. Absent when it does not. */
+  worker?: WorkerHealthWire
 }
 
 export function createApiApp(deps: ApiDeps): Hono {
@@ -76,10 +89,17 @@ export function createApiApp(deps: ApiDeps): Hono {
    * that needs it answers, in the error it returns, to the caller who asked.
    */
   app.get('/health', (context) => {
+    const worker = deps.worker?.()
     const wire: HealthWire = {
       status: 'ok',
       uptimeSeconds: Math.floor((now().getTime() - startedAt.getTime()) / 1000),
       scenarioMode: deps.scenarioMode,
+      // The status code stays 200 even when the loop is stalled. A probe that
+      // failed here would have the platform restart the API — which also takes
+      // down the routes that still work and the only voice able to say what
+      // went wrong. The number of cycles is in the body, where whoever is
+      // reading it can act on it.
+      ...(worker === undefined ? {} : { worker }),
     }
     return context.json(wire, 200)
   })

@@ -20,6 +20,9 @@ import { z } from 'zod'
 /** `FR-042`, `FR-049`: the demo button exists only where this says `on`. */
 const SCENARIO_MODE = ['on', 'off'] as const
 
+/** `T056`: the same two words, because one vocabulary is easier than two. */
+const RUN_WORKER = ['on', 'off'] as const
+
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 
 // `object`, not `strictObject`: this is handed `process.env`, which carries the
@@ -30,6 +33,16 @@ const schema = z.object({
   SOLANA_RPC_URL: z.url('must be an RPC endpoint: a policy is read from the chain'),
   PUMPKING_PROGRAM_ID: z.string().regex(BASE58, 'must be a base58 program address').optional(),
   SCENARIO_MODE: z.enum(SCENARIO_MODE).default('off'),
+  /**
+   * `T056`: whether the worker's loop turns inside this process.
+   *
+   * `on` is the free deployment — Render's free plan has one web service and no
+   * background worker, so the loop has nowhere else to run. `off` is the local
+   * two-process run and any deployment that can afford a second service. Worth
+   * saying out loud at startup either way: an API that is quietly also the
+   * aggregator, and an aggregator nobody is running, look the same from here.
+   */
+  RUN_WORKER: z.enum(RUN_WORKER).default('off'),
   LOG_LEVEL: z.string().default('info'),
   /**
    * Origins the browser is allowed to call from — `apps/web` is on a different
@@ -52,6 +65,8 @@ export type ApiConfig = {
   rpcUrl: string
   programId: PublicKey
   scenarioMode: boolean
+  /** `T056`: the worker's loop turns in this process. */
+  runWorker: boolean
   logLevel: string
   /** `*`, or the list `WEB_ORIGIN` named. */
   webOrigin: string | string[]
@@ -86,6 +101,7 @@ export function readApiConfig(env: Record<string, string | undefined>): ApiConfi
         ? PROGRAM_ID
         : new PublicKey(value.PUMPKING_PROGRAM_ID),
     scenarioMode: value.SCENARIO_MODE === 'on',
+    runWorker: value.RUN_WORKER === 'on',
     logLevel: value.LOG_LEVEL,
     webOrigin:
       value.WEB_ORIGIN === '*' ? '*' : value.WEB_ORIGIN.split(',').map((one) => one.trim()),

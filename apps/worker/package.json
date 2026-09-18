@@ -10,6 +10,7 @@
     "./close": "./src/close.ts",
     "./chain": "./src/chain.ts",
     "./cycle": "./src/cycle.ts",
+    "./run": "./src/run.ts",
     "./health": "./src/health.ts",
     "./config": "./src/config.ts"
   },

@@ -1,0 +1,66 @@
+# Render Blueprint — one web service, and the loop turns inside it.
+#
+# Railway's free tier stopped existing in 2023 and Render's free plan has no
+# background worker, so `apps/api` and `apps/worker` share a process here:
+# `RUN_WORKER=on` starts the same `startWorker` the standalone worker runs.
+# The front end is on GitHub Pages (`.github/workflows/pages.yml`), the
+# database is Supabase, and nothing here is paid for.
+#
+# What this costs, said out loud: the service sleeps after 15 minutes of
+# silence and takes about a minute to wake. A sleeping aggregator writes no
+# days, and a day with no coverage ends a run — so the keep-alive workflow
+# (`.github/workflows/keepalive.yml`) is part of the deployment, not a nicety,
+# and a demo is woken before it is shown.
+#
+# Runbook, with the order and what each step must be true for: docs/DEPLOY.md
+services:
+  - type: web
+    name: pumpking-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    # NOT `corepack enable`: the image ships pnpm in a read-only /usr/bin and
+    # Node 25+ does not carry corepack at all.
+    buildCommand: npx -y pnpm@9.15.0 install --frozen-lockfile
+    # No build step: Node runs the TypeScript sources directly.
+    startCommand: node --env-file-if-exists=.env apps/api/src/index.ts
+    healthCheckPath: /health
+    envVars:
+      # Must match the version this was measured on. Node 22 cannot read the
+      # named `BN` export out of @coral-xyz/anchor, which is a CommonJS module,
+      # and the process dies at import.
+      - key: NODE_VERSION
+        value: "26"
+      # The loop, in this process. There is nowhere else for it on this plan.
+      - key: RUN_WORKER
+        value: "on"
+      - key: INTERVALS_PER_DAY
+        value: "24"
+      - key: MINIMUM_COVERAGE_X100
+        value: "75"
+      - key: CYCLE_INTERVAL_MS
+        value: "5000"
+      - key: BACKLOG_DAYS
+        value: "7"
+      - key: SHUTDOWN_TIMEOUT_MS
+        value: "15000"
+      - key: LOG_LEVEL
+        value: "info"
+      # Supabase transaction pooler (:6543). Prepared statements are off there.
+      - key: DATABASE_URL
+        sync: false
+      - key: SOLANA_RPC_URL
+        sync: false
+      # Only for a second deployment of the same program; the IDL carries one.
+      - key: PUMPKING_PROGRAM_ID
+        sync: false
+      # FR-015: the only key the program takes a day record from. It signs.
+      - key: AGGREGATOR_KEYPAIR
+        sync: false
+      # The Pages origin, scheme and host only.
+      - key: WEB_ORIGIN
+        sync: false
+      # The button that invents weather. Deliberately not "on" in this file:
+      # turned on in the dashboard for the show, and back off after it.
+      - key: SCENARIO_MODE
+        sync: false

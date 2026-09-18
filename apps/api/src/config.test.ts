@@ -48,6 +48,22 @@ describe('readApiConfig', () => {
     expect(() => readApiConfig({ ...MINIMUM, SCENARIO_MODE: 'true' })).toThrow(ConfigError)
   })
 
+  it('keeps the worker out of this process unless RUN_WORKER says on', () => {
+    // `T056`: the free deployment has one web service and no background
+    // worker, so the loop turns here. Everywhere else it is its own process,
+    // and two loops writing the same day is the failure this guards.
+    expect(readApiConfig(MINIMUM).runWorker).toBe(false)
+    expect(readApiConfig({ ...MINIMUM, RUN_WORKER: 'off' }).runWorker).toBe(false)
+    expect(readApiConfig({ ...MINIMUM, RUN_WORKER: 'on' }).runWorker).toBe(true)
+  })
+
+  it('refuses a RUN_WORKER it cannot read', () => {
+    // The same reasoning as `SCENARIO_MODE`: read loosely, `RUN_WORKER=true`
+    // would leave the aggregator not running while the deployment looks whole.
+    expect(() => readApiConfig({ ...MINIMUM, RUN_WORKER: 'true' })).toThrow(ConfigError)
+    expect(() => readApiConfig({ ...MINIMUM, RUN_WORKER: '1' })).toThrow(ConfigError)
+  })
+
   it('refuses a port that is not one', () => {
     expect(() => readApiConfig({ ...MINIMUM, PORT: 'eight' })).toThrow(ConfigError)
     expect(() => readApiConfig({ ...MINIMUM, PORT: '0' })).toThrow(ConfigError)

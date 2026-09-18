@@ -1,0 +1,70 @@
+name: Pages
+
+# The interface, on GitHub Pages — T056. The API and the aggregation loop live
+# on Render (`render.yaml`); nothing here talks to a database or a cluster.
+#
+# `VITE_*` values are baked into the bundle at build time, so changing one means
+# re-running this workflow, not restarting anything. They are also public once
+# built: nothing secret goes in them.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a queued one is not thrown away: a cancelled deploy
+# leaves the site on whatever was published last, which is fine, but a lost one
+# leaves the show pointing at yesterday.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        env:
+          # A project site is served from /<repo>/, so the bundle has to be
+          # built for that prefix. A custom domain sets PAGES_BASE_PATH to /.
+          BASE_PATH: ${{ vars.PAGES_BASE_PATH || format('/{0}/', github.event.repository.name) }}
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_POLICY_PUBKEY: ${{ vars.VITE_POLICY_PUBKEY }}
+          VITE_ASSET_DECIMALS: ${{ vars.VITE_ASSET_DECIMALS }}
+        run: pnpm --filter @pumpking/web build
+
+      # Pages has no rewrites: an unknown path is answered with 404.html. The
+      # screens are one page today, and this keeps a deep link from becoming a
+      # GitHub error page the day they are not.
+      - name: SPA fallback
+        run: cp apps/web/dist/index.html apps/web/dist/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
