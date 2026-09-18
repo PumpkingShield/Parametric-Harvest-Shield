@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Збирає програму і генерує IDL та TS-типи — джерело `packages/anchor-client/src/idl`.
-# Запуск: wsl -d Ubuntu-24.04 -- bash /mnt/e/Arena/Pumpking/scripts/anchor-build.sh
+# Запуск із WSL: wsl -d <дистрибутив> -- bash <шлях до репо>/scripts/anchor-build.sh
 set -euo pipefail
 # Оболонка не логін-ова: rustup/cargo/avm лежать поза PATH.
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 # `anchor build` кличе `cargo build-sbf`, а це окремий бінар з тулчейна Agave:
 # без нього cargo відповідає `no such command: build-sbf`.
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-cd /mnt/e/Arena/Pumpking
+# Працює з будь-якого каталогу: корінь репозиторію береться від самого скрипта,
+# а не зашивається — шлях цієї робочої копії не є частиною проєкту.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Two builds, and the second one is the artefact.
 #

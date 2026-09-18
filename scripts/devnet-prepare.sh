@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Funds the two demo keys and creates the mock asset — step 0 of docs/DEPLOY.md.
-# Run: wsl -d Ubuntu-24.04 -- bash /mnt/e/Arena/Pumpking/scripts/devnet-prepare.sh
+# Run from WSL: wsl -d <distro> -- bash <path to repo>/scripts/devnet-prepare.sh
 #
 # Everything here is CLI work from the deployer's wallet: SOL for the keys that
 # send transactions, a mock SPL mint, a treasury account owned by the pool
@@ -13,7 +13,7 @@
 set -euo pipefail
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-REPO=/mnt/e/Arena/Pumpking
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 URL=https://api.devnet.solana.com
 ENV_FILE="$REPO/.env"
 

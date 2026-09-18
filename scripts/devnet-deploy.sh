@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploys the program to devnet — step 0 of docs/DEPLOY.md.
-# Run: wsl -d Ubuntu-24.04 -- bash /mnt/e/Arena/Pumpking/scripts/devnet-deploy.sh
+# Run from WSL: wsl -d <distro> -- bash <path to repo>/scripts/devnet-deploy.sh
 #
 # Every check here exists because its absence is silent. A .so older than the
 # sources deploys last week's program; a program id that disagrees with
@@ -10,7 +10,10 @@ set -euo pipefail
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-REPO=/mnt/e/Arena/Pumpking
+# Found from the script's own location: the path of this working copy is
+# not part of the project, and hard-coding it breaks the script everywhere
+# else.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SO="$REPO/target/deploy/pumpking.so"
 KEYPAIR="$REPO/target/deploy/pumpking-keypair.json"
 CLUSTER=devnet
