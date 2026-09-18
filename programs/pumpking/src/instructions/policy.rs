@@ -159,7 +159,18 @@ pub struct IssuePolicy<'info> {
         seeds = [CELL_SEED, params.cell_id.to_le_bytes().as_ref()],
         bump = cell.bump,
     )]
-    pub cell: Account<'info, CellState>,
+    // Boxed, and that is a build requirement rather than a preference:
+    // `CellState` carries `contributors: [u32; 128]` and `day_log: [u8; 128]`,
+    // which is some 690 bytes sitting in `try_accounts`' stack frame. SBPF v0
+    // — the only bytecode version the cluster executes — caps that frame at
+    // 4 096 bytes, and without the box this context overruns it by 368. The
+    // account layout, the discriminator and the IDL are unchanged; `Box`
+    // dereferences on its own wherever the handler touches the cell.
+    //
+    // `//` and not `///`: a doc comment on a context field is copied into the
+    // published IDL, and a note about this repository's build would become
+    // documentation for everyone using the SDK.
+    pub cell: Box<Account<'info, CellState>>,
 
     #[account(
         init,
@@ -432,7 +443,9 @@ pub struct SettlePolicy<'info> {
         seeds = [CELL_SEED, policy.cell_id.to_le_bytes().as_ref()],
         bump = cell.bump,
     )]
-    pub cell: Account<'info, CellState>,
+    // Boxed for the same reason as in `IssuePolicy`: without it this frame is
+    // 248 bytes past what SBPF v0 allows.
+    pub cell: Box<Account<'info, CellState>>,
 
     #[account(
         mut,
@@ -690,7 +703,9 @@ pub struct ClaimUnclaimedPayout<'info> {
         seeds = [CELL_SEED, policy.cell_id.to_le_bytes().as_ref()],
         bump = cell.bump,
     )]
-    pub cell: Account<'info, CellState>,
+    // Boxed for the same reason as in `SettlePolicy`: 248 bytes past the SBPF
+    // v0 frame without it.
+    pub cell: Box<Account<'info, CellState>>,
 
     #[account(
         mut,
