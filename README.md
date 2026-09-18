@@ -152,3 +152,9 @@ later milestones.
 Not proven, and worth saying out loud: nothing here demonstrates resistance to
 collusion while every key belongs to one operator, and 30 days of uninterrupted
 collection is not provable on a free tier that sleeps.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The mock asset, the scenario files and every
+number this deployment shows are synthetic; the licence covers the code, not a
+claim that any of it has carried real money.
