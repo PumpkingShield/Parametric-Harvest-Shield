@@ -25,6 +25,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      # --max-time 120 covers a cold start. The first line of the answer is
-      # enough to see the loop turning: cycles, and why the last one skipped.
-      - run: curl -sSf --max-time 120 "${{ vars.VITE_API_URL }}/health" | cut -c1-200
+      # Nothing to wake before the API exists (step 2 of the deploy runbook),
+      # and a cross every five minutes until then would teach everyone to
+      # ignore the one that eventually means something.
+      - name: Ping /health
+        env:
+          API_URL: ${{ vars.VITE_API_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "VITE_API_URL is not set — nothing deployed yet, skipping."
+            exit 0
+          fi
+          # --max-time 120 covers a cold start. The first part of the answer is
+          # enough to see the loop turning: cycles, and why the last one skipped.
+          curl -sSf --max-time 120 "$API_URL/health" | cut -c1-200
