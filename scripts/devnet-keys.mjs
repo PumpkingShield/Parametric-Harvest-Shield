@@ -10,6 +10,11 @@
 //                           and the fee payer for settlement and closure. It
 //                           needs SOL because it sends every transaction the
 //                           worker sends.
+//   POLICY_OWNER_KEYPAIR    the farmer: buys the demo policy, pays the premium
+//                           and receives the payout (FR-025: buyer, owner and
+//                           payer are one key). Not the pool authority — a
+//                           pool selling cover to its own authority is a demo
+//                           of nothing.
 //   the mint authority      stays the deployer's CLI wallet in WSL and is
 //                           never the pool authority: a pool that can print
 //                           its own asset is solvent by definition, which
@@ -33,6 +38,11 @@ const ROLES = [
     name: 'AGGREGATOR_KEYPAIR',
     what: 'signs every day record; fee payer for settle and close',
     sol: '~0.10',
+  },
+  {
+    name: 'POLICY_OWNER_KEYPAIR',
+    what: 'the farmer: buys the demo policy, pays the premium, receives the payout',
+    sol: '~0.02',
   },
 ]
 
@@ -85,4 +95,4 @@ for (const role of report) {
   console.log(`    ${role.what}`)
   console.log(`    devnet SOL needed: ${role.sol}\n`)
 }
-console.log('Fund both from https://faucet.solana.com, then run scripts/devnet-deploy.sh in WSL.')
+console.log('scripts/devnet-prepare.sh (WSL) funds all three from the CLI wallet; run scripts/devnet-deploy.sh first.')
