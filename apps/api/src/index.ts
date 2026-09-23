@@ -1,6 +1,12 @@
 import { type ServerType, serve } from '@hono/node-server'
 import { Connection } from '@pumpking/anchor-client'
-import { createDb, pgIntervalStore, pgReadingStore, pgRegistryStore } from '@pumpking/db'
+import {
+  createDb,
+  pgCounterStore,
+  pgIntervalStore,
+  pgReadingStore,
+  pgRegistryStore,
+} from '@pumpking/db'
 import { readWorkerConfig, ConfigError as WorkerConfigError } from '@pumpking/worker/config'
 import { healthOf } from '@pumpking/worker/health'
 import { rpcCycle, startWorker, type WorkerRuntime } from '@pumpking/worker/run'
@@ -78,6 +84,7 @@ const app = createApiApp({
   intervals: pgIntervalStore(database.db),
   policies: rpcPolicyLookup(connection, config.programId),
   registry: pgRegistryStore(database.db),
+  counters: pgCounterStore(database.db),
   scenarioMode: config.scenarioMode,
   webOrigin: config.webOrigin,
   ...(worker === null

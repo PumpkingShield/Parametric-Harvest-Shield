@@ -1,4 +1,4 @@
-import type { CellSetup, RegistryStore } from '@pumpking/db'
+import type { CellSetup, CounterStore, RegistryStore } from '@pumpking/db'
 import {
   cellIdFromH3Index,
   cellResolution,
@@ -14,6 +14,7 @@ import {
   scenarioDuration,
   scenarioReadings,
   scenarioSensors,
+  scenarioStart,
   signScenarioReadings,
 } from '@pumpking/worker/scenario'
 import { Hono } from 'hono'
@@ -111,7 +112,20 @@ export type RunWire = {
   /** H3 index in hex — the argument `/v1/cells/:cellId/days` takes. */
   cellId: string
   genesisTs: string
+  /**
+   * The day boundary the run is anchored to — the instant its first reading is
+   * due, which is at or after the request (`T067`).
+   */
   startedAt: string
+  /**
+   * The pool day this run's day zero landed on — `T067`.
+   *
+   * Zero for the first run against a pool. A later run continues where the
+   * network left off, and the number is how a demo says which chapter it is
+   * playing: the policy bought during the first run has its window inside the
+   * second, and the days on the screen are these.
+   */
+  firstDay: number
   finishedAt: string | null
   status: RunStatus
   /** Readings the scenario produced in total. */
@@ -171,6 +185,8 @@ export type ScenarioRouteOptions = {
   enabled: boolean
   registry: RegistryStore
   publisher: ReadingPublisher
+  /** `T067`: where each sensor's counter stopped, so a later run resumes it. */
+  counters: CounterStore
   /** Injected so a test plays a two-day scenario instead of reading a fixture. */
   load?: (name: string) => Scenario
   now?: () => Date
@@ -259,11 +275,13 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
       }
       const request = parsed.data
 
-      // One run at a time. Counters are per sensor and ascend from one
-      // (`FR-003`), so two runs of the same fixture would collide with each
-      // other on `readings_sensor_counter_uq` and each would see the other's
-      // readings as replays — a demo that half works is worse than one that
-      // says it is busy.
+      // One run at a time. A run reads the sensors' counters and the clock
+      // once, at the start, and everything it will publish follows from that
+      // reading (`T067`). A second run beginning before the first has finished
+      // would read the same two numbers and produce the same counters over the
+      // same days — the collision resuming was meant to end, back again and
+      // harder to see. A demo that half works is worse than one that says it
+      // is busy.
       if (active !== null) {
         return context.json({ error: 'a scenario run is already in flight', run: active }, 409)
       }
@@ -302,8 +320,12 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
         )
       }
 
-      const startedAt = now()
-      const genesisTs = request.genesisTs === undefined ? startedAt : new Date(request.genesisTs)
+      const requestedAt = now()
+      const genesisTs = request.genesisTs === undefined ? requestedAt : new Date(request.genesisTs)
+      // Where in the pool's life this run goes. On the first run the genesis is
+      // now and this is day zero; on a later one it is the next boundary, so no
+      // day is written twice and none is skipped.
+      const { dayOffset, startsAt } = scenarioStart(scenario, genesisTs, requestedAt)
       const cellId = cellIdFromH3Index(scenario.cell)
       const sensors: ScenarioSensor[] = await scenarioSensors(scenario)
 
@@ -340,8 +362,12 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
         )
       }
 
+      // Read after `ensureCell`, because a sensor the registry has just
+      // learned about has no counters, and before anything is published,
+      // because from here on this run is the only writer.
+      const counters = await options.counters.lastCounters(sensors.map((sensor) => sensor.pubkey))
       const signed = await signScenarioReadings(
-        scenarioReadings(scenario, genesisTs, sensors),
+        scenarioReadings(scenario, genesisTs, sensors, { dayOffset, counters }),
         sensors,
       )
 
@@ -356,7 +382,8 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
         expectedSpell: scenario.expected.longestDrySpell,
         cellId: scenario.cell,
         genesisTs: genesisTs.toISOString(),
-        startedAt: startedAt.toISOString(),
+        startedAt: startsAt.toISOString(),
+        firstDay: dayOffset,
         finishedAt: null,
         status: 'running',
         total: signed.length,
@@ -370,7 +397,7 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
       // Deliberately not awaited: the run lasts as long as the compressed
       // clock says, and a request held open for a minute is a demo button that
       // looks broken. `GET /v1/scenario/run/:id` is how it is watched.
-      void play(run, signed, genesisTs, startedAt)
+      void play(run, signed, genesisTs, startsAt)
 
       return context.json(run, 202)
     })

@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray, max } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { readings, sensors } from './schema.ts'
 
@@ -104,6 +104,59 @@ export function pgReadingStore(db: PostgresJsDatabase<Record<string, never>>): R
         existingSignature: existing.signature,
         status: existing.status as ReadingRow['status'],
       }
+    },
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Where a sensor left off                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The highest counter each of these sensors has already used — `FR-003`.
+ *
+ * Separate from `ReadingStore` because intake never asks it. Publishing a
+ * reading is a question about one counter (`save` and the unique index answer
+ * it); this is a question about all of them, and the only caller is a scenario
+ * run deciding where to pick up (`T067`). Folding it into the intake interface
+ * would oblige every fake of the door to answer a question the door never asks.
+ *
+ * **A real device asks itself the same thing after a power cut.** `FR-003`
+ * requires counters to ascend, not to begin at one, and a sensor that comes
+ * back up resumes from where its log ended rather than replaying it. A run
+ * that resumes is therefore doing what the hardware does — which is what makes
+ * a second run of the same fixture a continuation of the network's life
+ * instead of a collision with it.
+ */
+export interface CounterStore {
+  lastCounters(pubkeys: readonly string[]): Promise<Map<string, bigint>>
+}
+
+/** The `CounterStore` backed by the readings table. */
+export function pgCounterStore(db: PostgresJsDatabase<Record<string, never>>): CounterStore {
+  return {
+    async lastCounters(pubkeys) {
+      // An empty `IN ()` is not SQL, and asking about no sensors has one
+      // answer that needs no round trip.
+      if (pubkeys.length === 0) return new Map()
+
+      const rows = await db
+        .select({ sensorPubkey: readings.sensorPubkey, last: max(readings.counter) })
+        .from(readings)
+        // Every row, `late` ones included: `readings_sensor_counter_uq` does
+        // not care why a counter was used, only that it was. Resuming past an
+        // accepted reading and onto a late one would collide on the next run.
+        .where(inArray(readings.sensorPubkey, [...pubkeys]))
+        .groupBy(readings.sensorPubkey)
+
+      const counters = new Map<string, bigint>()
+      for (const row of rows) {
+        // A sensor with no rows is simply absent from the result; `max` over a
+        // group is null only if the column is, and the column is `notNull`.
+        if (row.last === null) continue
+        counters.set(row.sensorPubkey, BigInt(row.last))
+      }
+      return counters
     },
   }
 }

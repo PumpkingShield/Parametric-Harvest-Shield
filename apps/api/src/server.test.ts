@@ -1,5 +1,6 @@
 import type {
   CellSetup,
+  CounterStore,
   DayRow,
   IntervalStore,
   ReadingRow,
@@ -46,6 +47,9 @@ class Registry {
 
 const noPolicies: PolicyLookup = { policyAt: () => Promise.resolve(null) }
 
+/** `T067`: nothing has published here yet, so every sensor starts at one. */
+const noCounters: CounterStore = { lastCounters: () => Promise.resolve(new Map()) }
+
 function days(rows: DayRow[]): Pick<IntervalStore, 'dayRecords'> {
   return { dayRecords: () => Promise.resolve(rows) }
 }
@@ -56,6 +60,7 @@ function app(overrides: Partial<ApiDeps> = {}) {
     intervals: days([]),
     policies: noPolicies,
     registry: new Registry(),
+    counters: noCounters,
     scenarioMode: false,
     ...overrides,
   }

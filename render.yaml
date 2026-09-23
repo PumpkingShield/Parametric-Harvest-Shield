@@ -49,6 +49,10 @@ services:
       # Supabase transaction pooler (:6543). Prepared statements are off there.
       - key: DATABASE_URL
         sync: false
+      # Not the public devnet endpoint: a scenario run rate-limits it within
+      # seconds, and a 429 is both a slower aggregator and — from a web3.js
+      # callback — a dead process (T068). Helius devnet, and the cluster is
+      # the subdomain, not the key. Secret, so never a VITE_* variable.
       - key: SOLANA_RPC_URL
         sync: false
       # Only for a second deployment of the same program; the IDL carries one.

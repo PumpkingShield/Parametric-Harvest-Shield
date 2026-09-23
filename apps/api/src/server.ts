@@ -1,4 +1,4 @@
-import type { IntervalStore, ReadingStore, RegistryStore } from '@pumpking/db'
+import type { CounterStore, IntervalStore, ReadingStore, RegistryStore } from '@pumpking/db'
 import type { HealthWire as WorkerHealthWire } from '@pumpking/worker/health'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -35,6 +35,8 @@ export type ApiDeps = {
   policies: PolicyLookup
   /** `FR-001`: on M1 only the scenario run writes it, and only its own cell. */
   registry: RegistryStore
+  /** `T067`: where each sensor's counter stopped, so a second run resumes it. */
+  counters: CounterStore
   /** `SCENARIO_MODE=on`. False and every scenario path answers 404. */
   scenarioMode: boolean
   /** `*` or the origins the interface is served from. */
@@ -112,6 +114,7 @@ export function createApiApp(deps: ApiDeps): Hono {
     createScenarioRoute({
       enabled: deps.scenarioMode,
       registry: deps.registry,
+      counters: deps.counters,
       publisher: routeReadingPublisher(readings),
       now,
     }),

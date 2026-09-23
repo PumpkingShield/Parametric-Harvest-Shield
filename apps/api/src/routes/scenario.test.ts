@@ -1,5 +1,6 @@
 import type {
   CellSetup,
+  CounterStore,
   ReadingRow,
   ReadingStore,
   RegistryStore,
@@ -64,10 +65,25 @@ class FakeRegistry implements RegistryStore {
   }
 }
 
-/** The two questions `POST /v1/readings` asks of storage, and nothing else. */
-class FakeReadingStore implements ReadingStore {
+/**
+ * The two questions `POST /v1/readings` asks of storage, and the one a
+ * resuming run asks (`T067`) — because they are questions about one table, and
+ * a fake that split them could answer them inconsistently.
+ */
+class FakeReadingStore implements ReadingStore, CounterStore {
   registrations = new Map<string, SensorRegistration>()
   rows: ReadingRow[] = []
+
+  lastCounters(pubkeys: readonly string[]): Promise<Map<string, bigint>> {
+    const wanted = new Set(pubkeys)
+    const last = new Map<string, bigint>()
+    for (const row of this.rows) {
+      if (!wanted.has(row.sensorPubkey)) continue
+      const seen = last.get(row.sensorPubkey)
+      if (seen === undefined || row.counter > seen) last.set(row.sensorPubkey, row.counter)
+    }
+    return Promise.resolve(last)
+  }
 
   sensorFor(pubkey: string): Promise<SensorRegistration | null> {
     return Promise.resolve(this.registrations.get(pubkey) ?? null)
@@ -104,11 +120,13 @@ const STARTED_AT = new Date('2026-09-01T00:00:00.000Z')
 
 let registry: FakeRegistry
 let publisher: FakePublisher
+let store: FakeReadingStore
 let ids: number
 
 beforeEach(() => {
   registry = new FakeRegistry()
   publisher = new FakePublisher()
+  store = new FakeReadingStore()
   ids = 0
 })
 
@@ -118,6 +136,7 @@ function route(overrides: RouteOverrides = {}) {
   return createScenarioRoute({
     enabled: overrides.enabled ?? true,
     registry,
+    counters: store,
     publisher,
     load: overrides.load ?? (() => scenario()),
     now: () => STARTED_AT,
@@ -384,6 +403,7 @@ describe('the fixture the demo is actually run on', () => {
     const app = createScenarioRoute({
       enabled: true,
       registry,
+      counters: store,
       publisher,
       now: () => STARTED_AT,
       sleep: () => Promise.resolve(),
@@ -425,7 +445,6 @@ describe('routeReadingPublisher', () => {
    * the other side.
    */
   it('puts a run through the real readings route', async () => {
-    const store = new FakeReadingStore()
     for (const seed of [11, 12]) {
       const pubkey = await sensorPublicKey(new Uint8Array(32).fill(seed))
       store.registrations.set(pubkey, {
@@ -447,6 +466,7 @@ describe('routeReadingPublisher', () => {
     const app = createScenarioRoute({
       enabled: true,
       registry,
+      counters: store,
       publisher: routeReadingPublisher(readings),
       load: () => scenario(),
       now,
@@ -471,5 +491,152 @@ describe('routeReadingPublisher', () => {
     // `FR-004`: on a compressed clock the measurement and its publication move
     // together, so nothing a run publishes is ever stale.
     expect(store.rows.every((row) => row.status === 'accepted')).toBe(true)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `T067` — the demo's second chapter.
+ *
+ * Both runs go through the real `POST /v1/readings`, so nothing here is
+ * asserted by inspection: if the second run collided with the first on
+ * `readings_sensor_counter_uq`, the door would refuse its readings and
+ * `refused` would say so. That refusal is the failure this task exists to
+ * remove, and it is what these tests would see.
+ */
+describe('a second run against the same pool — T067', () => {
+  /**
+   * Compressed time, modelled rather than waited out — the same clock the
+   * publisher test uses, because intake reads the clock the run is played on.
+   */
+  function chapters(): { app: ReturnType<typeof createScenarioRoute>; at: () => Date } {
+    let clock = STARTED_AT.getTime()
+    const now = (): Date => new Date(clock)
+    const readings = createReadingsRoute({ store, now })
+    let id = 0
+    const app = createScenarioRoute({
+      enabled: true,
+      registry,
+      counters: store,
+      publisher: routeReadingPublisher(readings),
+      load: () => scenario(),
+      now,
+      sleep: (ms) => {
+        clock += ms
+        return Promise.resolve()
+      },
+      newRunId: () => {
+        id += 1
+        return `chapter-${id}`
+      },
+    })
+    return { app, at: now }
+  }
+
+  async function register(): Promise<void> {
+    for (const seed of [11, 12]) {
+      const pubkey = await sensorPublicKey(new Uint8Array(32).fill(seed))
+      store.registrations.set(pubkey, {
+        pubkey,
+        cellId: CELL_ID,
+        kind: ReadingKind.PrecipitationMm,
+        active: true,
+      })
+    }
+  }
+
+  /** Starts a chapter and plays it to its end. */
+  async function chapter(
+    app: ReturnType<typeof createScenarioRoute>,
+    body: unknown,
+  ): Promise<RunWire> {
+    const response = await app.request('/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    expect(response.status).toBe(202)
+    const started = (await response.json()) as RunWire
+    return await settled(app, started.run)
+  }
+
+  it('publishes both chapters in full, refusing nothing', async () => {
+    await register()
+    const { app } = chapters()
+
+    const first = await chapter(app, BODY)
+    expect(first.status).toBe('done')
+    expect(first.firstDay).toBe(0)
+    expect(first.published).toBe(4)
+    expect(first.refused).toBe(0)
+
+    // The same fixture, the same keys, the same pool. Before `T067` this was
+    // four readings the door had already seen.
+    const second = await chapter(app, { ...BODY, genesisTs: STARTED_AT.toISOString() })
+    expect(second.status).toBe('done')
+    expect(second.published).toBe(4)
+    expect(second.refused).toBe(0)
+    expect(store.rows).toHaveLength(8)
+    expect(store.rows.every((row) => row.status === 'accepted')).toBe(true)
+  })
+
+  it('resumes each sensor from the counter the table already holds', async () => {
+    await register()
+    const { app } = chapters()
+    await chapter(app, BODY)
+    await chapter(app, { ...BODY, genesisTs: STARTED_AT.toISOString() })
+
+    for (const pubkey of store.registrations.keys()) {
+      const own = store.rows
+        .filter((row) => row.sensorPubkey === pubkey)
+        .map((row) => row.counter)
+        .sort((a, b) => Number(a - b))
+      expect(own).toEqual([1n, 2n, 3n, 4n])
+    }
+  })
+
+  /**
+   * The calendar half of the task. The second chapter's weather must land on
+   * days the aggregator has not closed — otherwise its readings would be
+   * counted into a day that was already published on chain.
+   */
+  it('starts the second chapter past every day the first one touched', async () => {
+    await register()
+    const { app } = chapters()
+    const first = await chapter(app, BODY)
+    const second = await chapter(app, { ...BODY, genesisTs: STARTED_AT.toISOString() })
+
+    expect(second.firstDay).toBeGreaterThan(first.firstDay + first.days - 1)
+    expect(new Date(second.startedAt).getTime()).toBe(STARTED_AT.getTime() + second.firstDay * 2000)
+
+    const seam = STARTED_AT.getTime() + second.firstDay * 2000
+    const before = store.rows.filter((row) => row.measuredAt.getTime() < seam)
+    const after = store.rows.filter((row) => row.measuredAt.getTime() >= seam)
+    expect(before).toHaveLength(4)
+    expect(after).toHaveLength(4)
+  })
+
+  /**
+   * A run reads the counters and the clock once, at the start. Two runs in
+   * flight would read the same two numbers and rebuild the collision — so the
+   * guard that says «busy» is part of `T067`, not only of the demo's manners.
+   */
+  it('refuses a second chapter while the first is still playing', async () => {
+    await register()
+    const { app } = chapters()
+    const started = await app.request('/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(BODY),
+    })
+    expect(started.status).toBe(202)
+
+    const overlapping = await app.request('/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(BODY),
+    })
+    expect(overlapping.status).toBe(409)
   })
 })

@@ -22,6 +22,7 @@ import {
   scenarioParams,
   scenarioReadings,
   scenarioSensors,
+  scenarioStart,
   signScenarioReadings,
 } from './scenario.ts'
 
@@ -259,6 +260,178 @@ describe('scenarioReadings', () => {
   it('never publishes negative rainfall', async () => {
     const { readings } = await run('gaps')
     expect(readings.every((reading) => reading.valueX100 >= 0)).toBe(true)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `T067` — a second run of the same fixture against the same pool.
+ *
+ * Two things stop a fixture being played twice, and both are checked here:
+ * counters that begin at one collide with the first run on
+ * `readings_sensor_counter_uq`, and days that begin at zero fall on days the
+ * aggregator has already closed. A continuation answers both the way the real
+ * network does — a device resumes its log, and the weather goes on from today.
+ */
+describe('continuing a run — T067', () => {
+  /** The counter each sensor stopped at, as the database would report it. */
+  function lastCounters(readings: readonly Reading[]): Map<string, bigint> {
+    const last = new Map<string, bigint>()
+    for (const reading of readings) {
+      const seen = last.get(reading.sensor)
+      if (seen === undefined || reading.counter > seen) last.set(reading.sensor, reading.counter)
+    }
+    return last
+  }
+
+  it('resumes each sensor from the counter it stopped at — FR-003', async () => {
+    const scenario = readScenario('drought')
+    const sensors = await scenarioSensors(scenario)
+    const first = scenarioReadings(scenario, GENESIS, sensors)
+    const counters = lastCounters(first)
+
+    const second = scenarioReadings(scenario, GENESIS, sensors, {
+      dayOffset: scenario.expected.days,
+      counters,
+    })
+
+    for (const sensor of sensors) {
+      const before = first.filter((reading) => reading.sensor === sensor.pubkey)
+      const after = second.filter((reading) => reading.sensor === sensor.pubkey)
+      const stopped = counters.get(sensor.pubkey)
+      if (stopped === undefined) throw new Error('fixture')
+      expect(before.length).toBeGreaterThan(0)
+      expect(after.map((reading) => reading.counter)).toEqual(
+        after.map((_reading, index) => stopped + BigInt(index + 1)),
+      )
+    }
+  })
+
+  /**
+   * The collision the whole task exists to remove. Asserted as a set of
+   * `(sensor, counter)` pairs because that pair is exactly what the unique
+   * index refuses — this is the constraint, stated in TypeScript.
+   */
+  it('shares no sensor-and-counter pair with the run before it', async () => {
+    const scenario = readScenario('drought')
+    const sensors = await scenarioSensors(scenario)
+    const first = scenarioReadings(scenario, GENESIS, sensors)
+    const second = scenarioReadings(scenario, GENESIS, sensors, {
+      dayOffset: scenario.expected.days,
+      counters: lastCounters(first),
+    })
+
+    const key = (reading: Reading): string => `${reading.sensor}:${reading.counter}`
+    const taken = new Set(first.map(key))
+    expect(second.filter((reading) => taken.has(key(reading)))).toEqual([])
+  })
+
+  it('starts the second run on the day after the first one ended', async () => {
+    const scenario = readScenario('drought')
+    const sensors = await scenarioSensors(scenario)
+    const clock = scenarioClock(scenario, GENESIS)
+    const offset = scenario.expected.days
+
+    const second = scenarioReadings(scenario, GENESIS, sensors, {
+      dayOffset: offset,
+      counters: new Map(),
+    })
+
+    const firstInstant = second[0]
+    if (firstInstant === undefined) throw new Error('fixture')
+    expect(firstInstant.measuredAt.getTime()).toBe(intervalStart(clock, offset, 0).getTime())
+    for (const reading of second) {
+      expect(reading.measuredAt.getTime()).toBeGreaterThanOrEqual(
+        intervalStart(clock, offset, 0).getTime(),
+      )
+    }
+  })
+
+  /**
+   * The offset moves the run; it does not change what the run says. If it did,
+   * the second chapter of a demo would be a different scenario wearing the
+   * first one's name.
+   */
+  it('changes the instants and nothing else — FR-042', async () => {
+    const scenario = readScenario('drought')
+    const sensors = await scenarioSensors(scenario)
+    const plain = scenarioReadings(scenario, GENESIS, sensors)
+    const moved = scenarioReadings(scenario, GENESIS, sensors, {
+      dayOffset: 40,
+      counters: new Map(),
+    })
+
+    expect(moved.map((reading) => reading.valueX100)).toEqual(
+      plain.map((reading) => reading.valueX100),
+    )
+    expect(moved.map((reading) => reading.sensor)).toEqual(plain.map((reading) => reading.sensor))
+    // A shifted run is the same weather forty days later, so reading it needs
+    // a genesis forty days later: `classifyRun` then walks the same day
+    // indices through the real aggregation and gets the same spell.
+    const shifted = new Date(GENESIS.getTime() + 40 * scenario.clock.secondsPerDay * 1000)
+    expect(classifyRun(scenario, sensors, moved, shifted)).toEqual(
+      classifyRun(scenario, sensors, plain),
+    )
+  })
+
+  it('refuses an offset that is not a whole number of days', async () => {
+    const scenario = readScenario('drought')
+    const sensors = await scenarioSensors(scenario)
+    expect(() =>
+      scenarioReadings(scenario, GENESIS, sensors, { dayOffset: -1, counters: new Map() }),
+    ).toThrow(RangeError)
+    expect(() =>
+      scenarioReadings(scenario, GENESIS, sensors, { dayOffset: 1.5, counters: new Map() }),
+    ).toThrow(RangeError)
+  })
+
+  it('does not write into the counters it was given', async () => {
+    const scenario = readScenario('gaps')
+    const sensors = await scenarioSensors(scenario)
+    const given = new Map<string, bigint>(sensors.map((sensor) => [sensor.pubkey, 7n]))
+    scenarioReadings(scenario, GENESIS, sensors, { dayOffset: 0, counters: given })
+    for (const sensor of sensors) expect(given.get(sensor.pubkey)).toBe(7n)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
+describe('scenarioStart', () => {
+  const scenario = (): Scenario => readScenario('drought')
+
+  it('is day zero when the pool is born with the run', () => {
+    const start = scenarioStart(scenario(), GENESIS, GENESIS)
+    expect(start.dayOffset).toBe(0)
+    expect(start.startsAt.getTime()).toBe(GENESIS.getTime())
+  })
+
+  it('skips the day the request arrived in', () => {
+    const run = scenario()
+    const dayMs = run.clock.secondsPerDay * 1000
+    const start = scenarioStart(run, GENESIS, new Date(GENESIS.getTime() + dayMs * 3 + 1))
+    expect(start.dayOffset).toBe(4)
+    expect(start.startsAt.getTime()).toBe(GENESIS.getTime() + dayMs * 4)
+  })
+
+  /**
+   * Even on an exact boundary. The run before this one stopped when its last
+   * reading was published, and that instant is inside its final day, not at
+   * the end of it — the day the clock names is a day that may already have
+   * been written into.
+   */
+  it('moves past a boundary it lands exactly on', () => {
+    const run = scenario()
+    const dayMs = run.clock.secondsPerDay * 1000
+    const start = scenarioStart(run, GENESIS, new Date(GENESIS.getTime() + dayMs * 29))
+    expect(start.dayOffset).toBe(30)
+    expect(start.startsAt.getTime()).toBe(GENESIS.getTime() + dayMs * 30)
+  })
+
+  it('gives day zero for a genesis still in the future', () => {
+    const start = scenarioStart(scenario(), GENESIS, new Date(GENESIS.getTime() - 60_000))
+    expect(start.dayOffset).toBe(0)
+    expect(start.startsAt.getTime()).toBe(GENESIS.getTime())
   })
 })
 

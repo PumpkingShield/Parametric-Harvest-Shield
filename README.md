@@ -124,12 +124,20 @@ the deployer (devnet SOL, roughly 2.8 for the program's rent).
 The last one is different in kind. `issue_policy` refuses a cell nobody is
 publishing on and a cell with fewer than 14 recorded days, and both facts come
 out of the day log the aggregator writes as a run plays — so the policy is bought
-in the middle of the run, on the history the run has produced so far, and the
-script polls the cell until the program's own preconditions hold. Its window
-starts after the waiting period and has to fit in what is left of the run; on a
-29-day scenario that leaves room for a short threshold (the default is five dry
-days), and only if the aggregator keeps pace with the two-second clock. The
-address it prints is `VITE_POLICY_PUBKEY`.
+in the middle of a run, on the history that run has produced so far, and the
+script polls the cell until the program's own preconditions hold. The address it
+prints is `VITE_POLICY_PUBKEY`.
+
+**Which is why a show is two runs and not one.** A policy cannot exist before
+fourteen covered days and a waiting period, and by then a single 29-day fixture
+has almost no drought left to insure — five to seven dry days inside the window,
+against the eighteen the fixture actually contains. So the demo plays
+`normal.json` first, buys the policy on that wet history, and then plays
+`drought.json`: the second run lands on days the pool has not lived yet, and the
+whole eighteen-day spell falls inside the policy's window. A run picks each
+sensor's counter up where the table left it, the way a device resumes its log
+after a restart, so the same fixture can be played again without emptying the
+database first.
 
 **Render sleeps a free service after 15 minutes of silence, and a sleeping
 service is a sleeping aggregator**: no day is written while it sleeps, and a day
@@ -144,7 +152,7 @@ part of it has actually been shown to do.
 | Claim | Where it is proven | State |
 |---|---|---|
 | The instructions do what they say — solvency, exposure limit, waiting period, settlement, closure, the 128-day ring | mollusk over the built `.so` | 35/35 |
-| The index is one thing in two languages | shared fixtures, Rust and TypeScript | 121 + 544 tests |
+| The index is one thing in two languages | shared fixtures, Rust and TypeScript | 121 + 558 tests |
 | Drought from first reading to payout, in compressed time | `tests/e2e/drought.test.ts` | deterministic, and it does **not** execute the program |
 | The program runs on devnet | pool initialised, capital deposited, the loop reads the clock off the pool | done |
 | A policy is bought and closed on devnet | `devnet-issue.mjs` during a run; the loop closed it after its window ended without the event | done once |
@@ -154,9 +162,9 @@ So: the payout path is complete and exercised, but the sentence "a drought
 happened on devnet and the money arrived" cannot be said yet. The one policy
 bought on devnet so far was bought late: the public RPC endpoint rate-limited
 the aggregator into an eight-day lag, the window landed after the run, and the
-policy closed without an event — correctly. Getting the money to arrive needs
-an RPC endpoint with headroom (or a slower clock) and the deployment
-(`render.yaml`).
+policy closed without an event — correctly. What is left is an RPC endpoint with
+headroom, the deployment (`render.yaml`), and the two-run show described above —
+none of which is a change to the program.
 
 The sensors are our own keys and the weather comes from a scenario file. Open
 sensor registration, staking, reputation, rewards and the public audit trail are

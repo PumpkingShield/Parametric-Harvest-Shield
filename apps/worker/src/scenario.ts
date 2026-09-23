@@ -38,7 +38,9 @@ import { type AggregationParams, intervalStart, type PoolClock } from './interva
  * wall-clock instants: the same scenario replayed at a different genesis
  * produces the same day sequence, the same medians and the same policy result.
  * Sensor keys come from fixed seeds and counters from a fixed order, so two
- * runs produce byte-identical readings up to the genesis they are anchored to.
+ * runs produce byte-identical readings up to the genesis they are anchored to
+ * and the point in the network's life they are played at — `ScenarioContinuation`
+ * carries both, and both only translate a run; neither changes what it says.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -218,6 +220,81 @@ export function scenarioDuration(scenario: Scenario): number {
   return scenario.expected.days * scenario.clock.secondsPerDay
 }
 
+/* -------------------------------------------------------------------------- */
+/* Picking up where the last run stopped                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a run inherits from the ones before it — `T067`.
+ *
+ * A scenario file describes weather, not a moment: its days are numbered from
+ * zero and its sensors are the same fixed keys every time. Played twice
+ * against one pool and one database, that would be the same readings twice —
+ * the same counters, refused by `readings_sensor_counter_uq`, over days the
+ * aggregator has already closed. Both halves of the collision are here, and
+ * both are answered the way the real network answers them: a device resumes
+ * its counter, and the sky goes on from today rather than from the day the
+ * pool was born.
+ *
+ * **This is what makes a demo able to tell a story.** The eighteen-day dry
+ * spell `tests/e2e/drought.test.ts` proves is unreachable inside one run: a
+ * policy cannot exist before fourteen covered days and three waiting days, and
+ * by then the fixture's dry stretch is nearly over. Two runs — a wet history,
+ * then the drought — put the whole spell inside the policy's window, which is
+ * the sequence the product is actually claiming.
+ */
+export type ScenarioContinuation = {
+  /**
+   * The pool day this run's day zero lands on.
+   *
+   * Zero for the first run. For a later one it is the next day boundary, so a
+   * run never writes into a day the aggregator has already closed and never
+   * leaves an uncovered day behind it — and an uncovered day breaks a spell
+   * (`FR-048`).
+   */
+  dayOffset: number
+  /** The last counter each sensor has already used, by public key. */
+  counters: ReadonlyMap<string, bigint>
+}
+
+/** Where and when a run that starts at `at` has to begin. */
+export type ScenarioStart = {
+  dayOffset: number
+  /** The instant of that day boundary — what `playScenario` anchors to. */
+  startsAt: Date
+}
+
+/**
+ * The first day **strictly after** the day `at` falls in — or day zero, when
+ * the pool begins with the run.
+ *
+ * Strictly after, and not merely the next boundary, because the day `at` falls
+ * in is a day something may already have been written into: the run before
+ * this one finishes when its last reading is published, which is somewhere
+ * inside its final day and not at the end of it. Starting on that day would
+ * put two chapters' readings in one interval, and the median would be over
+ * weather from both.
+ *
+ * The price is that a chapter may be preceded by an uncovered day — two
+ * seconds at demo speed. That is deliberate and it is safe here: an uncovered
+ * day breaks a spell (`FR-048`), and the break falls **between** the chapters,
+ * before the drought the second one tells. A demo whose spell has to span the
+ * seam is a demo that needs one scenario, not two.
+ *
+ * `playScenario` waits for the boundary on its own — the first reading is
+ * simply not due yet — so there is nothing for a caller to sleep on.
+ *
+ * A genesis in the future gives day zero, not a negative one: the pool has no
+ * days before it exists, and `intervalStart` refuses to name one.
+ */
+export function scenarioStart(scenario: Scenario, genesisTs: Date, at: Date): ScenarioStart {
+  const clock = scenarioClock(scenario, genesisTs)
+  const elapsed = at.getTime() - genesisTs.getTime()
+  const dayMs = scenario.clock.secondsPerDay * 1000
+  const dayOffset = elapsed <= 0 ? 0 : Math.floor(elapsed / dayMs) + 1
+  return { dayOffset, startsAt: intervalStart(clock, dayOffset, 0) }
+}
+
 /** A sensor of the run, with the identity its readings are signed under. */
 export type ScenarioSensor = {
   /** 32 bytes, every one of them `seed`. Fixed keys make a run repeatable. */
@@ -286,21 +363,36 @@ function valueFor(stretch: ScenarioStretch, sensor: ScenarioSensor): number {
  * caller sign only the readings it is about to send. `signScenarioReadings`
  * is the second pass.
  *
- * Counters are per sensor and start at one, ascending with time, which is what
- * `FR-003` requires of a real device. A replayed run therefore collides with
- * itself on `readings_sensor_counter_uq` — deliberately: the same sensor
- * cannot publish two different readings under one counter, and a second run
- * against a live database is a new pool with a new genesis, not the same
- * readings again.
+ * Counters are per sensor and ascend with time, which is what `FR-003`
+ * requires of a real device. They start at one only when nothing is carried
+ * in: given a `continuation`, each sensor resumes from the counter it last
+ * used, exactly as hardware does after a restart. Without that, replaying a
+ * fixture against a live database is the same sensor publishing two different
+ * readings under one counter, and `readings_sensor_counter_uq` refuses every
+ * one of them.
+ *
+ * `dayOffset` moves the whole programme forward by whole days, so the second
+ * run's weather lands on days the pool has not lived yet. It shifts the
+ * instants and nothing else: the day indices stay consecutive, the intervals
+ * keep their place inside a day, and every median, threshold and transfer
+ * downstream is computed from the same numbers it would be computed from at
+ * offset zero.
  */
 export function scenarioReadings(
   scenario: Scenario,
   genesisTs: Date,
   sensors: readonly ScenarioSensor[],
+  continuation?: ScenarioContinuation,
 ): Reading[] {
   const clock = scenarioClock(scenario, genesisTs)
   const cellId = cellIdFromH3Index(scenario.cell)
-  const counters = new Map<string, bigint>()
+  const dayOffset = continuation?.dayOffset ?? 0
+  if (!Number.isInteger(dayOffset) || dayOffset < 0) {
+    throw new RangeError(`dayOffset is not a non-negative integer: ${dayOffset}`)
+  }
+  // Copied rather than held: the caller's map is a reading of the database at
+  // one instant, and a run must not write into it.
+  const counters = new Map<string, bigint>(continuation?.counters ?? [])
   const readings: Reading[] = []
 
   for (let dayIndex = 0; dayIndex < scenario.expected.days; dayIndex += 1) {
@@ -308,7 +400,7 @@ export function scenarioReadings(
     const silent = new Set(stretch.silentSensors)
 
     for (let interval = stretch.silentIntervals; interval < clock.intervalsPerDay; interval += 1) {
-      const measuredAt = intervalStart(clock, dayIndex, interval)
+      const measuredAt = intervalStart(clock, dayOffset + dayIndex, interval)
       for (const sensor of sensors) {
         if (silent.has(sensor.seed)) continue
         const counter = (counters.get(sensor.pubkey) ?? 0n) + 1n
