@@ -155,16 +155,25 @@ part of it has actually been shown to do.
 | The index is one thing in two languages | shared fixtures, Rust and TypeScript | 121 + 558 tests |
 | Drought from first reading to payout, in compressed time | `tests/e2e/drought.test.ts` | deterministic, and it does **not** execute the program |
 | The program runs on devnet | pool initialised, capital deposited, the loop reads the clock off the pool | done |
-| A policy is bought and closed on devnet | `devnet-issue.mjs` during a run; the loop closed it after its window ended without the event | done once |
-| A drought pays out on devnet | — | **not done yet** |
+| A policy is bought and closed on devnet | `devnet-issue.mjs` during a run; the loop closed it after its window ended without the event | done |
+| **A drought pays out on devnet** | two chapters against devnet, 2026-09-23: policy [`CqDaQ8ce…`](https://explorer.solana.com/address/CqDaQ8cet8WaUNPDQP2n496hPJSGkCwYVNrnnPHwo6Uy?cluster=devnet) reached `paidOut`, 1000 tokens moved to the farmer | **done** |
 
-So: the payout path is complete and exercised, but the sentence "a drought
-happened on devnet and the money arrived" cannot be said yet. The one policy
-bought on devnet so far was bought late: the public RPC endpoint rate-limited
-the aggregator into an eight-day lag, the window landed after the run, and the
-policy closed without an event — correctly. What is left is an RPC endpoint with
-headroom, the deployment (`render.yaml`), and the two-run show described above —
-none of which is a change to the program.
+So the sentence can now be said: a drought happened on devnet and the money
+arrived, without anyone filing anything. Nobody touched the policy between the
+two — the aggregator wrote the day the spell completed on, and `settle_policy`
+followed in the next turn of its loop.
+
+What it cost, in the run's own numbers: **62 seconds** from the drought's first
+reading to the payout on chain (`SC-011` allows 90 of compressed time), and
+**4.1 seconds** from the last reading of the run to the transfer (`SC-001`
+allows 60). The premium was 10 tokens against a payout of 1000 — one per cent,
+because the policy was quoted on a wet history, which is what parametric cover
+on a clean record costs.
+
+Two things are still unproven and are not hiding here. The run was driven from
+a laptop against a Postgres on localhost; nothing has yet been measured from
+the deployment (`render.yaml`), and `SC-008` — thirty days of uninterrupted
+collection — cannot be shown on a free plan that sleeps.
 
 The sensors are our own keys and the weather comes from a scenario file. Open
 sensor registration, staking, reputation, rewards and the public audit trail are
