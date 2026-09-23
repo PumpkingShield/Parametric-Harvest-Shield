@@ -513,6 +513,9 @@ describe('a second run against the same pool — T067', () => {
   function chapters(): { app: ReturnType<typeof createScenarioRoute>; at: () => Date } {
     let clock = STARTED_AT.getTime()
     const now = (): Date => new Date(clock)
+    // The sleep below advances this clock instead of the process, so `at()`
+    // reads the compressed time a chapter actually consumed.
+
     const readings = createReadingsRoute({ store, now })
     let id = 0
     const app = createScenarioRoute({
@@ -615,6 +618,35 @@ describe('a second run against the same pool — T067', () => {
     const after = store.rows.filter((row) => row.measuredAt.getTime() >= seam)
     expect(before).toHaveLength(4)
     expect(after).toHaveLength(4)
+  })
+
+  /**
+   * When a chapter publishes, not only what — and this is the test that was
+   * missing when a devnet run found the bug.
+   *
+   * `playScenario` publishes a reading at `anchor + (measuredAt - genesisTs)`,
+   * and `dayOffset` is already inside `measuredAt`. Anchoring the run at its
+   * own boundary instead of at the genesis adds the offset twice: the chapter
+   * sits idle for a whole offset past the day it was supposed to start on, and
+   * the aggregator closes those days empty while it waits. Nothing about the
+   * readings is wrong when that happens — the counters resume, the days are
+   * right, `published` reaches `total` — which is exactly why only the clock
+   * catches it.
+   */
+  it('plays the second chapter at its boundary, not an offset past it', async () => {
+    await register()
+    const { app, at } = chapters()
+
+    await chapter(app, BODY)
+    const second = await chapter(app, { ...BODY, genesisTs: STARTED_AT.toISOString() })
+
+    const boundary = STARTED_AT.getTime() + second.firstDay * 2000
+    expect(new Date(second.startedAt).getTime()).toBe(boundary)
+
+    // The fixture is two days of one interval, so the last reading is due at
+    // the start of the chapter's final day — one day after its boundary.
+    const lastDue = boundary + (second.days - 1) * 2000
+    expect(at().getTime()).toBe(lastDue)
   })
 
   /**

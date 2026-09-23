@@ -397,7 +397,17 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
       // Deliberately not awaited: the run lasts as long as the compressed
       // clock says, and a request held open for a minute is a demo button that
       // looks broken. `GET /v1/scenario/run/:id` is how it is watched.
-      void play(run, signed, genesisTs, startsAt)
+      //
+      // The anchor is the genesis, not `startsAt`, and the difference is a bug
+      // this cost a devnet run to find. `playScenario` publishes a reading at
+      // `anchor + (measuredAt - genesisTs)`; `dayOffset` is already inside
+      // `measuredAt`, so anchoring at `startsAt` would add it a second time and
+      // the chapter would wait a whole offset past its own boundary — 64
+      // seconds at 32 days and two seconds a day, by which point the aggregator
+      // has closed those days empty. Anchoring at the genesis makes the due
+      // instant the measured instant, which is what a run on the pool's own
+      // clock means.
+      void play(run, signed, genesisTs, genesisTs)
 
       return context.json(run, 202)
     })
