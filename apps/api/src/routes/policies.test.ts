@@ -145,11 +145,34 @@ describe('GET /v1/policies/:pubkey', () => {
     expect(body).toEqual(expect.objectContaining({ spell: 0, recordedDays: 0 }))
   })
 
-  it('names the state a settled policy is in', async () => {
+  /**
+   * The names are `PolicyState`'s own. This test used to set `{ settled: {} }`
+   * — a variant the program does not have — and pass, because the route
+   * simply echoed whatever key it was given. Downstream, the screen compared
+   * against that same invented name, so a paid policy read as one that closed
+   * with nothing. The route now refuses a name it does not know, which is what
+   * makes this test able to fail.
+   */
+  it('names each state the program can be in', async () => {
+    for (const name of ['paidOut', 'closedNoEvent', 'unclaimed'] as const) {
+      policies.accounts.set(ADDRESS, policy({ state: { [name]: {} } }))
+      const body = (await (await get(ADDRESS)).json()) as { state: string }
+      expect(body.state).toBe(name)
+    }
+  })
+
+  it('refuses a state it has no name for rather than passing it on', async () => {
     policies.accounts.set(ADDRESS, policy({ state: { settled: {} } }))
 
+    const response = await get(ADDRESS)
+    expect(response.status).toBe(500)
+  })
+
+  it('still names an active policy', async () => {
+    policies.accounts.set(ADDRESS, policy({ state: { active: {} } }))
+
     const body = (await (await get(ADDRESS)).json()) as { state: string }
-    expect(body.state).toBe('settled')
+    expect(body.state).toBe('active')
   })
 
   it('hands back the arguments the days route takes', async () => {

@@ -169,13 +169,50 @@ describe('runCaption', () => {
     expect(runCaption({ ...POLICY, spell: 6 })).toBe('dry days in a row — the threshold is met')
   })
 
-  it('speaks in the past once the policy is no longer active', () => {
-    expect(runCaption({ ...POLICY, state: 'settled', spell: 5 })).toBe(
-      'dry days in a row — this policy has been settled',
+  /**
+   * The names are the program's — `active`, `paidOut`, `closedNoEvent`,
+   * `unclaimed` — and that is the whole point of this test.
+   *
+   * It used to be written against `'settled'` and `'closed'`, which no layer
+   * of this system produces. The comparison never matched, the test agreed
+   * with the code because both spoke the same invented language, and a policy
+   * the chain had paid read as one that closed without paying. Caught on
+   * devnet, on the screen, with `paidOut` in the API's own answer.
+   */
+  it('says a paid policy was paid', () => {
+    expect(runCaption({ ...POLICY, state: 'paidOut', spell: 5 })).toBe(
+      'dry days in a row — this policy paid out',
     )
-    expect(runCaption({ ...POLICY, state: 'closed', spell: 3 })).toBe(
+  })
+
+  /**
+   * `FR-029`: the drought happened and the transfer did not land, so the
+   * payout is reserved and the owner can claim it. Saying "closed without
+   * paying" here is the screen talking them out of money that is theirs.
+   */
+  it('tells an unclaimed owner the money is still theirs', () => {
+    const caption = runCaption({ ...POLICY, state: 'unclaimed', spell: 5 })
+    expect(caption).toBe('dry days in a row — the payout is yours and waiting to be claimed')
+    expect(caption).not.toContain('without paying')
+  })
+
+  it('says a policy that ran out without the event closed without paying', () => {
+    expect(runCaption({ ...POLICY, state: 'closedNoEvent', spell: 3 })).toBe(
       'dry days in a row — this policy closed without paying',
     )
+  })
+
+  /**
+   * Every state the program has gets its own sentence, and no two share one.
+   * A state added to `PolicyState` without a branch here is a `undefined`
+   * caption on someone's screen — the compiler catches the missing branch,
+   * and this catches a branch that was copied rather than written.
+   */
+  it('gives each of the four states its own words', () => {
+    const states: Policy['state'][] = ['active', 'paidOut', 'closedNoEvent', 'unclaimed']
+    const captions = states.map((state) => runCaption({ ...POLICY, state, spell: 5 }))
+    expect(captions.every((one) => one.length > 0)).toBe(true)
+    expect(new Set(captions).size).toBe(states.length)
   })
 })
 
@@ -237,12 +274,13 @@ describe('basisRisk', () => {
     expect(bigger.cases[0].money).toContain('250.00 mock USDC')
   })
 
-  it('does not soften once the policy is settled or closed', () => {
+  it('does not soften once the policy is paid or closed', () => {
     // The disclosure is about how the product decides, and that does not change
-    // with the state of one policy: a settled owner who was paid without a loss
+    // with the state of one policy: a paid owner who was paid without a loss
     // is told the same thing as a closed one who lost a crop and was not.
-    expect(basisRisk({ ...POLICY, state: 'settled' }, 6)).toEqual(basisRisk(POLICY, 6))
-    expect(basisRisk({ ...POLICY, state: 'closed' }, 6)).toEqual(basisRisk(POLICY, 6))
+    expect(basisRisk({ ...POLICY, state: 'paidOut' }, 6)).toEqual(basisRisk(POLICY, 6))
+    expect(basisRisk({ ...POLICY, state: 'closedNoEvent' }, 6)).toEqual(basisRisk(POLICY, 6))
+    expect(basisRisk({ ...POLICY, state: 'unclaimed' }, 6)).toEqual(basisRisk(POLICY, 6))
   })
 
   it('says what the owner gets for carrying it', () => {

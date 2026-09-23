@@ -81,13 +81,32 @@ export function rpcPolicyLookup(connection: Connection, programId?: PublicKey): 
 const ADDRESS_BYTES = 32
 
 /**
- * Anchor encodes a fieldless enum as an object with one key, so the state is a
- * name. `unknown` is unreachable through `decodePolicy`, which refuses bytes
- * that are not a `Policy`; it exists so the route needs no `!`.
+ * The four names `PolicyState` has on chain, and the only four this route
+ * sends.
+ *
+ * Written down as a type rather than left as `string`, because `string` is
+ * what let the screen read `paidOut` as "closed without paying" for a policy
+ * the chain had already paid: a reader comparing against a name that does not
+ * exist is a comparison that never matches, and nothing — not the compiler,
+ * not a test written in the same wrong vocabulary — can see it. Every layer
+ * downstream narrows to this, so an invented name is now a build error.
  */
-function policyStateName(state: PolicyAccount['state']): string {
+export type PolicyStateName = 'active' | 'paidOut' | 'closedNoEvent' | 'unclaimed'
+
+const POLICY_STATES: readonly string[] = ['active', 'paidOut', 'closedNoEvent', 'unclaimed']
+
+/**
+ * Anchor encodes a fieldless enum as an object with one key, so the state is a
+ * name. Unreachable through `decodePolicy`, which refuses bytes that are not a
+ * `Policy` — but a name this route does not know is a program that has grown a
+ * state nobody told the screen about, and saying so beats sending it on.
+ */
+function policyStateName(state: PolicyAccount['state']): PolicyStateName {
   const [name] = Object.keys(state)
-  return name ?? 'unknown'
+  if (name === undefined || !POLICY_STATES.includes(name)) {
+    throw new Error(`the program answered with a policy state this API does not know: ${name}`)
+  }
+  return name as PolicyStateName
 }
 
 /** A policy as the wire carries it. */
@@ -107,7 +126,7 @@ export type PolicyWire = {
   windowStartDay: number
   windowEndDay: number
   windowDays: number
-  state: string
+  state: PolicyStateName
   /** Longest run of dry days inside the window, as `cell_days` sees it. */
   spell: number
   /**

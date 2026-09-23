@@ -11,6 +11,23 @@
  * functions do.
  */
 
+/**
+ * The four names a policy's state can carry — the program's own vocabulary.
+ *
+ * Kept as a union and not `string`. `string` is what allowed a screen to test
+ * itself against `'settled'`, a name no layer of this system has ever
+ * produced: the comparison never matched, the test agreed with the code
+ * because both were wrong in the same way, and a policy the chain had paid
+ * read as one that closed without paying.
+ */
+export type PolicyState = 'active' | 'paidOut' | 'closedNoEvent' | 'unclaimed'
+
+const POLICY_STATES: readonly string[] = ['active', 'paidOut', 'closedNoEvent', 'unclaimed']
+
+function policyState(value: unknown): value is PolicyState {
+  return typeof value === 'string' && POLICY_STATES.includes(value)
+}
+
 /** `PolicyWire` as `apps/api/src/routes/policies.ts` sends it. */
 export interface Policy {
   policy: string
@@ -25,7 +42,7 @@ export interface Policy {
   windowStartDay: number
   windowEndDay: number
   windowDays: number
-  state: string
+  state: PolicyState
   /** The run the aggregator's own rows see, counted by `spellInWindow`. */
   spell: number
   /** Days of the window the aggregator has a row for. */
@@ -82,7 +99,9 @@ export function parsePolicy(value: unknown): Policy {
     !int(row.windowStartDay) ||
     !int(row.windowEndDay) ||
     !int(row.windowDays) ||
-    !str(row.state) ||
+    // Narrower than `str`: a state the screen has no words for is an answer it
+    // cannot draw honestly, and drawing it anyway is how this went wrong once.
+    !policyState(row.state) ||
     !int(row.spell) ||
     !int(row.recordedDays)
   ) {

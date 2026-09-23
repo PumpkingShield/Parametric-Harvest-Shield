@@ -102,14 +102,28 @@ export function formatAmount(baseUnits: string, decimals: number): string {
 /** `FR-056`: the asset is a mock token, and it says so wherever a sum appears. */
 const ASSET = 'mock USDC'
 
-/** The line under the figure — the run, and what it is short of. */
+/**
+ * The line under the figure — the run, and what it is short of.
+ *
+ * One branch per state the program has, and the two that mean money is owed
+ * say so. `unclaimed` is the one worth being careful with: the drought
+ * happened and the transfer did not land (`FR-029`), the payout is still
+ * reserved, and telling that owner the policy closed without paying would be
+ * the screen talking them out of money that is theirs.
+ */
 export function runCaption(policy: Policy): string {
-  if (policy.state === 'settled') return 'dry days in a row — this policy has been settled'
-  if (policy.state !== 'active') return 'dry days in a row — this policy closed without paying'
-  if (policy.spell >= policy.spellDaysThreshold) {
-    return 'dry days in a row — the threshold is met'
+  switch (policy.state) {
+    case 'paidOut':
+      return 'dry days in a row — this policy paid out'
+    case 'unclaimed':
+      return 'dry days in a row — the payout is yours and waiting to be claimed'
+    case 'closedNoEvent':
+      return 'dry days in a row — this policy closed without paying'
+    case 'active':
+      return policy.spell >= policy.spellDaysThreshold
+        ? 'dry days in a row — the threshold is met'
+        : `dry days in a row — ${policy.spellDaysThreshold - policy.spell} more and you are paid`
   }
-  return `dry days in a row — ${policy.spellDaysThreshold - policy.spell} more and you are paid`
 }
 
 /** The terms `FR-018` says a policy carries. */

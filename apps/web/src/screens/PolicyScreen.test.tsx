@@ -75,6 +75,9 @@ function draw(policy: Policy): string {
   return renderToStaticMarkup(<PolicyView policy={policy} rows={ROWS} decimals={6} />)
 }
 
+/** The program's own four, so a test cannot invent a fifth. */
+const STATES: Policy['state'][] = ['active', 'paidOut', 'closedNoEvent', 'unclaimed']
+
 describe('PolicyView — the FR-040 disclosure', () => {
   it('tells the owner the payout is decided by the cell, not by the field', () => {
     expect(draw(POLICY)).toContain(basisRisk(POLICY, 6).trigger)
@@ -104,13 +107,32 @@ describe('PolicyView — the FR-040 disclosure', () => {
   })
 
   it('keeps the disclosure whatever the policy has done', () => {
-    // Including the state where it is most tempting to drop: a settled policy
-    // has already paid, and the owner is the one who might buy another.
-    for (const state of ['active', 'settled', 'closed']) {
+    // Including the state where it is most tempting to drop: a policy that has
+    // already paid, whose owner is the one who might buy another.
+    for (const state of STATES) {
       const markup = draw({ ...POLICY, state })
       expect(markup).toContain(basisRisk(POLICY, 6).trigger)
       expect(markup).toContain(basisRisk(POLICY, 6).cases[1].money)
     }
+  })
+
+  /**
+   * The screen must not contradict the chain about the one fact that is money.
+   *
+   * This is the shape of a bug that reached a deployed page: `runCaption`
+   * compared the state against `'settled'`, a name nothing produces, so
+   * `paidOut` fell through to the branch for a policy that closed with
+   * nothing. The API said `paidOut` in the same response the screen was
+   * drawing from. Asserted on the markup, because the markup is what the
+   * owner reads.
+   */
+  it('never tells a paid owner the policy closed without paying', () => {
+    for (const state of ['paidOut', 'unclaimed'] as const) {
+      const markup = draw({ ...POLICY, state })
+      expect(markup).not.toContain('closed without paying')
+    }
+    expect(draw({ ...POLICY, state: 'paidOut' })).toContain('this policy paid out')
+    expect(draw({ ...POLICY, state: 'closedNoEvent' })).toContain('closed without paying')
   })
 
   it('draws the strip and the terms it always drew', () => {
