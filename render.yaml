@@ -40,8 +40,17 @@ services:
         value: "75"
       - key: CYCLE_INTERVAL_MS
         value: "5000"
+      # How far back the aggregator reaches for days it never wrote. Seven is
+      # the honest default for a real day; here a day is two seconds, so seven
+      # of them is fourteen seconds of grace, and a run that got nine seconds
+      # ahead of the loop on 2026-09-24 left holes the log can never be filled
+      # in — days skipped past the window are unwritable, because the on-chain
+      # log only grows forwards, and a hole reads as no coverage and breaks a
+      # drought in two. Thirty is a minute of compressed grace. The price is
+      # thirty cheap "is this day already on chain" reads a cycle when the
+      # network is idle.
       - key: BACKLOG_DAYS
-        value: "7"
+        value: "30"
       - key: SHUTDOWN_TIMEOUT_MS
         value: "15000"
       - key: LOG_LEVEL

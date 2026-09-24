@@ -2,11 +2,13 @@ import type { CellSetup, CounterStore, RegistryStore } from '@pumpking/db'
 import {
   cellIdFromH3Index,
   cellResolution,
+  type Reading,
   type SignedReading,
   toSignedReadingWire,
 } from '@pumpking/shared'
 import {
   compression,
+  estimateSigningMs,
   playScenario,
   readScenario,
   type Scenario,
@@ -192,6 +194,14 @@ export type ScenarioRouteOptions = {
   now?: () => Date
   /** Injected so a test plays a 58-second run without waiting 58 seconds. */
   sleep?: (ms: number) => Promise<void>
+  /**
+   * What signing this run will cost, in milliseconds — injected so a test can
+   * state a cost instead of racing the machine it runs on (`T069`).
+   */
+  signingCost?: (
+    readings: readonly Reading[],
+    sensors: readonly ScenarioSensor[],
+  ) => Promise<number>
   /** Injected so a test can name the run instead of guessing its id. */
   newRunId?: () => string
 }
@@ -208,6 +218,7 @@ export const REMEMBERED_RUNS = 16
 
 export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
   const load = options.load ?? readScenario
+  const signingCost = options.signingCost ?? estimateSigningMs
   const now = options.now ?? (() => new Date())
   const newRunId = options.newRunId ?? (() => crypto.randomUUID())
 
@@ -322,10 +333,6 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
 
       const requestedAt = now()
       const genesisTs = request.genesisTs === undefined ? requestedAt : new Date(request.genesisTs)
-      // Where in the pool's life this run goes. On the first run the genesis is
-      // now and this is day zero; on a later one it is the next boundary, so no
-      // day is written twice and none is skipped.
-      const { dayOffset, startsAt } = scenarioStart(scenario, genesisTs, requestedAt)
       const cellId = cellIdFromH3Index(scenario.cell)
       const sensors: ScenarioSensor[] = await scenarioSensors(scenario)
 
@@ -366,6 +373,27 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
       // learned about has no counters, and before anything is published,
       // because from here on this run is the only writer.
       const counters = await options.counters.lastCounters(sensors.map((sensor) => sensor.pubkey))
+
+      // Where in the pool's life this run goes. On the first run the genesis is
+      // now and this is day zero; on a later one it is the next boundary, so no
+      // day is written twice and none is skipped.
+      //
+      // Chosen for the moment the run will be **ready**, not for the moment
+      // the request arrived (`T069`). Signing the readings is the work between
+      // the two, it cannot happen before the offset is known — a signature
+      // commits to the instant it was taken at — and on the deployment it took
+      // nine seconds, which at two seconds a day is four and a half days of a
+      // schedule that had already started running. The days go by whether or
+      // not their readings have been signed yet, and the aggregator closes
+      // them either way.
+      const readyAt = new Date(
+        now().getTime() +
+          (await signingCost(
+            scenarioReadings(scenario, genesisTs, sensors, { dayOffset: 0, counters }),
+            sensors,
+          )),
+      )
+      const { dayOffset, startsAt } = scenarioStart(scenario, genesisTs, requestedAt, readyAt)
       const signed = await signScenarioReadings(
         scenarioReadings(scenario, genesisTs, sensors, { dayOffset, counters }),
         sensors,

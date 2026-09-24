@@ -130,7 +130,12 @@ beforeEach(() => {
   ids = 0
 })
 
-type RouteOverrides = { enabled?: boolean; load?: (name: string) => Scenario }
+type RouteOverrides = {
+  enabled?: boolean
+  load?: (name: string) => Scenario
+  /** Milliseconds the run is told signing will take — `T069`. */
+  signingMs?: number
+}
 
 function route(overrides: RouteOverrides = {}) {
   return createScenarioRoute({
@@ -139,6 +144,7 @@ function route(overrides: RouteOverrides = {}) {
     counters: store,
     publisher,
     load: overrides.load ?? (() => scenario()),
+    signingCost: () => Promise.resolve(overrides.signingMs ?? 0),
     now: () => STARTED_AT,
     // The compressed clock is still a clock; the run is only asked not to
     // spend two real seconds proving it.
@@ -277,6 +283,37 @@ describe('POST /v1/scenario/run', () => {
     const run = (await response.json()) as RunWire
     expect(run.genesisTs).toBe(STARTED_AT.toISOString())
     expect(run.startedAt).toBe(STARTED_AT.toISOString())
+  })
+
+  /**
+   * `T069`, and it cost a devnet run to learn. The schedule is chosen for the
+   * moment the run can start publishing, not for the moment the request
+   * arrived — a reading's signature commits to the instant it was measured, so
+   * nothing can be signed until the day offset is fixed, and then thousands of
+   * signatures happen while that offset's days go by. On the deployment that
+   * was nine seconds against a two-second day: four and a half days elapsed
+   * before the first reading, the aggregator closed them, and an eighteen-day
+   * drought reached the chain as thirteen.
+   */
+  it('starts the run past the days that elapse while it is being signed', async () => {
+    // Ten seconds of signing on two-second days: five days go by first.
+    const response = await post(BODY, { signingMs: 10_000 })
+    const run = (await response.json()) as RunWire
+    expect(run.firstDay).toBe(5)
+    expect(run.startedAt).toBe(new Date(STARTED_AT.getTime() + 10_000).toISOString())
+  })
+
+  /**
+   * The same on a pool that is already alive, where the day the request lands
+   * in may already hold the previous chapter's last reading — so the signing
+   * time and the day of grace are both counted, and they are counted once each.
+   */
+  it('counts the signing time on top of the day a live pool is already in', async () => {
+    const genesisTs = new Date(STARTED_AT.getTime() - 8_000).toISOString()
+    const response = await post({ ...BODY, genesisTs }, { signingMs: 10_000 })
+    const run = (await response.json()) as RunWire
+    // Day 4 when the request arrives, day 9 when signing ends, day 10 is free.
+    expect(run.firstDay).toBe(10)
   })
 
   it('takes the genesis the body names', async () => {

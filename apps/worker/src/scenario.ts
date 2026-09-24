@@ -286,12 +286,32 @@ export type ScenarioStart = {
  *
  * A genesis in the future gives day zero, not a negative one: the pool has no
  * days before it exists, and `intervalStart` refuses to name one.
+ *
+ * **`readyAt` is when the caller can actually start publishing** (`T069`), and
+ * it is a separate instant from `at` because two different facts are being
+ * asked. `at` decides whether the current day is *free*: only a pool that
+ * begins with this run has nothing in it. `readyAt` decides which day is
+ * *still ahead*: a caller with thousands of readings to sign is not ready for
+ * several compressed days after the request, and a schedule chosen for the
+ * request has those days elapse before a single reading is published. On the
+ * deployment that was nine seconds of signing against a two-second day, and
+ * the aggregator closed four and a half days while the run was still preparing
+ * to publish into them.
  */
-export function scenarioStart(scenario: Scenario, genesisTs: Date, at: Date): ScenarioStart {
+export function scenarioStart(
+  scenario: Scenario,
+  genesisTs: Date,
+  at: Date,
+  readyAt: Date = at,
+): ScenarioStart {
   const clock = scenarioClock(scenario, genesisTs)
-  const elapsed = at.getTime() - genesisTs.getTime()
   const dayMs = scenario.clock.secondsPerDay * 1000
-  const dayOffset = elapsed <= 0 ? 0 : Math.floor(elapsed / dayMs) + 1
+  // The day publishing can begin in: everything before it is over by then.
+  const startDay = Math.floor(Math.max(0, readyAt.getTime() - genesisTs.getTime()) / dayMs)
+  // A pool already alive may have the previous run's last reading in that day;
+  // one born with this run cannot.
+  const alive = at.getTime() > genesisTs.getTime()
+  const dayOffset = alive ? startDay + 1 : startDay
   return { dayOffset, startsAt: intervalStart(clock, dayOffset, 0) }
 }
 
@@ -443,6 +463,48 @@ export async function signScenarioReadings(
       return { ...reading, signature: await signReading(reading, secretKey) }
     }),
   )
+}
+
+/**
+ * Signatures timed before the schedule is chosen, and the margin over what
+ * they measure.
+ *
+ * A sample rather than the whole run because the cost is per signature and the
+ * point is to learn it, not to pay it twice. A margin because the estimate is
+ * one-sided: overshooting costs a few uncovered days *before* the chapter,
+ * which break a spell in the gap between chapters where nothing is claimed;
+ * undershooting costs days *inside* it, and those are the ones a payout is
+ * counted from.
+ */
+const SIGNING_SAMPLE = 64
+const SIGNING_MARGIN = 1.5
+
+/**
+ * How long signing this run will take, in milliseconds — `T069`.
+ *
+ * Preparation happens **after** the schedule is chosen: `measuredAt` is fixed
+ * by the day offset, and a signature cannot be made before the instant it
+ * commits to is known. So every millisecond spent signing afterwards is a
+ * millisecond of the first day already gone, and on the deployment on
+ * 2026-09-24 that was nine seconds — four and a half compressed days. The
+ * aggregator closed those days while their readings were still being signed:
+ * two of them empty, two skipped past the backlog entirely, and an eighteen-day
+ * drought reached the chain as one day, a gap, and thirteen.
+ *
+ * Which is why this is measured and not guessed. It is a signature on the same
+ * curve over the same bytes as the ones the run will make, on whatever CPU the
+ * deployment actually has.
+ */
+export async function estimateSigningMs(
+  readings: readonly Reading[],
+  sensors: readonly ScenarioSensor[],
+): Promise<number> {
+  if (readings.length === 0) return 0
+  const sample = readings.slice(0, Math.min(SIGNING_SAMPLE, readings.length))
+  const startedAt = performance.now()
+  await signScenarioReadings(sample, sensors)
+  const perReading = (performance.now() - startedAt) / sample.length
+  return perReading * readings.length * SIGNING_MARGIN
 }
 
 /* -------------------------------------------------------------------------- */

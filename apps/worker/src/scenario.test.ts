@@ -13,6 +13,7 @@ import { type ClosedInterval, closeDay, closeInterval, intervalStart } from './i
 import {
   compression,
   DEFAULT_PUBLISH_CONCURRENCY,
+  estimateSigningMs,
   loadScenario,
   playScenario,
   readScenario,
@@ -429,6 +430,36 @@ describe('scenarioStart', () => {
     expect(start.startsAt.getTime()).toBe(GENESIS.getTime() + dayMs * 30)
   })
 
+  /**
+   * `T069`. Publishing cannot begin until the readings are signed, and they
+   * cannot be signed until the offset that fixes their `measuredAt` is chosen.
+   * So the days between the request and the first reading go by whether or not
+   * anything has been published into them — and the aggregator closes them.
+   */
+  it('starts past every day that elapses before the run is ready', () => {
+    const run = scenario()
+    const dayMs = run.clock.secondsPerDay * 1000
+    const at = new Date(GENESIS.getTime() + dayMs * 3 + 1)
+    const readyAt = new Date(at.getTime() + dayMs * 5)
+    const start = scenarioStart(run, GENESIS, at, readyAt)
+    // Day 8 is where the signing ends; day 9 is the first one still ahead.
+    expect(start.dayOffset).toBe(9)
+    expect(start.startsAt.getTime()).toBe(GENESIS.getTime() + dayMs * 9)
+  })
+
+  /**
+   * A pool born with the run has nothing in the day it starts in, so it does
+   * not get the extra day of grace — but it still does not get days that are
+   * already over by the time it can publish.
+   */
+  it('gives a new pool the day it will be ready in, not the one it asked in', () => {
+    const run = scenario()
+    const dayMs = run.clock.secondsPerDay * 1000
+    const start = scenarioStart(run, GENESIS, GENESIS, new Date(GENESIS.getTime() + dayMs * 4))
+    expect(start.dayOffset).toBe(4)
+    expect(start.startsAt.getTime()).toBe(GENESIS.getTime() + dayMs * 4)
+  })
+
   it('gives day zero for a genesis still in the future', () => {
     const start = scenarioStart(scenario(), GENESIS, new Date(GENESIS.getTime() - 60_000))
     expect(start.dayOffset).toBe(0)
@@ -808,5 +839,35 @@ describe('loadScenario', () => {
   it('refuses a name that is a path', () => {
     expect(() => readScenario('../../secrets')).toThrow(RangeError)
     expect(() => readScenario('Drought')).toThrow(RangeError)
+  })
+})
+
+describe('estimateSigningMs', () => {
+  const scenario = (): Scenario => readScenario('drought')
+
+  it('is nothing when there is nothing to sign', async () => {
+    const sensors = await scenarioSensors(scenario())
+    expect(await estimateSigningMs([], sensors)).toBe(0)
+  })
+
+  /**
+   * The number is a duration measured on the machine the run is about to
+   * happen on, so the test can only hold its shape: a real cost for a real
+   * run, and one that grows with the run rather than with the sample. What it
+   * protects against is the estimate quietly becoming zero — an estimate of
+   * zero is the bug `T069` found, dressed as a fix.
+   */
+  it('scales with the run rather than with the sample it measured', async () => {
+    const run = scenario()
+    const sensors = await scenarioSensors(run)
+    const readings = scenarioReadings(run, GENESIS, sensors)
+    expect(readings.length).toBeGreaterThan(64)
+
+    const whole = await estimateSigningMs(readings, sensors)
+    const half = await estimateSigningMs(readings.slice(0, readings.length / 2), sensors)
+    expect(whole).toBeGreaterThan(0)
+    // The sample is the same size in both, so the only thing that differs is
+    // what it was extrapolated to.
+    expect(whole).toBeGreaterThan(half)
   })
 })

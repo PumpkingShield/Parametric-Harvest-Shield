@@ -360,9 +360,11 @@ if (slowest < requiredRate) {
   console.log('less coverage than the fixture describes and the policy may pay nothing.')
 }
 
-if (policyChild !== null) {
+// The policy script gives up on its own timeout, so this only waits for it —
+// and only if it is still running. Attaching to `exit` on a child that has
+// already left is a promise nobody will ever settle.
+if (policyChild !== null && policyChild.exitCode === null && !policyChild.killed) {
   await new Promise((resolve) => {
     policyChild.on('exit', resolve)
-    // The policy script gives up on its own timeout; this only waits for it.
   })
 }
