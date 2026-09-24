@@ -19,6 +19,14 @@
 //                           never the pool authority: a pool that can print
 //                           its own asset is solvent by definition, which
 //                           makes the SC-006 check meaningless.
+//   OPERATOR_{A,B,C}        the three operators the fixtures name. `FR-009`
+//                           counts one vote per operator and `operators.wallet`
+//                           is where rewards land and burnt stake comes from,
+//                           so a scenario run has to name a key somebody holds
+//                           rather than one invented for the column. They sign
+//                           nothing on M1 — open registration and stake are
+//                           `register_sensor`, which is M2 — so they need no
+//                           SOL, and `devnet-prepare.sh` does not fund them.
 //
 // Run: node scripts/devnet-keys.mjs
 // Idempotent: a key already in `.env` is kept, never regenerated.
@@ -44,6 +52,11 @@ const ROLES = [
     what: 'the farmer: buys the demo policy, pays the premium, receives the payout',
     sol: '~0.02',
   },
+  ...['A', 'B', 'C'].map((letter) => ({
+    name: `OPERATOR_${letter}_KEYPAIR`,
+    what: `operator-${letter.toLowerCase()} of the fixtures: one vote in the cell, and where its rewards would land`,
+    sol: 'none — it signs nothing before M2',
+  })),
 ]
 
 function readEnv() {
@@ -95,4 +108,7 @@ for (const role of report) {
   console.log(`    ${role.what}`)
   console.log(`    devnet SOL needed: ${role.sol}\n`)
 }
-console.log('scripts/devnet-prepare.sh (WSL) funds all three from the CLI wallet; run scripts/devnet-deploy.sh first.')
+console.log(
+  'scripts/devnet-prepare.sh (WSL) funds the three that send transactions, from the CLI wallet;',
+)
+console.log('run scripts/devnet-deploy.sh first. The operator keys need no funding.')
