@@ -462,7 +462,41 @@ export type PlayOptions = {
   now?: () => Date
   /** Injected so a test plays a 58-second run without waiting 58 seconds. */
   sleep?: (ms: number) => Promise<void>
+  /** How many publications may be in the air at once. `T069`, and see below. */
+  concurrency?: number
 }
+
+/**
+ * Publications in flight at once — the number `T069` turned on.
+ *
+ * A reading costs the intake two round trips to Postgres: the registry lookup
+ * that turns a key into a vote, and the insert the counter's unique index
+ * arbitrates. Measured from the deployment on 2026-09-24, one round trip
+ * Frankfurt → Supabase eu-west-1 is **45 ms** at p50 and 76 ms at p90, so a
+ * reading costs ~90 ms and a run that awaits each one publishes **11 a
+ * second**. The demo clock asks for 36: 24 intervals × 3 sensors on a
+ * two-second day.
+ *
+ * **Publishing the readings of one interval together is not enough**, and that
+ * is worth writing down because it was the obvious fix. Three sensors share an
+ * instant, so a per-interval batch is 3 ÷ 0.09 s = 33 a second — under the 36
+ * the clock asks for, and the interval gap is 83 ms against a batch that takes
+ * 90. The overlap has to cross intervals, so the bound is on readings in the
+ * air rather than on a group.
+ *
+ * Eight, and the ceiling above it is the connection pool: `DEFAULT_POOL_SIZE`
+ * connections, one query at a time each. Eight leaves two for the aggregator
+ * turning in the same process and puts the rate at 89 a second at p50 and 53
+ * at p90 — the margin is over the slow half, not over the fast one.
+ *
+ * **Out-of-order arrival is not a hazard here.** A sensor's counters still
+ * ascend (`FR-003` numbers them, it does not promise a delivery order), the
+ * unique index does not care which of them lands first, and a median is taken
+ * over an hour's rows rather than over the order they arrived in. What
+ * concurrency must not do is publish a reading *early*, and it does not: the
+ * due time is still a floor every reading waits for.
+ */
+export const DEFAULT_PUBLISH_CONCURRENCY = 8
 
 const realSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -482,6 +516,19 @@ const realSleep = (ms: number): Promise<void> =>
  * A reading already due is published without waiting. That is what lets the
  * same function replay a finished run at full speed — the schedule is a floor
  * on when a reading may appear, not a promise that the sink can keep up.
+ *
+ * **Up to `concurrency` publications are in the air at once** (`T069`). A run
+ * that awaited each one moved at the speed of one round trip to the database,
+ * which is a third of what the compressed clock asks for over any distance
+ * worth deploying across; the reasoning and the numbers are on
+ * `DEFAULT_PUBLISH_CONCURRENCY`. The schedule is unchanged by it: a reading is
+ * still launched no earlier than its due time, and the bound is on how many
+ * may still be unfinished, not on when the next one starts.
+ *
+ * A sink that throws still ends the run, and still with the first thing that
+ * went wrong — but the readings already in the air are waited for first. There
+ * is no other honest answer: they have been published, and a run that returned
+ * while its own writes were landing would report a total nobody could check.
  */
 export async function playScenario(
   readings: readonly SignedReading[],
@@ -492,15 +539,51 @@ export async function playScenario(
   const sleep = options.sleep ?? realSleep
   const genesis = options.genesisTs.getTime()
   const started = options.startedAt.getTime()
+  const concurrency = options.concurrency ?? DEFAULT_PUBLISH_CONCURRENCY
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError(`concurrency is not a positive integer: ${concurrency}`)
+  }
 
   const ordered = [...readings].sort(
     (a, b) => a.measuredAt.getTime() - b.measuredAt.getTime() || Number(a.counter - b.counter),
   )
 
+  const inFlight = new Set<Promise<void>>()
+  // An array rather than a nullable variable: what a sink rejected with may
+  // itself be nullish, and `length` says a failure happened without having to
+  // ask what it was.
+  const failures: unknown[] = []
+
+  const launch = (reading: SignedReading): void => {
+    // The rejection is caught on the same tick the promise is made. Anything
+    // later is an unhandled rejection between the launch and the next slot
+    // check, which on Node is the process, not the run.
+    const done: Promise<void> = Promise.resolve()
+      .then(() => sink.publish(reading))
+      .catch((cause: unknown) => {
+        failures.push(cause)
+      })
+      .finally(() => {
+        inFlight.delete(done)
+      })
+    inFlight.add(done)
+  }
+
   for (const reading of ordered) {
     const due = started + (reading.measuredAt.getTime() - genesis)
     const wait = due - now().getTime()
     if (wait > 0) await sleep(wait)
-    await sink.publish(reading)
+    // The slot is taken before the launch and not after: waiting afterwards
+    // would let every overdue reading start before anything had to finish,
+    // which is the unbounded queue this bound exists to refuse.
+    while (inFlight.size >= concurrency) await Promise.race(inFlight)
+    if (failures.length > 0) break
+    launch(reading)
   }
+
+  await Promise.all([...inFlight])
+  // The first one. A sink that fell over took its neighbours with it, and the
+  // second message is the consequence rather than the cause.
+  const [failure] = failures
+  if (failures.length > 0) throw failure
 }

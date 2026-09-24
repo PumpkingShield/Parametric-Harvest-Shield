@@ -35,17 +35,32 @@ export type DbOptions = {
   /**
    * Connections in the pool.
    *
-   * Small on purpose: Supabase's free tier counts pooler connections across
-   * every service, and there are three of them (api, worker, migrations). The
-   * work here is short queries, not long transactions, so a deeper pool buys
-   * nothing a queue does not.
+   * Still small: Supabase's free tier counts pooler connections across every
+   * service, the work here is short queries rather than long transactions, and
+   * a deeper pool buys nothing a queue does not — *until* the queue is what
+   * the run is waiting on, which is what `T069` measured.
    */
   max?: number
   /** Seconds a query may run before the driver gives up. */
   connectTimeoutSeconds?: number
 }
 
-export const DEFAULT_POOL_SIZE = 5
+/**
+ * Ten, and the number is a rate rather than a taste — `T069`.
+ *
+ * A connection runs one query at a time, so a pool of `n` against a database
+ * `r` milliseconds away serves `n / r` queries a second and no more. From
+ * Render's Frankfurt region to Supabase in eu-west-1, `r` measured 45 ms at
+ * p50 and 76 ms at p90 on 2026-09-24; a demo reading costs two queries (the
+ * registry lookup and the insert), so the demo clock's 36 readings a second is
+ * 72 queries a second. Five connections give 66 at p50 and **39 at p90** —
+ * under the clock exactly when the database is slow, which is the half that
+ * decides whether a day closes covered.
+ *
+ * Ten put it at 132 and 79. The three services the old number was sized for
+ * are now two, and one of them (migrations) runs from a laptop, once.
+ */
+export const DEFAULT_POOL_SIZE = 10
 export const DEFAULT_CONNECT_TIMEOUT_SECONDS = 10
 
 export function createDb(url: string, options: DbOptions = {}): DbHandle {

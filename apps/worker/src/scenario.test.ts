@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { type ClosedInterval, closeDay, closeInterval, intervalStart } from './interval.ts'
 import {
   compression,
+  DEFAULT_PUBLISH_CONCURRENCY,
   loadScenario,
   playScenario,
   readScenario,
@@ -521,6 +522,222 @@ describe('playScenario', () => {
       },
     )
     expect(slept).toEqual([])
+  })
+
+  /**
+   * A sink that answers only when the test lets it, so what the run does while
+   * a publication is unfinished is visible rather than inferred.
+   */
+  const gatedSink = () => {
+    const started: bigint[] = []
+    const gates: (() => void)[] = []
+    let live = 0
+    let peak = 0
+    return {
+      started,
+      peak: () => peak,
+      pending: () => gates.length,
+      release(count: number) {
+        for (let i = 0; i < count; i += 1) {
+          const gate = gates.shift()
+          if (gate === undefined) break
+          gate()
+        }
+      },
+      sink: {
+        publish(reading: SignedReading) {
+          started.push(reading.counter)
+          live += 1
+          peak = Math.max(peak, live)
+          return new Promise<void>((resolve) => {
+            gates.push(() => {
+              live -= 1
+              resolve()
+            })
+          })
+        },
+      },
+    }
+  }
+
+  /** Lets every microtask queued so far run, and nothing else. */
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+  }
+
+  /**
+   * `T069`, and the reason the bound is on readings rather than on intervals:
+   * the fourth reading starts while the first three are still unfinished, and
+   * it belongs to the *next* interval. A run that published an interval at a
+   * time would be sitting here waiting for the second sensor of the first one.
+   */
+  it('publishes past the interval a reading belongs to while earlier ones are unfinished', async () => {
+    const gated = gatedSink()
+    const overdue = new Date(GENESIS.getTime() - 60_000)
+    // Three intervals, two sensors each. Every one of them is already due.
+    const readings = [
+      signed(new Date(GENESIS.getTime()), 1n),
+      signed(new Date(GENESIS.getTime()), 2n),
+      signed(new Date(GENESIS.getTime() + 83), 3n),
+      signed(new Date(GENESIS.getTime() + 83), 4n),
+      signed(new Date(GENESIS.getTime() + 166), 5n),
+      signed(new Date(GENESIS.getTime() + 166), 6n),
+    ]
+
+    const run = playScenario(readings, gated.sink, {
+      genesisTs: GENESIS,
+      startedAt: overdue,
+      now: () => GENESIS,
+      sleep: () => Promise.resolve(),
+      concurrency: 3,
+    })
+
+    await settle()
+    expect(gated.started).toEqual([1n, 2n, 3n])
+
+    // One finishes, and the reading that takes its slot is from the interval
+    // after the one still in the air.
+    gated.release(1)
+    await settle()
+    expect(gated.started).toEqual([1n, 2n, 3n, 4n])
+
+    // Released a slot at a time from here on: a reading that has not been
+    // launched yet has no gate to open, so releasing six at once would leave
+    // the last two of them waiting on a gate that was opened before they
+    // existed.
+    let finished = false
+    const ended = run.then(() => {
+      finished = true
+    })
+    for (let i = 0; i < 20 && !finished; i += 1) {
+      gated.release(gated.pending())
+      await settle()
+    }
+    await ended
+    expect(gated.started).toHaveLength(6)
+    expect(gated.peak()).toBe(3)
+  })
+
+  /**
+   * The bound is a bound. Overdue readings are the case that would break it:
+   * every one of them is ready to launch and nothing makes the loop pause.
+   */
+  it('never has more publications in the air than it was given room for', async () => {
+    const gated = gatedSink()
+    const readings = Array.from({ length: 20 }, (_, index) =>
+      signed(new Date(GENESIS.getTime() + index), BigInt(index + 1)),
+    )
+
+    const run = playScenario(readings, gated.sink, {
+      genesisTs: GENESIS,
+      startedAt: new Date(GENESIS.getTime() - 60_000),
+      now: () => GENESIS,
+      sleep: () => Promise.resolve(),
+      concurrency: 4,
+    })
+
+    await settle()
+    expect(gated.started).toHaveLength(4)
+    for (let i = 0; i < 16; i += 1) {
+      gated.release(1)
+      await settle()
+      expect(gated.peak()).toBeLessThanOrEqual(4)
+    }
+    gated.release(4)
+    await run
+    expect(gated.started).toHaveLength(20)
+  })
+
+  /**
+   * A run reports what it published, so it cannot end while publications are
+   * still landing: `status: "done"` is the signal the second chapter and the
+   * policy script both key off.
+   */
+  it('does not finish while a publication is still in the air', async () => {
+    const gated = gatedSink()
+    let finished = false
+    const run = playScenario(
+      [signed(new Date(GENESIS.getTime()), 1n), signed(new Date(GENESIS.getTime()), 2n)],
+      gated.sink,
+      {
+        genesisTs: GENESIS,
+        startedAt: new Date(GENESIS.getTime() - 60_000),
+        now: () => GENESIS,
+        sleep: () => Promise.resolve(),
+        concurrency: 4,
+      },
+    ).then(() => {
+      finished = true
+    })
+
+    await settle()
+    gated.release(1)
+    await settle()
+    expect(finished).toBe(false)
+
+    gated.release(1)
+    await run
+    expect(finished).toBe(true)
+  })
+
+  it('ends the run on a sink that throws, and stops publishing', async () => {
+    const started: bigint[] = []
+    const run = playScenario(
+      [
+        signed(new Date(GENESIS.getTime()), 1n),
+        signed(new Date(GENESIS.getTime()), 2n),
+        signed(new Date(GENESIS.getTime()), 3n),
+      ],
+      {
+        publish(reading) {
+          started.push(reading.counter)
+          return reading.counter === 2n
+            ? Promise.reject(new Error('the door fell over'))
+            : Promise.resolve()
+        },
+      },
+      {
+        genesisTs: GENESIS,
+        startedAt: new Date(GENESIS.getTime() - 60_000),
+        now: () => GENESIS,
+        sleep: () => Promise.resolve(),
+        concurrency: 1,
+      },
+    )
+
+    await expect(run).rejects.toThrow('the door fell over')
+    expect(started).toEqual([1n, 2n])
+  })
+
+  it('refuses a concurrency that is not a positive whole number', async () => {
+    const play = (concurrency: number): Promise<void> =>
+      playScenario(
+        [signed(GENESIS, 1n)],
+        { publish: () => Promise.resolve() },
+        {
+          genesisTs: GENESIS,
+          startedAt: GENESIS,
+          now: () => GENESIS,
+          concurrency,
+        },
+      )
+    await expect(play(0)).rejects.toThrow(RangeError)
+    await expect(play(1.5)).rejects.toThrow(RangeError)
+  })
+
+  /**
+   * The default is a rate, and this is the rate it has to clear — `T069`.
+   * Lowering it below what the demo clock asks for is the failure this guards:
+   * the run falls behind, the aggregator closes the days it was still
+   * publishing into, and the policy sees a cell with no coverage.
+   */
+  it('leaves room for the demo clock at the round trip that was measured', () => {
+    // 24 intervals x 3 sensors on a two-second day - fixtures/scenarios/*.json.
+    const readingsPerSecond = (24 * 3) / 2
+    // Two round trips per reading, at the p90 measured from Render on
+    // 2026-09-24. The p50 was 45 ms; the margin is wanted over the slow half.
+    const secondsPerReading = 2 * 0.076
+    expect(DEFAULT_PUBLISH_CONCURRENCY / secondsPerReading).toBeGreaterThan(readingsPerSecond)
   })
 })
 
