@@ -6,7 +6,7 @@ import {
   verifyReadingSignature,
 } from '@pumpking/shared'
 import { Hono } from 'hono'
-import type { ZodError } from 'zod'
+import { apiError, fieldErrors } from '../errors.ts'
 
 /**
  * `POST /v1/readings` — the only door a measurement enters through.
@@ -59,14 +59,6 @@ export type ReadingsRouteOptions = {
   maxAgeMs?: number
 }
 
-/** `FR-041`: which field, and what was wrong with it. */
-function fieldErrors(error: ZodError): { field: string; message: string }[] {
-  return error.issues.map((issue) => ({
-    field: issue.path.map(String).join('.') || '(body)',
-    message: issue.message,
-  }))
-}
-
 export function createReadingsRoute(options: ReadingsRouteOptions): Hono {
   const { store } = options
   const now = options.now ?? (() => new Date())
@@ -77,12 +69,14 @@ export function createReadingsRoute(options: ReadingsRouteOptions): Hono {
     try {
       body = await context.req.json()
     } catch {
-      return context.json({ error: 'body must be JSON' }, 400)
+      return apiError(context, 400, 'body must be JSON')
     }
 
     const parsed = signedReadingSchema.safeParse(body)
     if (!parsed.success) {
-      return context.json({ error: 'invalid reading', fields: fieldErrors(parsed.error) }, 400)
+      return apiError(context, 400, 'invalid reading', {
+        fields: fieldErrors(parsed.error, '(body)'),
+      })
     }
     const reading: SignedReading = parsed.data
 
@@ -91,7 +85,7 @@ export function createReadingsRoute(options: ReadingsRouteOptions): Hono {
       // Deliberately the same answer as a bad signature would get, and
       // deliberately not "no such sensor": whether a key is registered is not
       // a question an unauthenticated caller gets to enumerate.
-      return context.json({ error: 'unknown sensor or invalid signature' }, 401)
+      return apiError(context, 401, 'unknown sensor or invalid signature')
     }
 
     // `FR-058`: the cell comes from the registration. The reading carries it
@@ -99,26 +93,18 @@ export function createReadingsRoute(options: ReadingsRouteOptions): Hono {
     // disagreement is a signature over the wrong claim rather than a
     // correction to apply.
     if (sensor.cellId !== reading.cellId) {
-      return context.json(
-        {
-          error: 'reading names a cell the sensor is not registered in',
-          fields: [{ field: 'cellId', message: `must be ${h3IndexFromCellId(sensor.cellId)}` }],
-        },
-        400,
-      )
+      return apiError(context, 400, 'reading names a cell the sensor is not registered in', {
+        fields: [{ field: 'cellId', message: `must be ${h3IndexFromCellId(sensor.cellId)}` }],
+      })
     }
     if (sensor.kind !== reading.kind) {
-      return context.json(
-        {
-          error: 'reading names a kind the sensor is not registered for',
-          fields: [{ field: 'kind', message: `must be ${sensor.kind}` }],
-        },
-        400,
-      )
+      return apiError(context, 400, 'reading names a kind the sensor is not registered for', {
+        fields: [{ field: 'kind', message: `must be ${sensor.kind}` }],
+      })
     }
 
     if (!(await verifyReadingSignature(reading))) {
-      return context.json({ error: 'unknown sensor or invalid signature' }, 401)
+      return apiError(context, 401, 'unknown sensor or invalid signature')
     }
 
     const receivedAt = now()
@@ -146,12 +132,8 @@ export function createReadingsRoute(options: ReadingsRouteOptions): Hono {
     if (outcome.existingSignature === reading.signature) {
       return context.json({ status: outcome.status, counter: Number(reading.counter) }, 200)
     }
-    return context.json(
-      {
-        error: 'counter already used by a different reading',
-        fields: [{ field: 'counter', message: 'must be greater than any counter already sent' }],
-      },
-      409,
-    )
+    return apiError(context, 409, 'counter already used by a different reading', {
+      fields: [{ field: 'counter', message: 'must be greater than any counter already sent' }],
+    })
   })
 }

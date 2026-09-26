@@ -122,11 +122,21 @@ describe('fetchPolicy', () => {
 
   it('carries the route’s own message and status', async () => {
     const failed = fetchPolicy('https://api.app', POLICY.policy, {
-      fetch: answering(404, { error: 'no policy at that address' }),
+      fetch: answering(404, {
+        error: { code: 'NOT_FOUND', message: 'no policy at that address', details: {} },
+      }),
     })
 
     await expect(failed).rejects.toThrow('no policy at that address')
     await expect(failed).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('still reads the bare-string error of an API deployed before T065', async () => {
+    const failed = fetchPolicy('https://api.app', POLICY.policy, {
+      fetch: answering(404, { error: 'no policy at that address' }),
+    })
+
+    await expect(failed).rejects.toThrow('no policy at that address')
   })
 
   it('says something when the answer is not JSON at all', async () => {

@@ -1,7 +1,8 @@
 import type { DayRow, IntervalStore } from '@pumpking/db'
 import { cellIdFromH3Index, H3_CELL_PATTERN } from '@pumpking/shared'
 import { Hono } from 'hono'
-import { type ZodError, z } from 'zod'
+import { z } from 'zod'
+import { apiError, fieldErrors } from '../errors.ts'
 
 /**
  * `GET /v1/cells/:cellId/days?from&to` — the cell's day journal, as the
@@ -67,14 +68,6 @@ function dayParam(value: string | undefined): number {
   return value === undefined || value.trim() === '' ? Number.NaN : Number(value)
 }
 
-/** `FR-041`: which field, and what was wrong with it. */
-function fieldErrors(error: ZodError): { field: string; message: string }[] {
-  return error.issues.map((issue) => ({
-    field: issue.path.map(String).join('.') || '(query)',
-    message: issue.message,
-  }))
-}
-
 /** A day as the wire carries it. */
 export type DayWire = {
   dayIndex: number
@@ -113,13 +106,9 @@ export function createCellsRoute(options: CellsRouteOptions): Hono {
   return new Hono().get('/:cellId/days', async (context) => {
     const cellIndex = context.req.param('cellId')
     if (!H3_CELL_PATTERN.test(cellIndex)) {
-      return context.json(
-        {
-          error: 'invalid cell',
-          fields: [{ field: 'cellId', message: 'must be an H3 cell index in hex' }],
-        },
-        400,
-      )
+      return apiError(context, 400, 'invalid cell', {
+        fields: [{ field: 'cellId', message: 'must be an H3 cell index in hex' }],
+      })
     }
 
     const parsed = daysQuerySchema.safeParse({
@@ -129,7 +118,9 @@ export function createCellsRoute(options: CellsRouteOptions): Hono {
       to: dayParam(context.req.query('to')),
     })
     if (!parsed.success) {
-      return context.json({ error: 'invalid range', fields: fieldErrors(parsed.error) }, 400)
+      return apiError(context, 400, 'invalid range', {
+        fields: fieldErrors(parsed.error, '(query)'),
+      })
     }
     const { from, to } = parsed.data
 

@@ -8,6 +8,7 @@ import {
   toSignedReadingWire,
 } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { FieldsBody } from '../errors.ts'
 import { classifyArrival, createReadingsRoute, DEFAULT_MAX_AGE_MS } from './readings.ts'
 
 const H3 = '871e701b3ffffff'
@@ -155,7 +156,9 @@ describe('POST /v1/readings', () => {
 
     expect(forged.status).toBe(401)
     expect(unknown.status).toBe(401)
-    expect(await unknown.json()).toEqual(await forged.json())
+    const refusal = await unknown.json()
+    expect(refusal).toEqual(await forged.json())
+    expect(refusal).toMatchObject({ error: { code: 'UNAUTHORIZED' } })
   })
 
   /* ------------------------------------------------------------------ */
@@ -167,7 +170,7 @@ describe('POST /v1/readings', () => {
     const response = await post(elsewhere)
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({
-      fields: [{ field: 'cellId' }],
+      error: { code: 'INVALID_INPUT', details: { fields: [{ field: 'cellId' }] } },
     })
     expect(store.rows.size).toBe(0)
   })
@@ -196,7 +199,9 @@ describe('POST /v1/readings', () => {
     await post(await body())
     const response = await post(await body({ valueX100: 9_999 }))
     expect(response.status).toBe(409)
-    expect(await response.json()).toMatchObject({ fields: [{ field: 'counter' }] })
+    expect(await response.json()).toMatchObject({
+      error: { code: 'CONFLICT', details: { fields: [{ field: 'counter' }] } },
+    })
     expect([...store.rows.values()][0]?.valueX100).toBe(250)
   })
 
@@ -207,16 +212,16 @@ describe('POST /v1/readings', () => {
   it('names the field that is wrong', async () => {
     const response = await post({ ...(await body()), valueX100: 'wet' })
     expect(response.status).toBe(400)
-    const payload = (await response.json()) as { fields: { field: string }[] }
-    expect(payload.fields.map((one) => one.field)).toContain('valueX100')
+    const payload = (await response.json()) as FieldsBody
+    expect(payload.error.details.fields.map((one) => one.field)).toContain('valueX100')
   })
 
   it('names a field that is missing rather than filling it in', async () => {
     const { counter: _counter, ...without } = await body()
     const response = await post(without)
     expect(response.status).toBe(400)
-    const payload = (await response.json()) as { fields: { field: string }[] }
-    expect(payload.fields.map((one) => one.field)).toContain('counter')
+    const payload = (await response.json()) as FieldsBody
+    expect(payload.error.details.fields.map((one) => one.field)).toContain('counter')
   })
 
   /**

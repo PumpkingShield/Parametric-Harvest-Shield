@@ -1,6 +1,7 @@
 import type { DayRow } from '@pumpking/db'
 import { cellIdFromH3Index, DayState } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { FieldsBody } from '../errors.ts'
 import { createCellsRoute, MAX_DAY_SPAN } from './cells.ts'
 
 const H3 = '871e701b3ffffff'
@@ -130,23 +131,23 @@ describe('GET /v1/cells/:cellId/days — refusals', () => {
   it('refuses a cell id that is not an H3 index', async () => {
     const response = await get('/not-a-cell/days?from=0&to=1')
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { fields: { field: string }[] }
-    expect(body.fields[0]?.field).toBe('cellId')
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields[0]?.field).toBe('cellId')
     expect(store.asked).toEqual([])
   })
 
   it('refuses a range that is missing', async () => {
     const response = await get(`/${H3}/days`)
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { fields: { field: string }[] }
-    expect(body.fields.map((one) => one.field)).toEqual(['from', 'to'])
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields.map((one) => one.field)).toEqual(['from', 'to'])
   })
 
   it('refuses a day index that is not a whole number', async () => {
     const response = await get(`/${H3}/days?from=0.5&to=3`)
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { fields: { field: string }[] }
-    expect(body.fields[0]?.field).toBe('from')
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields[0]?.field).toBe('from')
   })
 
   it('refuses a negative day index', async () => {
@@ -157,8 +158,8 @@ describe('GET /v1/cells/:cellId/days — refusals', () => {
   it('refuses a range that runs backwards', async () => {
     const response = await get(`/${H3}/days?from=5&to=4`)
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { fields: { field: string; message: string }[] }
-    expect(body.fields[0]).toEqual({ field: 'to', message: 'must not be before from' })
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields[0]).toEqual({ field: 'to', message: 'must not be before from' })
   })
 
   it('refuses a span longer than a year', async () => {

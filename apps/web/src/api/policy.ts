@@ -177,7 +177,11 @@ async function read(url: string, options: RequestOptions): Promise<unknown> {
   }
 
   if (!response.ok) {
-    const named = record(body)?.error
+    // `{ error: { code, message, details } }` (`T065`). The bare string is the
+    // shape before it: Pages and Render deploy separately, so for a while this
+    // page can be talking to the API it was built before.
+    const error = record(body)?.error
+    const named = str(error) ? error : record(error)?.message
     throw new ApiError(str(named) ? named : `the API answered ${response.status}`, response.status)
   }
   return body

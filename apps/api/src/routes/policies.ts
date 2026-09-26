@@ -9,6 +9,7 @@ import {
 import { type IntervalStore, spellInWindow } from '@pumpking/db'
 import { decodeBase58, h3IndexFromCellId } from '@pumpking/shared'
 import { Hono } from 'hono'
+import { apiError } from '../errors.ts'
 
 /**
  * `GET /v1/policies/:pubkey` — the policy, and how long its dry run is right
@@ -150,20 +151,16 @@ export function createPoliciesRoute(options: PoliciesRouteOptions): Hono {
   return new Hono().get('/:pubkey', async (context) => {
     const address = context.req.param('pubkey')
     if (decodeBase58(address, ADDRESS_BYTES) === null) {
-      return context.json(
-        {
-          error: 'invalid policy address',
-          fields: [
-            { field: 'pubkey', message: `must be a base58-encoded ${ADDRESS_BYTES}-byte address` },
-          ],
-        },
-        400,
-      )
+      return apiError(context, 400, 'invalid policy address', {
+        fields: [
+          { field: 'pubkey', message: `must be a base58-encoded ${ADDRESS_BYTES}-byte address` },
+        ],
+      })
     }
 
     const policy = await policies.policyAt(address)
     if (policy === null) {
-      return context.json({ error: 'no policy at that address' }, 404)
+      return apiError(context, 404, 'no policy at that address')
     }
 
     const cellId = BigInt(policy.cellId.toString())

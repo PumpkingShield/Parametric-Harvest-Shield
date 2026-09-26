@@ -2,6 +2,7 @@ import { BN, type PolicyAccount, PublicKey } from '@pumpking/anchor-client'
 import type { DayRow } from '@pumpking/db'
 import { cellIdFromH3Index, DayState } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { FieldsBody } from '../errors.ts'
 import { createPoliciesRoute, type PolicyLookup } from './policies.ts'
 
 const H3 = '871e701b3ffffff'
@@ -190,8 +191,8 @@ describe('GET /v1/policies/:pubkey — refusals', () => {
   it('refuses an address that is not base58', async () => {
     const response = await get('not-an-address')
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { fields: { field: string }[] }
-    expect(body.fields[0]?.field).toBe('pubkey')
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields[0]?.field).toBe('pubkey')
   })
 
   it('refuses an address of the wrong width', async () => {

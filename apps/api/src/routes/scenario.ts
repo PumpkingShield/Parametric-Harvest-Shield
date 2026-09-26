@@ -20,7 +20,8 @@ import {
   signScenarioReadings,
 } from '@pumpking/worker/scenario'
 import { Hono } from 'hono'
-import { type ZodError, z } from 'zod'
+import { z } from 'zod'
+import { apiError, fieldErrors } from '../errors.ts'
 
 /**
  * `POST /v1/scenario/run` — the button the M1 demo is driven from, and it only
@@ -174,14 +175,6 @@ const runRequestSchema = z.strictObject({
   genesisTs: z.iso.datetime({ offset: true }).optional(),
 })
 
-/** `FR-041`: which field, and what was wrong with it. */
-function fieldErrors(error: ZodError): { field: string; message: string }[] {
-  return error.issues.map((issue) => ({
-    field: issue.path.map(String).join('.') || '(body)',
-    message: issue.message,
-  }))
-}
-
 export type ScenarioRouteOptions = {
   /** `SCENARIO_MODE=on`. False makes every path here answer 404. */
   enabled: boolean
@@ -230,7 +223,7 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
   if (!options.enabled) {
     // Every path, including the status one: with the mode off there is nothing
     // here to have an opinion about.
-    return app.all('/*', (context) => context.json({ error: 'not found' }, 404))
+    return app.all('/*', (context) => apiError(context, 404, 'not found'))
   }
 
   function remember(run: Run): void {
@@ -277,12 +270,14 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
       try {
         body = await context.req.json()
       } catch {
-        return context.json({ error: 'body must be JSON' }, 400)
+        return apiError(context, 400, 'body must be JSON')
       }
 
       const parsed = runRequestSchema.safeParse(body)
       if (!parsed.success) {
-        return context.json({ error: 'invalid run', fields: fieldErrors(parsed.error) }, 400)
+        return apiError(context, 400, 'invalid run', {
+          fields: fieldErrors(parsed.error, '(body)'),
+        })
       }
       const request = parsed.data
 
@@ -294,41 +289,30 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
       // harder to see. A demo that half works is worse than one that says it
       // is busy.
       if (active !== null) {
-        return context.json({ error: 'a scenario run is already in flight', run: active }, 409)
+        return apiError(context, 409, 'a scenario run is already in flight', { run: active })
       }
 
       let scenario: Scenario
       try {
         scenario = load(request.scenario)
       } catch (cause) {
-        return context.json(
-          {
-            error: 'no such scenario',
-            fields: [
-              {
-                field: 'scenario',
-                message: cause instanceof Error ? cause.message : String(cause),
-              },
-            ],
-          },
-          404,
-        )
+        return apiError(context, 404, 'no such scenario', {
+          fields: [
+            { field: 'scenario', message: cause instanceof Error ? cause.message : String(cause) },
+          ],
+        })
       }
 
       const missing = [...new Set(scenario.sensors.map((sensor) => sensor.operator))].filter(
         (label) => request.operators[label] === undefined,
       )
       if (missing.length > 0) {
-        return context.json(
-          {
-            error: 'the run has no wallet for every operator the scenario names',
-            fields: missing.map((label) => ({
-              field: `operators.${label}`,
-              message: 'must be a base58 wallet',
-            })),
-          },
-          400,
-        )
+        return apiError(context, 400, 'the run has no wallet for every operator the scenario names', {
+          fields: missing.map((label) => ({
+            field: `operators.${label}`,
+            message: 'must be a base58 wallet',
+          })),
+        })
       }
 
       const requestedAt = now()
@@ -355,18 +339,11 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
       } catch (cause) {
         // A slot already taken by a different key, most likely. The run has
         // not published anything, so saying so and stopping is the whole fix.
-        return context.json(
-          {
-            error: 'the registry disagrees with the scenario',
-            fields: [
-              {
-                field: 'scenario',
-                message: cause instanceof Error ? cause.message : String(cause),
-              },
-            ],
-          },
-          409,
-        )
+        return apiError(context, 409, 'the registry disagrees with the scenario', {
+          fields: [
+            { field: 'scenario', message: cause instanceof Error ? cause.message : String(cause) },
+          ],
+        })
       }
 
       // Read after `ensureCell`, because a sensor the registry has just
@@ -442,7 +419,7 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
     .get('/run/:id', (context) => {
       const run = runs.get(context.req.param('id'))
       if (run === undefined) {
-        return context.json({ error: 'no such run' }, 404)
+        return apiError(context, 404, 'no such run')
       }
       return context.json(run, 200)
     })

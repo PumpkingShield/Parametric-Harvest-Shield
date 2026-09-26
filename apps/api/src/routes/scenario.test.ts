@@ -16,6 +16,7 @@ import {
 } from '@pumpking/shared'
 import { loadScenario, type Scenario } from '@pumpking/worker/scenario'
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { FieldsBody } from '../errors.ts'
 import { createReadingsRoute } from './readings.ts'
 import {
   createScenarioRoute,
@@ -361,8 +362,8 @@ describe('POST /v1/scenario/run — refusals', () => {
   it('refuses a scenario name that is a path', async () => {
     const response = await post({ ...BODY, scenario: '../secrets' })
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { fields: { field: string }[] }
-    expect(body.fields[0]?.field).toBe('scenario')
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields[0]?.field).toBe('scenario')
   })
 
   it('refuses an operator wallet that is not base58', async () => {
@@ -377,8 +378,8 @@ describe('POST /v1/scenario/run — refusals', () => {
   it('refuses when an operator the scenario names has no wallet', async () => {
     const response = await post({ scenario: 'tiny', operators: { 'operator-a': WALLET_A } })
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { fields: { field: string }[] }
-    expect(body.fields.map((one) => one.field)).toEqual(['operators.operator-b'])
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields.map((one) => one.field)).toEqual(['operators.operator-b'])
     expect(registry.setups).toEqual([])
   })
 
@@ -413,9 +414,11 @@ describe('POST /v1/scenario/run — refusals', () => {
     expect(first.status).toBe(202)
     const second = await app.request('/run', { ...body, body: JSON.stringify(BODY) })
     expect(second.status).toBe(409)
-    expect((await second.json()) as { run: string }).toEqual(
-      expect.objectContaining({ run: 'run-1' }),
-    )
+    // The id of the run in flight goes with the refusal, so the caller can
+    // follow it instead of guessing.
+    expect(await second.json()).toMatchObject({
+      error: { code: 'CONFLICT', details: { run: 'run-1' } },
+    })
   })
 
   it('allows a run once the one before it has finished', async () => {

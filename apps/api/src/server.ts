@@ -2,6 +2,7 @@ import type { CounterStore, IntervalStore, ReadingStore, RegistryStore } from '@
 import type { HealthWire as WorkerHealthWire } from '@pumpking/worker/health'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { apiError } from './errors.ts'
 import { createCellsRoute } from './routes/cells.ts'
 import { createPoliciesRoute, type PolicyLookup } from './routes/policies.ts'
 import { createReadingsRoute } from './routes/readings.ts'
@@ -120,10 +121,8 @@ export function createApiApp(deps: ApiDeps): Hono {
     }),
   )
 
-  // The error shape the routes already use (`{ error, fields? }`). It is not
-  // the one `PLAN.md:214` promises, and aligning all of them is `T065` — two
-  // shapes in one API would be worse than one unaligned shape.
-  app.notFound((context) => context.json({ error: 'not found' }, 404))
+  // The same shape as every route's refusals (`errors.ts`, `T065`).
+  app.notFound((context) => apiError(context, 404, 'not found'))
 
   /**
    * The last resort, and it says nothing.
@@ -133,7 +132,7 @@ export function createApiApp(deps: ApiDeps): Hono {
    * a host or a key. What the caller needs is that it was not their request;
    * what an operator needs is the log line, which the process writes.
    */
-  app.onError((_error, context) => context.json({ error: 'internal error' }, 500))
+  app.onError((_error, context) => apiError(context, 500, 'internal error'))
 
   return app
 }

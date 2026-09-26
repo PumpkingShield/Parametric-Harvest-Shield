@@ -162,7 +162,9 @@ describe('the four routes are mounted where the contract says', () => {
     // 400 from the route, not 404 from the router: the door is there and it is
     // the one that refuses a body that is not a reading (`FR-041`).
     expect(response.status).toBe(400)
-    expect(await response.json()).toMatchObject({ error: 'invalid reading' })
+    expect(await response.json()).toMatchObject({
+      error: { code: 'INVALID_INPUT', message: 'invalid reading' },
+    })
   })
 
   it('GET /v1/cells/:cellId/days reaches the journal', async () => {
@@ -189,7 +191,9 @@ describe('the four routes are mounted where the contract says', () => {
     // The lookup finds nothing, which is the route's own 404 and proves the
     // request got that far — the router's 404 has no such body.
     expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'no policy at that address' })
+    expect(await response.json()).toEqual({
+      error: { code: 'NOT_FOUND', message: 'no policy at that address', details: {} },
+    })
   })
 
   it('POST /v1/scenario/run reaches the run when the mode is on', async () => {
@@ -200,7 +204,9 @@ describe('the four routes are mounted where the contract says', () => {
     })
 
     expect(response.status).toBe(404)
-    expect(await response.json()).toMatchObject({ error: 'no such scenario' })
+    expect(await response.json()).toMatchObject({
+      error: { code: 'NOT_FOUND', message: 'no such scenario' },
+    })
   })
 
   it('the scenario route is gone, not forbidden, when the mode is off', async () => {
@@ -238,7 +244,10 @@ describe('the scenario run publishes through the mounted intake', () => {
     // run refuses before it registers anything or publishes anything.
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({
-      error: 'the run has no wallet for every operator the scenario names',
+      error: {
+        code: 'INVALID_INPUT',
+        message: 'the run has no wallet for every operator the scenario names',
+      },
     })
     expect(registry.cells).toEqual([])
     expect(readings.saved).toEqual([])
@@ -249,7 +258,9 @@ describe('what falls through', () => {
   it('an unknown path is a 404 in the shape the routes use', async () => {
     const response = await app().request('/v1/pool')
     expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'not found' })
+    expect(await response.json()).toEqual({
+      error: { code: 'NOT_FOUND', message: 'not found', details: {} },
+    })
   })
 
   it('a route that throws is a 500 that says nothing about why', async () => {
@@ -261,7 +272,9 @@ describe('what falls through', () => {
     expect(response.status).toBe(500)
     // The message from inside names a user, a host or a query. The caller gets
     // that it was not their request; the operator gets the log line.
-    expect(await response.json()).toEqual({ error: 'internal error' })
+    expect(await response.json()).toEqual({
+      error: { code: 'INTERNAL', message: 'internal error', details: {} },
+    })
   })
 })
 
