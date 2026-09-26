@@ -108,7 +108,8 @@ const connection = new Connection(rpcUrl, 'confirmed')
 const pool = poolPda(programId)
 const vault = vaultPda(pool.address, programId)
 
-console.log('cluster        :', rpcUrl)
+// Origin only: the key rides in the query (Helius) or the path (Alchemy).
+console.log('cluster        :', new URL(rpcUrl).origin)
 console.log('program        :', programId.toBase58())
 console.log('pool           :', pool.address.toBase58())
 console.log('vault          :', vault.address.toBase58())

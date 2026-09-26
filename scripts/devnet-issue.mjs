@@ -207,7 +207,8 @@ const ownerTokens = associatedTokenAddress(owner.publicKey, assetMint, TOKEN_PRO
 const genesisTs = Number(poolNow.genesisTs.toString())
 const secondsPerDay = poolNow.secondsPerDay
 
-console.log('cluster        :', rpcUrl)
+// Origin only: the key rides in the query (Helius) or the path (Alchemy).
+console.log('cluster        :', new URL(rpcUrl).origin)
 console.log('program        :', programId.toBase58())
 console.log('cell           :', scenario.cell, '→', cell.toBase58())
 console.log('owner          :', owner.publicKey.toBase58())
