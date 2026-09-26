@@ -12,6 +12,7 @@
     "./cycle": "./src/cycle.ts",
     "./run": "./src/run.ts",
     "./health": "./src/health.ts",
+    "./process-guard": "./src/process-guard.ts",
     "./config": "./src/config.ts"
   },
   "scripts": {

@@ -9,6 +9,7 @@ import {
 } from '@pumpking/db'
 import { readWorkerConfig, ConfigError as WorkerConfigError } from '@pumpking/worker/config'
 import { healthOf } from '@pumpking/worker/health'
+import { guardProcess } from '@pumpking/worker/process-guard'
 import { rpcCycle, startWorker, type WorkerRuntime } from '@pumpking/worker/run'
 import { pino } from 'pino'
 import { ConfigError, readApiConfig } from './config.ts'
@@ -48,6 +49,11 @@ const config = (() => {
 })()
 
 const log = pino({ level: config.logLevel, name: 'api' })
+
+// Before anything that talks to a cluster: web3.js leaves rejections nobody
+// awaits, and by default one of them is the end of the process and of any
+// scenario run held in its memory (`T068`).
+guardProcess(process, log)
 
 const database = createDb(config.databaseUrl)
 const connection = new Connection(config.rpcUrl, 'confirmed')

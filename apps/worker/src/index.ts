@@ -2,6 +2,7 @@ import { createDb, pgIntervalStore } from '@pumpking/db'
 import { pino } from 'pino'
 import { ConfigError, readWorkerConfig } from './config.ts'
 import { createHealthServer } from './health.ts'
+import { guardProcess } from './process-guard.ts'
 import { rpcCycle, startWorker } from './run.ts'
 
 /**
@@ -28,6 +29,9 @@ const config = (() => {
 })()
 
 const log = pino({ level: config.logLevel, name: 'worker' })
+
+// `T068`: a rejection web3.js never awaits must not end the loop.
+guardProcess(process, log)
 
 const database = createDb(config.databaseUrl)
 
