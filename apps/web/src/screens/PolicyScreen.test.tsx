@@ -146,3 +146,26 @@ describe('PolicyView — the FR-040 disclosure', () => {
     expect(markup).toContain('All numbers on this screen are synthetic.')
   })
 })
+
+describe('PolicyView — the state before the days (T074)', () => {
+  const early = () => renderToStaticMarkup(<PolicyView policy={POLICY} rows={null} decimals={6} />)
+
+  it('shows the state and the terms from the chain answer alone', () => {
+    // `SC-013` is the policy state on the first screen, and the state is in
+    // the policy read; the day journal is a second request behind it.
+    const markup = early()
+    expect(markup).toContain('120.00 mock USDC')
+    expect(markup).toContain('days 10–19 (10 days)')
+    expect(markup).toContain(basisRisk(POLICY, 6).trigger)
+    expect(markup).toContain('Loading the days of the window')
+  })
+
+  it('draws no strip at all rather than an empty one', () => {
+    // An empty journal drawn as a strip is a window of uncovered days — a
+    // statement about the network, made by a page that is still loading.
+    const markup = early()
+    expect(markup).not.toContain('Day 10 —')
+    expect(markup).not.toContain('too few sensors reporting')
+    expect(draw(POLICY)).toContain('Day 10 — 6.4 mm — 24 intervals')
+  })
+})

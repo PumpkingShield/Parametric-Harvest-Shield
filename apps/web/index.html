@@ -4,6 +4,35 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pumpking</title>
+    <script>
+      // T074: ask for the policy while the bundle is still downloading, and
+      // open the connection to the API now rather than after it. The screen
+      // takes this answer by URL (src/api/prefetch.ts); the URL here must stay
+      // the one fetchPolicy builds, and prefetch.test.ts holds them equal.
+      ;(function () {
+        var api = '%VITE_API_URL%'
+        var fallback = '%VITE_POLICY_PUBKEY%'
+        // Vite leaves an unset variable as its own placeholder.
+        if (api.charAt(0) === '%') api = 'http://localhost:8080'
+        if (fallback.charAt(0) === '%') fallback = null
+        var asked = new URLSearchParams(location.search).get('policy')
+        var address = asked !== null ? asked : fallback
+        if (address === null) return
+        try {
+          var link = document.createElement('link')
+          link.rel = 'preconnect'
+          link.href = new URL(api).origin
+          link.crossOrigin = 'anonymous'
+          document.head.appendChild(link)
+        } catch (e) {}
+        var url = api.replace(/\/+$/, '') + '/v1/policies/' + encodeURIComponent(address)
+        var response = fetch(url)
+        // Handled here so an answer the screen never takes is not an
+        // unhandled rejection; the screen still sees the failure if it does.
+        response.catch(function () {})
+        window.__pumpkingPrefetch = { url: url, response: response }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

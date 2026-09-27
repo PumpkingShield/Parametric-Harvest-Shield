@@ -1,6 +1,7 @@
 import { DayState } from '@pumpking/shared/day'
 import { useEffect, useState } from 'react'
 import { type Day, fetchDays, fetchPolicy, type Policy } from '../api/policy.ts'
+import { prefetchingFetch } from '../api/prefetch.ts'
 import {
   Block,
   FactRows,
@@ -47,7 +48,8 @@ function policyAddress(): string | null {
   return asked ?? import.meta.env.VITE_POLICY_PUBKEY ?? null
 }
 
-type Loaded = { policy: Policy; rows: Day[] }
+/** The screen answers from the chain first; the days follow (`T074`). */
+type Loaded = { policy: Policy; rows: Day[] | null }
 
 const Note = ({ children }: { children: string }) => (
   <div style={{ paddingTop: 8 }}>
@@ -83,29 +85,41 @@ const BasisRisk = ({ policy, decimals }: { policy: Policy; decimals: number }) =
   )
 }
 
-/** The two answers, drawn. Everything here is a pure function of its props. */
+/**
+ * The two answers, drawn. Everything here is a pure function of its props.
+ *
+ * `rows` is null while the days are still on their way. The strip is then not
+ * drawn at all rather than drawn empty: an empty journal reads as a window of
+ * days with no coverage, which is a claim about the network, not about the
+ * page still loading.
+ */
 export const PolicyView = ({
   policy,
   rows,
   decimals,
 }: {
   policy: Policy
-  rows: Day[]
+  rows: Day[] | null
   decimals: number
 }) => {
-  const { cells, days } = policyWindow(policy, rows)
-  const uncovered = rows.filter((row) => row.state === DayState.NoCoverage).length
+  const strip = rows === null ? null : policyWindow(policy, rows)
+  const uncovered =
+    rows === null ? 0 : rows.filter((row) => row.state === DayState.NoCoverage).length
 
   return (
     <div>
       <Headline figure={String(policy.spell)} caption={runCaption(policy)} />
 
-      <DayStrip
-        id="policy"
-        cells={cells}
-        bracket={longestDryRun(days)}
-        hint="Tap any day to see its rainfall and how many intervals carried a value."
-      />
+      {strip === null ? (
+        <Note>Loading the days of the window…</Note>
+      ) : (
+        <DayStrip
+          id="policy"
+          cells={strip.cells}
+          bracket={longestDryRun(strip.days)}
+          hint="Tap any day to see its rainfall and how many intervals carried a value."
+        />
+      )}
 
       <Block>
         <FactRows rows={policyFacts(policy, decimals)} />
@@ -151,7 +165,14 @@ const PolicyScreen = () => {
     const abort = new AbortController()
 
     const load = async () => {
-      const policy = await fetchPolicy(API_URL, address, { signal: abort.signal })
+      // `prefetchingFetch`: `index.html` may already have asked for this one.
+      const policy = await fetchPolicy(API_URL, address, {
+        signal: abort.signal,
+        fetch: prefetchingFetch(),
+      })
+      // The state is the chain's answer and `SC-013` is about it; the days
+      // come from Postgres and fill the strip in when they arrive.
+      setLoaded({ policy, rows: null })
       const rows = await fetchDays(
         API_URL,
         policy.cellId,
@@ -177,7 +198,7 @@ const PolicyScreen = () => {
     return <Note>{`Could not load the policy: ${failure}`}</Note>
   }
   if (loaded === null) {
-    return <Note>Loading the policy and its days…</Note>
+    return <Note>Loading the policy…</Note>
   }
 
   return <PolicyView policy={loaded.policy} rows={loaded.rows} decimals={ASSET_DECIMALS} />
