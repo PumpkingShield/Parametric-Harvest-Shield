@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { apiError } from './errors.ts'
 import { createCellsRoute } from './routes/cells.ts'
+import { createFeederRoute } from './routes/feeder.ts'
 import { createPoliciesRoute, type PolicyLookup } from './routes/policies.ts'
 import { createReadingsRoute } from './routes/readings.ts'
 import { createScenarioRoute, routeReadingPublisher } from './routes/scenario.ts'
@@ -52,6 +53,8 @@ export type ApiDeps = {
    * project has kept finding.
    */
   worker?: () => WorkerHealthWire
+  /** `T058`: the `SC-008` feeder. Absent and `/v1/feeder` answers 404. */
+  feeder?: { token: string; operatorWallets: readonly string[] }
   now?: () => Date
 }
 
@@ -114,6 +117,18 @@ export function createApiApp(deps: ApiDeps): Hono {
     '/v1/scenario',
     createScenarioRoute({
       enabled: deps.scenarioMode,
+      registry: deps.registry,
+      counters: deps.counters,
+      publisher: routeReadingPublisher(readings),
+      now,
+    }),
+  )
+
+  app.route(
+    '/v1/feeder',
+    createFeederRoute({
+      token: deps.feeder?.token ?? null,
+      operatorWallets: deps.feeder?.operatorWallets ?? [],
       registry: deps.registry,
       counters: deps.counters,
       publisher: routeReadingPublisher(readings),

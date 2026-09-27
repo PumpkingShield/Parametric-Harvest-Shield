@@ -27,37 +27,57 @@ const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 
 // `object`, not `strictObject`: this is handed `process.env`, which carries the
 // whole shell. Unknown keys are stripped rather than refused.
-const schema = z.object({
-  PORT: z.coerce.number().int().min(1).max(65_535).default(8080),
-  DATABASE_URL: z.string().min(1, 'is required: the API reads days and the registry from Postgres'),
-  SOLANA_RPC_URL: z.url('must be an RPC endpoint: a policy is read from the chain'),
-  PUMPKING_PROGRAM_ID: z.string().regex(BASE58, 'must be a base58 program address').optional(),
-  SCENARIO_MODE: z.enum(SCENARIO_MODE).default('off'),
-  /**
-   * `T056`: whether the worker's loop turns inside this process.
-   *
-   * `on` is the free deployment — Render's free plan has one web service and no
-   * background worker, so the loop has nowhere else to run. `off` is the local
-   * two-process run and any deployment that can afford a second service. Worth
-   * saying out loud at startup either way: an API that is quietly also the
-   * aggregator, and an aggregator nobody is running, look the same from here.
-   */
-  RUN_WORKER: z.enum(RUN_WORKER).default('off'),
-  LOG_LEVEL: z.string().default('info'),
-  /**
-   * Origins the browser is allowed to call from — `apps/web` is on a different
-   * host than the API, so without this the interface cannot make one request.
-   *
-   * `*` by default, and that is not a hole being left open: every route here is
-   * either a public read or authenticated by the sensor's own signature over
-   * the reading. There is no cookie, no session and no ambient authority for an
-   * origin to borrow, so CORS is not what protects anything — naming an origin
-   * is tidiness, and pretending otherwise would be the actual risk.
-   */
-  WEB_ORIGIN: z.string().default('*'),
-  /** How long in-flight requests get to finish before the process is killed. */
-  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).default(10_000),
-})
+const schema = z
+  .object({
+    PORT: z.coerce.number().int().min(1).max(65_535).default(8080),
+    DATABASE_URL: z
+      .string()
+      .min(1, 'is required: the API reads days and the registry from Postgres'),
+    SOLANA_RPC_URL: z.url('must be an RPC endpoint: a policy is read from the chain'),
+    PUMPKING_PROGRAM_ID: z.string().regex(BASE58, 'must be a base58 program address').optional(),
+    SCENARIO_MODE: z.enum(SCENARIO_MODE).default('off'),
+    /**
+     * `T056`: whether the worker's loop turns inside this process.
+     *
+     * `on` is the free deployment — Render's free plan has one web service and no
+     * background worker, so the loop has nowhere else to run. `off` is the local
+     * two-process run and any deployment that can afford a second service. Worth
+     * saying out loud at startup either way: an API that is quietly also the
+     * aggregator, and an aggregator nobody is running, look the same from here.
+     */
+    RUN_WORKER: z.enum(RUN_WORKER).default('off'),
+    LOG_LEVEL: z.string().default('info'),
+    /**
+     * Origins the browser is allowed to call from — `apps/web` is on a different
+     * host than the API, so without this the interface cannot make one request.
+     *
+     * `*` by default, and that is not a hole being left open: every route here is
+     * either a public read or authenticated by the sensor's own signature over
+     * the reading. There is no cookie, no session and no ambient authority for an
+     * origin to borrow, so CORS is not what protects anything — naming an origin
+     * is tidiness, and pretending otherwise would be the actual risk.
+     */
+    WEB_ORIGIN: z.string().default('*'),
+    /** How long in-flight requests get to finish before the process is killed. */
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).default(10_000),
+    /**
+     * `T058`: the bearer token of `POST /v1/feeder/tick`, the `SC-008` load.
+     * Absent and the route does not exist. Long, because it is the only thing
+     * between an anonymous caller and a hundred sensors' worth of writes.
+     */
+    FEEDER_TOKEN: z.string().min(32, 'must be at least 32 characters').optional(),
+    /** `T058`: the three operator wallets the feeder's sensors vote for, comma-separated. */
+    FEEDER_OPERATORS: z
+      .string()
+      .transform((value) => value.split(',').map((one) => one.trim()))
+      .pipe(z.array(z.string().regex(BASE58, 'must be a base58 wallet')).length(3))
+      .optional(),
+  })
+  .refine((value) => value.FEEDER_TOKEN === undefined || value.FEEDER_OPERATORS !== undefined, {
+    message:
+      'FEEDER_TOKEN needs FEEDER_OPERATORS: the sensors of the feeder vote for three wallets',
+    path: ['FEEDER_OPERATORS'],
+  })
 
 export type ApiConfig = {
   port: number
@@ -71,6 +91,8 @@ export type ApiConfig = {
   /** `*`, or the list `WEB_ORIGIN` named. */
   webOrigin: string | string[]
   shutdownTimeoutMs: number
+  /** `T058`: the `SC-008` feeder, when this deployment runs it. */
+  feeder: { token: string; operatorWallets: string[] } | null
 }
 
 /** What a caller sees when the environment is wrong: every problem, not the first. */
@@ -106,5 +128,9 @@ export function readApiConfig(env: Record<string, string | undefined>): ApiConfi
     webOrigin:
       value.WEB_ORIGIN === '*' ? '*' : value.WEB_ORIGIN.split(',').map((one) => one.trim()),
     shutdownTimeoutMs: value.SHUTDOWN_TIMEOUT_MS,
+    feeder:
+      value.FEEDER_TOKEN === undefined || value.FEEDER_OPERATORS === undefined
+        ? null
+        : { token: value.FEEDER_TOKEN, operatorWallets: value.FEEDER_OPERATORS },
   }
 }

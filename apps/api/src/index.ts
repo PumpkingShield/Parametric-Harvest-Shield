@@ -94,6 +94,7 @@ const app = createApiApp({
   counters: pgCounterStore(database.db),
   scenarioMode: config.scenarioMode,
   webOrigin: config.webOrigin,
+  ...(config.feeder === null ? {} : { feeder: config.feeder }),
   ...(worker === null
     ? {}
     : { worker: () => healthOf(worker.state, new Date(), worker.stalledMs).wire }),

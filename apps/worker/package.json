@@ -6,6 +6,7 @@
   "exports": {
     "./interval": "./src/interval.ts",
     "./scenario": "./src/scenario.ts",
+    "./feeder": "./src/feeder.ts",
     "./settle": "./src/settle.ts",
     "./close": "./src/close.ts",
     "./chain": "./src/chain.ts",

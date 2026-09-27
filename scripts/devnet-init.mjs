@@ -41,6 +41,11 @@ function env() {
     const match = line.match(/^([A-Z_]+)=(.*)$/)
     if (match !== null) found[match[1]] = match[2].trim()
   }
+  // The shell wins over the file, as with `node --env-file`: a second pool is
+  // initialised by naming its program in the command, not by editing `.env`.
+  for (const [name, value] of Object.entries(process.env)) {
+    if (/^[A-Z_]+$/.test(name) && value !== undefined && value !== '') found[name] = value
+  }
   return found
 }
 
@@ -89,6 +94,16 @@ const programId = values.PUMPKING_PROGRAM_ID === undefined || values.PUMPKING_PR
 // the pool cannot disagree with the fixture the index case was written from.
 const scenario = JSON.parse(readFileSync(SCENARIO_PATH, 'utf8'))
 
+// `T058`: the SC-008 run needs a real day, not the demo's two seconds. The pool
+// is a singleton per program, so this is only ever set for a second deployment.
+const secondsPerDay =
+  values.POOL_SECONDS_PER_DAY === undefined || values.POOL_SECONDS_PER_DAY === ''
+    ? scenario.clock.secondsPerDay
+    : Number(values.POOL_SECONDS_PER_DAY)
+if (!Number.isInteger(secondsPerDay) || secondsPerDay < 1) {
+  throw new Error(`POOL_SECONDS_PER_DAY must be a positive integer: ${values.POOL_SECONDS_PER_DAY}`)
+}
+
 const params = {
   aggregator: aggregator.publicKey,
   // The rest are the M1 path's own numbers (programs/pumpking/tests/m1_path.rs).
@@ -101,7 +116,7 @@ const params = {
   unstakeDelayDays: 30,
   waitingPeriodDays: 3,
   dryDayThresholdMmX100: scenario.params.dryThresholdX100,
-  secondsPerDay: scenario.clock.secondsPerDay,
+  secondsPerDay,
 }
 
 const connection = new Connection(rpcUrl, 'confirmed')
@@ -116,7 +131,11 @@ console.log('vault          :', vault.address.toBase58())
 console.log('authority      :', authority.publicKey.toBase58())
 console.log('aggregator     :', params.aggregator.toBase58())
 console.log('asset mint     :', assetMint.toBase58())
-console.log('seconds/day    :', params.secondsPerDay, '(compressed time — FR-049)')
+console.log(
+  'seconds/day    :',
+  params.secondsPerDay,
+  params.secondsPerDay === 86_400 ? '(a real day)' : '(compressed time — FR-049)',
+)
 console.log('dry threshold  :', params.dryDayThresholdMmX100, 'x100 mm')
 console.log('min sensors    :', params.minSensorsPerCell)
 console.log()
