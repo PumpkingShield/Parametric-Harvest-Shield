@@ -1,10 +1,11 @@
 import { Connection } from '@pumpking/anchor-client'
-import type { IntervalStore } from '@pumpking/db'
+import type { IntervalStore, RetentionStore } from '@pumpking/db'
 import type { Logger } from 'pino'
 import { rpcDaySubmitter, rpcPoolSource } from './chain.ts'
 import type { WorkerConfig } from './config.ts'
 import { type CycleDeps, type CycleReport, runCycle, summarise } from './cycle.ts'
 import { stalledAfterMs, type WorkerHealthState } from './health.ts'
+import { retentionSweeper } from './retention.ts'
 import { rpcPolicySource } from './settle.ts'
 
 /**
@@ -61,7 +62,11 @@ export type WorkerRuntime = {
  * into disagreeing about what the worker does — they differ in where they get a
  * database handle, and in nothing else.
  */
-export function rpcCycle(config: WorkerConfig, store: IntervalStore): CycleRunner {
+export function rpcCycle(
+  config: WorkerConfig,
+  store: IntervalStore,
+  retention: RetentionStore,
+): CycleRunner {
   const connection = new Connection(config.rpcUrl, 'confirmed')
 
   const deps: CycleDeps = {
@@ -74,6 +79,7 @@ export function rpcCycle(config: WorkerConfig, store: IntervalStore): CycleRunne
     minimumCoverageX100: config.minimumCoverageX100,
     backlogDays: config.backlogDays,
     programId: config.programId,
+    retention: retentionSweeper(retention),
   }
 
   return (now) => runCycle(deps, now)
@@ -134,6 +140,14 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
         if (summary.failed > 0) log.warn(line, 'cycle finished with failures')
         else if (summary.submitted + summary.settled + summary.closed > 0) log.info(line, 'cycle')
         else log.debug(line, 'cycle')
+
+        if (report.swept?.status === 'failed') {
+          log.warn({ err: report.swept.error }, 'the retention sweep failed, next try in an hour')
+        } else if (report.swept?.status === 'swept') {
+          const { readings, cellHours } = report.swept
+          if (readings + cellHours > 0) log.info({ readings, cellHours }, 'retention sweep')
+          else log.debug({ readings, cellHours }, 'retention sweep')
+        }
 
         if (!report.aggregatorMatches) {
           // Every `submit_day_record` this worker sends will be rejected, and

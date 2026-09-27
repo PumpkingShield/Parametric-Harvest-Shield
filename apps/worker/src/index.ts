@@ -1,4 +1,4 @@
-import { createDb, pgIntervalStore } from '@pumpking/db'
+import { createDb, pgIntervalStore, pgRetentionStore } from '@pumpking/db'
 import { pino } from 'pino'
 import { ConfigError, readWorkerConfig } from './config.ts'
 import { createHealthServer } from './health.ts'
@@ -38,7 +38,7 @@ const database = createDb(config.databaseUrl)
 const worker = startWorker({
   config,
   log,
-  cycle: rpcCycle(config, pgIntervalStore(database.db)),
+  cycle: rpcCycle(config, pgIntervalStore(database.db), pgRetentionStore(database.db)),
 })
 
 const health = createHealthServer({

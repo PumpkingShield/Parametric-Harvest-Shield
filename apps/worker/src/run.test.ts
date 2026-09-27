@@ -36,7 +36,15 @@ function config(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
 }
 
 function report(overrides: Partial<CycleReport> = {}): CycleReport {
-  return { skipped: null, aggregatorMatches: true, days: [], settled: [], closed: [], ...overrides }
+  return {
+    skipped: null,
+    aggregatorMatches: true,
+    days: [],
+    settled: [],
+    closed: [],
+    swept: null,
+    ...overrides,
+  }
 }
 
 beforeEach(() => {

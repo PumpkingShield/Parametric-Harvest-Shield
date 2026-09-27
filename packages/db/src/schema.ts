@@ -121,9 +121,9 @@ export const sensors = pgTable(
 )
 
 /**
- * Signed readings — FR-003. Retention is 30 days (SC-012); the sweep is a job,
- * not a constraint, because the row has to survive long enough to be shown in
- * the trace of a policy settled from it.
+ * Signed readings — FR-003. Retention is 30 days (SC-012); the sweep is a job
+ * (`retention.ts`), not a constraint, because the row has to survive long
+ * enough to be shown in the trace of a policy settled from it.
  */
 export const readings = pgTable(
   'readings',
@@ -215,7 +215,3 @@ export const cellDays = pgTable(
   },
   (t) => [primaryKey({ columns: [t.cellId, t.dayIndex] })],
 )
-
-/** Readings past their retention window — the sweep SC-012 depends on. */
-export const readingsOlderThan = (days: number) =>
-  sql`${readings.receivedAt} < now() - make_interval(days => ${days})`

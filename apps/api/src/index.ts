@@ -6,6 +6,7 @@ import {
   pgIntervalStore,
   pgReadingStore,
   pgRegistryStore,
+  pgRetentionStore,
 } from '@pumpking/db'
 import { readWorkerConfig, ConfigError as WorkerConfigError } from '@pumpking/worker/config'
 import { healthOf } from '@pumpking/worker/health'
@@ -77,7 +78,7 @@ const worker: WorkerRuntime | null = (() => {
       // the parent's `name` and a child cannot replace it, so the line goes out
       // with two `name` keys — JSON a reader parses and a grep does not.
       log: pino({ level: config.logLevel, name: 'worker' }),
-      cycle: rpcCycle(workerConfig, pgIntervalStore(database.db)),
+      cycle: rpcCycle(workerConfig, pgIntervalStore(database.db), pgRetentionStore(database.db)),
     })
   } catch (cause) {
     process.stderr.write(`${cause instanceof WorkerConfigError ? cause.message : String(cause)}\n`)

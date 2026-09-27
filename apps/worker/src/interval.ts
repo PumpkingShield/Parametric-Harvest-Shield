@@ -496,6 +496,28 @@ export async function closeCellDay(
 export const DEFAULT_BACKLOG_DAYS = 7
 
 /**
+ * The oldest day `closeDueDays` would still close on day `today`.
+ *
+ * One definition, because the retention sweep asks the same question from the
+ * other side: a reading from a day that can still be closed is not past its
+ * retention, however old it is (`T055`).
+ */
+export function oldestBacklogDay(today: number, backlogDays: number): number {
+  return Math.max(0, today - backlogDays)
+}
+
+/**
+ * The earliest instant a cycle at `now` can still read readings from — the
+ * start of the oldest day in its backlog, or `now` before genesis, when no day
+ * can be closed at all.
+ */
+export function backlogHorizon(clock: PoolClock, now: Date, backlogDays: number): Date {
+  const today = dayIndexAt(clock, now)
+  if (today === null) return now
+  return dayStart(clock, oldestBacklogDay(today, backlogDays))
+}
+
+/**
  * Closes every day that is over and not yet on chain, for every cell —
  * `FR-015`.
  *
@@ -524,7 +546,7 @@ export async function closeDueDays(
   // Before genesis there is no day to close, and no clock to be wrong about.
   if (today === null || today === 0) return []
 
-  const oldest = Math.max(0, today - backlogDays)
+  const oldest = oldestBacklogDay(today, backlogDays)
   const outcomes: DayOutcome[] = []
 
   for (const cellId of await deps.store.cellIds()) {

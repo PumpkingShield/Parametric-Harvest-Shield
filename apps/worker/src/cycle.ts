@@ -5,11 +5,14 @@ import type { PoolSource } from './chain.ts'
 import { type CloseDeps, type CloseOutcome, closeAfterDays } from './close.ts'
 import {
   type AggregationParams,
+  backlogHorizon,
   closeDueDays,
   type DayOutcome,
   type DaySubmitter,
+  DEFAULT_BACKLOG_DAYS,
   type PoolClock,
 } from './interval.ts'
+import type { RetentionSweeper, SweepOutcome } from './retention.ts'
 import {
   type PolicySource,
   type SettleDeps,
@@ -33,8 +36,12 @@ import {
  *    reached the threshold. First, because `SC-001` puts sixty seconds on this
  *    path and nothing else here has a deadline.
  * 3. **`closeAfterDays`** — the windows that just finished without the event.
- *    Last, because it releases capacity rather than money, and a window that
- *    finished on the same day it triggered is owed a payout, not a closure.
+ *    After settlement, because it releases capacity rather than money, and a
+ *    window that finished on the same day it triggered is owed a payout, not a
+ *    closure.
+ * 4. **`sweepIfDue`** — readings and hourly medians past their retention
+ *    (`T055`), once an hour. Last, because it has no deadline, and never newer
+ *    than the oldest day step 1 could still close.
  *
  * **Nothing here decides anything.** Each dispatcher is a filter over calls
  * worth making; the program re-derives the run from its own day log and its
@@ -65,6 +72,8 @@ export type CycleDeps = {
   minimumCoverageX100: number
   backlogDays?: number
   programId?: PublicKey
+  /** Absent in tests that are not about retention. */
+  retention?: RetentionSweeper
 }
 
 /** Why a cycle did nothing, when it did nothing. */
@@ -87,11 +96,13 @@ export type CycleReport = {
   days: DayOutcome[]
   settled: SettleOutcome[]
   closed: CloseOutcome[]
+  /** Null when no sweep was due this cycle. */
+  swept: SweepOutcome | null
 }
 
 /** A fresh set of empty lists — never a shared one a caller could append to. */
 function nothing(): Omit<CycleReport, 'skipped' | 'aggregatorMatches'> {
-  return { days: [], settled: [], closed: [] }
+  return { days: [], settled: [], closed: [], swept: null }
 }
 
 /** The pool's own clock, plus how finely this worker cuts a day. */
@@ -164,7 +175,15 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
   }
   const closed = await closeAfterDays(close, days)
 
-  return { skipped: null, aggregatorMatches, days, settled, closed }
+  const swept =
+    deps.retention === undefined
+      ? null
+      : await deps.retention.sweepIfDue(
+          now,
+          backlogHorizon(clock, now, deps.backlogDays ?? DEFAULT_BACKLOG_DAYS),
+        )
+
+  return { skipped: null, aggregatorMatches, days, settled, closed, swept }
 }
 
 /** What a finished cycle is worth saying in one log line. */

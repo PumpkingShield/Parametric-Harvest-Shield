@@ -6,11 +6,19 @@ import {
   PublicKey,
   type TransactionInstruction,
 } from '@pumpking/anchor-client'
-import type { AcceptedReading, DayRow, IntervalRow } from '@pumpking/db'
+import type {
+  AcceptedReading,
+  DayRow,
+  IntervalRow,
+  RetentionCutoffs,
+  RetentionStore,
+  SweepResult,
+} from '@pumpking/db'
 import { DayState } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { PoolSource } from './chain.ts'
 import { type CycleDeps, clockOf, paramsOf, runCycle, summarise } from './cycle.ts'
+import { retentionSweeper } from './retention.ts'
 import type { OpenPolicy } from './settle.ts'
 
 /**
@@ -250,6 +258,79 @@ describe('the clock is the pool’s', () => {
   })
 })
 
+/** Remembers what it was asked to sweep, and when relative to the chain. */
+class Sweeps implements RetentionStore {
+  asked: RetentionCutoffs[] = []
+  /** How many instructions had reached the chain when each sweep ran. */
+  sentBefore: number[] = []
+  fail = false
+  sweep(cutoffs: RetentionCutoffs): Promise<SweepResult> {
+    this.asked.push(cutoffs)
+    this.sentBefore.push(chain.sent.length)
+    if (this.fail) return Promise.reject(new Error('statement timeout'))
+    return Promise.resolve({ readings: 7, cellHours: 0 })
+  }
+}
+
+describe('retention in a cycle', () => {
+  it('sweeps last, after every day is on chain', async () => {
+    const sweeps = new Sweeps()
+    const report = await runCycle(
+      { ...deps, retention: retentionSweeper(sweeps) },
+      new Date('2026-08-03T00:00:01Z'),
+    )
+
+    expect(chain.names).toEqual(['submitDayRecord', 'submitDayRecord'])
+    expect(sweeps.sentBefore).toEqual([2])
+    expect(report.swept).toEqual({ status: 'swept', readings: 7, cellHours: 0 })
+  })
+
+  it('never sweeps readings a backlog day could still be closed from', async () => {
+    // A real clock with `BACKLOG_DAYS = 30` — the deployment's setting. On
+    // 15 September day 45 is running, so day 15 (16 August) can still be
+    // closed; retention alone would cut at 16 August noon and take the
+    // morning of a day that has not reached the chain yet.
+    const sweeps = new Sweeps()
+    await runCycle(
+      { ...deps, backlogDays: 30, retention: retentionSweeper(sweeps) },
+      new Date('2026-09-15T12:00:00Z'),
+    )
+
+    expect(sweeps.asked).toEqual([
+      {
+        readings: new Date('2026-08-16T00:00:00Z'),
+        cellHours: new Date('2025-09-15T12:00:00Z'),
+      },
+    ])
+  })
+
+  it('on a compressed clock the backlog is seconds, and retention decides', async () => {
+    account = pool({ secondsPerDay: 2 })
+    const sweeps = new Sweeps()
+    const now = new Date(GENESIS.getTime() + 40 * 86_400_000)
+    await runCycle({ ...deps, backlogDays: 30, retention: retentionSweeper(sweeps) }, now)
+
+    expect(sweeps.asked[0]?.readings).toEqual(new Date(GENESIS.getTime() + 10 * 86_400_000))
+  })
+
+  it('a failed sweep is reported and the cycle keeps its days', async () => {
+    const sweeps = new Sweeps()
+    sweeps.fail = true
+    const report = await runCycle(
+      { ...deps, retention: retentionSweeper(sweeps) },
+      new Date('2026-08-03T00:00:01Z'),
+    )
+
+    expect(summarise(report).submitted).toBe(2)
+    expect(report.swept?.status).toBe('failed')
+  })
+
+  it('a cycle without a sweeper reports none', async () => {
+    const report = await runCycle(deps, new Date('2026-08-03T00:00:01Z'))
+    expect(report.swept).toBeNull()
+  })
+})
+
 describe('the key that signs a day record', () => {
   it('says so when it is not the aggregator the pool names', async () => {
     account = pool({ aggregator: key(42) })
@@ -280,6 +361,7 @@ describe('summarise', () => {
         { policy: 'a', status: 'failed' as const, spell: 3, error: new Error('blockhash') },
       ],
       closed: [{ policy: 'b', status: 'running' as const, spell: 1 }],
+      swept: null,
     }
 
     expect(summarise(failed)).toEqual({ submitted: 1, settled: 0, closed: 0, failed: 2 })
