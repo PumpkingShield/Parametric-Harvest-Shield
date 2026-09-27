@@ -67,17 +67,29 @@ export type DayRow = {
   txSignature: string | null
 }
 
+/** A day of a cell that still has to reach the chain. */
+export type OpenDay = { cellId: bigint; dayIndex: number }
+
 export interface IntervalStore {
   /**
-   * Every cell the network knows about — `FR-006`.
+   * Every day in `[fromDay, toDay]` of every cell the network knows about
+   * (`FR-006`) that is not yet on chain — no row, or a row without a
+   * signature. Ordered by cell, then day, ascending.
    *
-   * Not "cells with readings in the window": a day nobody measured still has
-   * to reach the chain, because the ring buffer answers `None` for anything
-   * past the last recorded day, and a policy whose window ends in an unwritten
-   * day cannot be closed at all. Silence has to be written down to count as
-   * silence.
+   * Every cell, not "cells with readings in the window": a day nobody measured
+   * still has to reach the chain, because the ring buffer answers `None` for
+   * anything past the last recorded day, and a policy whose window ends in an
+   * unwritten day cannot be closed at all. Silence has to be written down to
+   * count as silence.
+   *
+   * **One question per cycle, not one per day** (`T073`). The worker used to
+   * ask about each day of the backlog for each cell, every cycle — thirty
+   * reads per cell to learn, almost always, that nothing was open. At the
+   * `SC-008` load that was ~1000 statements a turn and both free traffic
+   * allowances gone within a week. Asked this way, a quiet cycle costs one
+   * statement and an empty answer, whatever the size of the network.
    */
-  cellIds(): Promise<bigint[]>
+  openDays(fromDay: number, toDay: number): Promise<OpenDay[]>
   /** Accepted readings of one cell and kind in `[from, to)`, oldest first. */
   acceptedReadings(
     cellId: bigint,
@@ -116,9 +128,21 @@ function excluded(column: string): SQL {
 /** The `IntervalStore` backed by the real tables. */
 export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): IntervalStore {
   return {
-    async cellIds() {
-      const rows = await db.select({ id: cells.id }).from(cells).orderBy(asc(cells.id))
-      return rows.map((row) => row.id)
+    async openDays(fromDay, toDay) {
+      if (toDay < fromDay) return []
+      // Raw rather than the builder: a set-returning function in a cross join
+      // is not something drizzle spells, and the one qualifier that matters —
+      // the join condition — is easier to read here than to trust a builder
+      // not to strip.
+      const rows = await db.execute<{ cell_id: string; day_index: number }>(sql`
+        select c.id as cell_id, d.day as day_index
+        from ${cells} c
+        cross join generate_series(${fromDay}::integer, ${toDay}::integer) as d(day)
+        left join ${cellDays} cd on cd.cell_id = c.id and cd.day_index = d.day
+        where cd.tx_signature is null
+        order by c.id, d.day`)
+      // `bigint` comes back as a string from postgres-js; a cell id is past 2^53.
+      return rows.map((row) => ({ cellId: BigInt(row.cell_id), dayIndex: Number(row.day_index) }))
     },
 
     async acceptedReadings(cellId, kind, from, to) {

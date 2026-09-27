@@ -10,6 +10,7 @@ import type {
   AcceptedReading,
   DayRow,
   IntervalRow,
+  OpenDay,
   RetentionCutoffs,
   RetentionStore,
   SweepResult,
@@ -114,8 +115,13 @@ class Store {
   saved: DayRow[] = []
   submittedDays: number[] = []
 
-  cellIds(): Promise<bigint[]> {
-    return Promise.resolve(this.cells)
+  /** No day is closed yet, so every day in range is open. */
+  openDays(fromDay: number, toDay: number): Promise<OpenDay[]> {
+    const open: OpenDay[] = []
+    for (const cellId of this.cells) {
+      for (let dayIndex = fromDay; dayIndex <= toDay; dayIndex += 1) open.push({ cellId, dayIndex })
+    }
+    return Promise.resolve(open)
   }
   acceptedReadings(): Promise<AcceptedReading[]> {
     return Promise.resolve([])

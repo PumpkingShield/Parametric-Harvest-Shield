@@ -11,6 +11,7 @@ import type {
   DayRow,
   IntervalRow,
   IntervalStore,
+  OpenDay,
   ReadingRow,
   ReadingStore,
   SaveOutcome,
@@ -142,8 +143,12 @@ class Store implements ReadingStore, IntervalStore {
     return Promise.resolve({ stored: true, status: row.status })
   }
 
-  cellIds(): Promise<bigint[]> {
-    return Promise.resolve([this.cellId])
+  openDays(fromDay: number, toDay: number): Promise<OpenDay[]> {
+    const open: OpenDay[] = []
+    for (let dayIndex = fromDay; dayIndex <= toDay; dayIndex += 1) {
+      if (this.days.get(dayIndex)?.txSignature == null) open.push({ cellId: this.cellId, dayIndex })
+    }
+    return Promise.resolve(open)
   }
 
   acceptedReadings(

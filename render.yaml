@@ -46,9 +46,9 @@ services:
       # ahead of the loop on 2026-09-24 left holes the log can never be filled
       # in — days skipped past the window are unwritable, because the on-chain
       # log only grows forwards, and a hole reads as no coverage and breaks a
-      # drought in two. Thirty is a minute of compressed grace. The price is
-      # thirty cheap "is this day already on chain" reads a cycle when the
-      # network is idle.
+      # drought in two. Thirty is a minute of compressed grace, and it costs
+      # nothing on a quiet cycle: one query asks which days are still open,
+      # whatever the backlog (T073).
       - key: BACKLOG_DAYS
         value: "30"
       - key: SHUTDOWN_TIMEOUT_MS

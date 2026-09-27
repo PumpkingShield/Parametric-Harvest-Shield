@@ -1,5 +1,5 @@
 import { PublicKey, type TransactionInstruction } from '@pumpking/anchor-client'
-import type { AcceptedReading, DayRow, IntervalRow, IntervalStore } from '@pumpking/db'
+import type { AcceptedReading, DayRow, IntervalRow, IntervalStore, OpenDay } from '@pumpking/db'
 import {
   canonicalReadingBytes,
   cellIdFromH3Index,
@@ -78,8 +78,17 @@ class FakeStore implements IntervalStore {
   /** What the store was asked for, in order — the sequence matters. */
   calls: string[] = []
 
-  cellIds(): Promise<bigint[]> {
-    return Promise.resolve([...this.cells])
+  openDays(fromDay: number, toDay: number): Promise<OpenDay[]> {
+    this.calls.push('openDays')
+    const open: OpenDay[] = []
+    for (const cellId of [...this.cells].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+      for (let dayIndex = fromDay; dayIndex <= toDay; dayIndex += 1) {
+        if (this.days.get(`${cellId}/${dayIndex}`)?.txSignature == null) {
+          open.push({ cellId, dayIndex })
+        }
+      }
+    }
+    return Promise.resolve(open)
   }
 
   acceptedReadings(
@@ -485,8 +494,40 @@ describe('closeDueDays', () => {
   it('passes over the days it has already sent', async () => {
     await closeDueDays(deps, now(2))
     const again = await closeDueDays(deps, now(3))
-    expect(again.map((outcome) => outcome.status)).toEqual(['recorded', 'recorded', 'submitted'])
+    // Days on chain are not visited at all — not even to be reported.
+    expect(again.map((outcome) => `${outcome.dayIndex}:${outcome.status}`)).toEqual(['2:submitted'])
     expect(submitter.sent).toHaveLength(3)
+  })
+
+  it('asks the store one question on a quiet cycle, however long the backlog', async () => {
+    // `T073`: thirty days of backlog used to be thirty reads per cell per
+    // cycle, and at the `SC-008` load that alone spent both free traffic
+    // allowances within a week.
+    await closeDueDays(deps, now(30), 30)
+    store.calls = []
+
+    const quiet = await closeDueDays(deps, now(30), 30)
+    expect(quiet).toEqual([])
+    expect(store.calls).toEqual(['openDays'])
+  })
+
+  it('retries a day whose row exists but whose transaction never landed', async () => {
+    // Row written, worker died before the signature was stored: the day is
+    // unfinished, and the question must still find it.
+    store.days.set(`${CELL_ID}/0`, {
+      cellId: CELL_ID,
+      dayIndex: 0,
+      state: DayState.NoCoverage,
+      rainfallX100: null,
+      coveredHours: 0,
+      merkleRoot: null,
+      txSignature: null,
+    })
+
+    const outcomes = await closeDueDays(deps, now(1))
+    expect(outcomes.map((outcome) => `${outcome.dayIndex}:${outcome.status}`)).toEqual([
+      '0:submitted',
+    ])
   })
 
   it('stops a cell at its first failure and carries on with the others', async () => {

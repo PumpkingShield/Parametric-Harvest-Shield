@@ -546,18 +546,19 @@ export async function closeDueDays(
   // Before genesis there is no day to close, and no clock to be wrong about.
   if (today === null || today === 0) return []
 
-  const oldest = oldestBacklogDay(today, backlogDays)
+  const open = await deps.store.openDays(oldestBacklogDay(today, backlogDays), today - 1)
   const outcomes: DayOutcome[] = []
+  // A cell stops at its first failure; the list is ordered by cell, then day.
+  const stopped = new Set<bigint>()
 
-  for (const cellId of await deps.store.cellIds()) {
-    for (let dayIndex = oldest; dayIndex < today; dayIndex += 1) {
-      try {
-        outcomes.push(await closeCellDay(deps, cellId, dayIndex))
-      } catch (cause) {
-        const error = cause instanceof Error ? cause : new Error(String(cause))
-        outcomes.push({ cellId, dayIndex, status: 'failed', error })
-        break
-      }
+  for (const { cellId, dayIndex } of open) {
+    if (stopped.has(cellId)) continue
+    try {
+      outcomes.push(await closeCellDay(deps, cellId, dayIndex))
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause))
+      outcomes.push({ cellId, dayIndex, status: 'failed', error })
+      stopped.add(cellId)
     }
   }
 
