@@ -31,9 +31,14 @@ services:
       # and the process dies at import.
       - key: NODE_VERSION
         value: "26"
-      # The loop, in this process. There is nowhere else for it on this plan.
+      # The loop, in this process — off between shows. This pool counts a day in
+      # two seconds, so a loop left running writes a day record every two
+      # seconds for as long as the service is awake: on 2026-09-27 that was a
+      # thousand transactions in 7.5 hours, the aggregator down to 0.03 SOL, and
+      # a million cell_hours rows a day. Turn it on for a show (with SOL on the
+      # aggregator), and off again after.
       - key: RUN_WORKER
-        value: "on"
+        value: "off"
       - key: INTERVALS_PER_DAY
         value: "24"
       - key: MINIMUM_COVERAGE_X100
