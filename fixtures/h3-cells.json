@@ -1,0 +1,180 @@
+{
+  "note": "Generated from h3-js 4.5.0 by isValidCell/getResolution. Both the program (programs/pumpking/src/h3.rs) and @pumpking/shared (cell.ts) run it, so the chain and the library cannot disagree about what a cell is.",
+  "cases": [
+    {
+      "id": "608521419172610047",
+      "hex": "871e701b3ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "network cell, res 7"
+    },
+    {
+      "id": "608521418417635327",
+      "hex": "871e70186ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "network cell, res 7"
+    },
+    {
+      "id": "608521418652516351",
+      "hex": "871e70194ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "network cell, res 7"
+    },
+    {
+      "id": "608521418669293567",
+      "hex": "871e70195ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "network cell, res 7"
+    },
+    {
+      "id": "608521419122278399",
+      "hex": "871e701b0ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "network cell, res 7"
+    },
+    {
+      "id": "577023702256844799",
+      "hex": "801ffffffffffff",
+      "valid": true,
+      "res": 0,
+      "why": "Kyiv, res 0"
+    },
+    {
+      "id": "581500913605148671",
+      "hex": "811e7ffffffffff",
+      "valid": true,
+      "res": 1,
+      "why": "Kyiv, res 1"
+    },
+    {
+      "id": "599513355757027327",
+      "hex": "851e6387fffffff",
+      "valid": true,
+      "res": 5,
+      "why": "Kyiv, res 5"
+    },
+    {
+      "id": "613024153737363455",
+      "hex": "881e6384a3fffff",
+      "valid": true,
+      "res": 8,
+      "why": "Kyiv, res 8"
+    },
+    {
+      "id": "617527753363685375",
+      "hex": "891e6384a2fffff",
+      "valid": true,
+      "res": 9,
+      "why": "Kyiv, res 9"
+    },
+    {
+      "id": "644549351127870222",
+      "hex": "8f1e6384a2f6b0e",
+      "valid": true,
+      "res": 15,
+      "why": "Kyiv, res 15"
+    },
+    {
+      "id": "608126687200149503",
+      "hex": "870800000ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "pentagon, res 7"
+    },
+    {
+      "id": "608478530921037823",
+      "hex": "871c00000ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "pentagon, res 7"
+    },
+    {
+      "id": "608830374641926143",
+      "hex": "873000000ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "pentagon, res 7"
+    },
+    {
+      "id": "609322955851169791",
+      "hex": "874c00000ffffff",
+      "valid": true,
+      "res": 7,
+      "why": "pentagon, res 7"
+    },
+    {
+      "id": "576636674163867647",
+      "hex": "8009fffffffffff",
+      "valid": true,
+      "res": 0,
+      "why": "pentagon, res 0"
+    },
+    {
+      "id": "608126687216926719",
+      "hex": "870800001ffffff",
+      "valid": false,
+      "res": null,
+      "why": "pentagon deleted subsequence"
+    },
+    {
+      "id": "9831893456027385855",
+      "hex": "8871e701b3ffffff",
+      "valid": false,
+      "res": null,
+      "why": "high bit set"
+    },
+    {
+      "id": "1184982171476033535",
+      "hex": "1071e701b3ffffff",
+      "valid": false,
+      "res": null,
+      "why": "mode 2 (directed edge)"
+    },
+    {
+      "id": "680579013210537983",
+      "hex": "971e701b3ffffff",
+      "valid": false,
+      "res": null,
+      "why": "reserved bits set"
+    },
+    {
+      "id": "608521900208947199",
+      "hex": "871e771b3ffffff",
+      "valid": false,
+      "res": null,
+      "why": "digit 7 inside the resolution"
+    },
+    {
+      "id": "608521419170775039",
+      "hex": "871e701b3e3ffff",
+      "valid": false,
+      "res": null,
+      "why": "digit after the resolution is not 7"
+    },
+    {
+      "id": "612286146986115071",
+      "hex": "87f4701b3ffffff",
+      "valid": false,
+      "res": null,
+      "why": "base cell 122"
+    },
+    {
+      "id": "612462068846559231",
+      "hex": "87fe701b3ffffff",
+      "valid": false,
+      "res": null,
+      "why": "base cell 127"
+    },
+    {
+      "id": "0",
+      "hex": "0",
+      "valid": false,
+      "res": null,
+      "why": "zero"
+    }
+  ]
+}

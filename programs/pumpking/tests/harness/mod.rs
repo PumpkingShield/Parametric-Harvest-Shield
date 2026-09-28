@@ -32,7 +32,7 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use pumpking::state::{
-    CAPITAL_SEED, CELL_SEED, POLICY_SEED, POOL_SEED, STAKE_VAULT_SEED, VAULT_SEED,
+    CAPITAL_SEED, CELL_SEED, POLICY_SEED, POOL_SEED, SENSOR_SEED, STAKE_VAULT_SEED, VAULT_SEED,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -164,7 +164,12 @@ pub fn stake_vault_pda() -> AnchorPubkey {
 }
 
 pub fn cell_pda(cell_id: u64) -> AnchorPubkey {
-    AnchorPubkey::find_program_address(&[CELL_SEED, cell_id.to_le_bytes().as_ref()], &pumpking::ID).0
+    AnchorPubkey::find_program_address(&[CELL_SEED, cell_id.to_le_bytes().as_ref()], &pumpking::ID)
+        .0
+}
+
+pub fn sensor_pda(sensor_key: AnchorPubkey) -> AnchorPubkey {
+    AnchorPubkey::find_program_address(&[SENSOR_SEED, sensor_key.as_ref()], &pumpking::ID).0
 }
 
 pub fn policy_pda(owner: AnchorPubkey, nonce: u64) -> AnchorPubkey {
@@ -264,7 +269,12 @@ impl World {
 
     /// Актив пулу — `FR-031`, `FR-055`. Ключ емісії окремий від будь-якої
     /// влади в пулі, інакше `FR-057` відхилить ініціалізацію.
-    pub fn create_mint(&mut self, address: AnchorPubkey, decimals: u8, minter: Option<AnchorPubkey>) {
+    pub fn create_mint(
+        &mut self,
+        address: AnchorPubkey,
+        decimals: u8,
+        minter: Option<AnchorPubkey>,
+    ) {
         let lamports = self.mollusk.sysvars.rent.minimum_balance(MINT_LEN);
         self.set_account(
             address,
@@ -371,7 +381,11 @@ impl World {
     }
 
     /// Виконує інструкцію, яка мала впертися в конкретне правило програми.
-    pub fn exec_err(&mut self, instruction: &Instruction, expected: pumpking::errors::PumpkingError) {
+    pub fn exec_err(
+        &mut self,
+        instruction: &Instruction,
+        expected: pumpking::errors::PumpkingError,
+    ) {
         let result = self.exec(instruction);
         assert_custom(&result, u32::from(expected), &format!("{expected:?}"));
     }

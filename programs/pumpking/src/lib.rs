@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 declare_id!("F2cw4FWjzUL29G4WEWHANUE2jXAyF9QJLCdvmsjy7YbY");
 
 pub mod errors;
+pub mod h3;
 pub mod index;
 pub mod instructions;
 pub mod premium;
@@ -64,5 +65,17 @@ pub mod pumpking {
     /// money waited in the vault, reserved, the whole time.
     pub fn claim_unclaimed_payout(ctx: Context<ClaimUnclaimedPayout>) -> Result<()> {
         instructions::policy::claim_unclaimed_payout(ctx)
+    }
+
+    /// Puts a sensor on the network. Open to anyone (`FR-007`); the sensor's
+    /// own key co-signs, and its cell is an H3 cell on the network's grid level.
+    pub fn register_sensor(ctx: Context<RegisterSensor>, cell_id: u64) -> Result<()> {
+        instructions::sensor::register_sensor(ctx, cell_id)
+    }
+
+    /// Adds to a sensor's stake, into the stake vault and never the capital
+    /// vault (`FR-050`, `FR-051`).
+    pub fn stake_sensor(ctx: Context<StakeSensor>, amount: u64) -> Result<()> {
+        instructions::sensor::stake_sensor(ctx, amount)
     }
 }

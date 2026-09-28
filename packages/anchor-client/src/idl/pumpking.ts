@@ -580,6 +580,118 @@ export type Pumpking = {
       ]
     },
     {
+      "name": "registerSensor",
+      "docs": [
+        "Puts a sensor on the network. Open to anyone (`FR-007`); the sensor's",
+        "own key co-signs, and its cell is an H3 cell on the network's grid level."
+      ],
+      "discriminator": [
+        130,
+        120,
+        3,
+        101,
+        228,
+        123,
+        18,
+        95
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "docs": [
+            "Pays for the sensor account (and the cell's, if this is the cell's first",
+            "sensor), and is who the sensor's vote, rewards and stake belong to."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sensorKey",
+          "docs": [
+            "The key the sensor signs its readings with. It signs here too: without",
+            "it, anyone could register somebody else's device under their own wallet",
+            "and collect its rewards."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "cellId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sensor",
+          "docs": [
+            "`init`, not `init_if_needed`: a key is registered once. Moving a sensor",
+            "to another cell is its own explicit action (`FR-059`), not a second",
+            "registration quietly overwriting the first."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensorKey"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "cellId",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "settlePolicy",
       "docs": [
         "Pays a policy the index has triggered — `FR-026`, `FR-027`, `FR-030`.",
@@ -698,6 +810,100 @@ export type Pumpking = {
         }
       ],
       "args": []
+    },
+    {
+      "name": "stakeSensor",
+      "docs": [
+        "Adds to a sensor's stake, into the stake vault and never the capital",
+        "vault (`FR-050`, `FR-051`)."
+      ],
+      "discriminator": [
+        34,
+        47,
+        116,
+        123,
+        27,
+        100,
+        119,
+        133
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "docs": [
+            "Only the sensor's operator: the stake is the operator's, it is what",
+            "burns into capital if the sensor is excluded (`FR-052`), and a stake",
+            "someone else put up would be theirs to lose for a device they do not run."
+          ],
+          "signer": true,
+          "relations": [
+            "sensor"
+          ]
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sensor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.sensor_key",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "assetMint"
+        },
+        {
+          "name": "stakeVault",
+          "docs": [
+            "`FR-051`: the stake vault, never the capital vault."
+          ],
+          "writable": true
+        },
+        {
+          "name": "operatorTokens",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "submitDayRecord",
@@ -840,6 +1046,19 @@ export type Pumpking = {
         109,
         188
       ]
+    },
+    {
+      "name": "sensor",
+      "discriminator": [
+        134,
+        105,
+        67,
+        177,
+        57,
+        239,
+        163,
+        212
+      ]
     }
   ],
   "events": [
@@ -906,6 +1125,32 @@ export type Pumpking = {
         184,
         83,
         77
+      ]
+    },
+    {
+      "name": "sensorRegistered",
+      "discriminator": [
+        203,
+        233,
+        25,
+        162,
+        139,
+        25,
+        44,
+        6
+      ]
+    },
+    {
+      "name": "sensorStaked",
+      "discriminator": [
+        235,
+        246,
+        207,
+        148,
+        232,
+        143,
+        105,
+        223
       ]
     }
   ],
@@ -1129,6 +1374,31 @@ export type Pumpking = {
       "code": 6043,
       "name": "policyNotUnclaimed",
       "msg": "The policy has no undelivered payout waiting"
+    },
+    {
+      "code": 6044,
+      "name": "notAnH3Cell",
+      "msg": "The cell id is not an H3 cell"
+    },
+    {
+      "code": 6045,
+      "name": "wrongGridResolution",
+      "msg": "The cell is not on the grid level the network registers on"
+    },
+    {
+      "code": 6046,
+      "name": "cellIsFull",
+      "msg": "The cell has no free slot left in its contributors mask"
+    },
+    {
+      "code": 6047,
+      "name": "stakeTooSmall",
+      "msg": "A stake must move at least one base unit"
+    },
+    {
+      "code": 6048,
+      "name": "notTheOperator",
+      "msg": "Only the sensor's operator may do this"
     }
   ],
   "types": [
@@ -1958,6 +2228,132 @@ export type Pumpking = {
               "`FR-049`: 86_400 in production, seconds in a scenario run."
             ],
             "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sensor",
+      "docs": [
+        "PDA `[\"sensor\", sensor_key]`, where the seed is the ed25519 key the sensor",
+        "signs its readings with — `FR-001`, `FR-002`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "docs": [
+              "The signing key, kept in the account so the PDA can be rebuilt from the",
+              "data alone, the way `cell_id` is kept in `CellState`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Wallet rewards and burnt stake settle against — `FR-009` counts votes",
+              "per operator, not per sensor."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "cellId",
+            "docs": [
+              "Fixed at registration from the sensor's coordinates — `FR-058`. A",
+              "reading names its cell and never its position."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "slotInCell",
+            "docs": [
+              "Bit this sensor occupies in the cell's `contributors` mask. Assigned",
+              "once and never reused: `FR-012` deactivates a sensor, it does not free",
+              "the slot, and a reused bit would rewrite who voted on a past day."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "stake",
+            "type": "u64"
+          },
+          {
+            "name": "unlockAtDay",
+            "docs": [
+              "Day the thaw ends — `FR-053`. `None` while no withdrawal is pending."
+            ],
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "accepted",
+            "type": "u32"
+          },
+          {
+            "name": "outliers",
+            "type": "u32"
+          },
+          {
+            "name": "active",
+            "docs": [
+              "`FR-012`: false once excluded for systematic outliers. Readings keep",
+              "arriving and keep being stored; they simply stop counting."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sensorRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "slotInCell",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sensorStaked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "stake",
+            "type": "u64"
           }
         ]
       }

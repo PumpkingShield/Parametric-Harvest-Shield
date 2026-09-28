@@ -37,6 +37,14 @@ pub const DAY_LOG_LEN: usize = 128;
 /// The longest coverage window a policy may span, in days.
 pub const MAX_COVERAGE_DAYS: u32 = 90;
 
+/// The grid level sensors register on — `FR-060`: H3 res 7, ≈ 5.2 km².
+///
+/// Checked at registration and nowhere else. A policy carries its own cell id
+/// and is settled at the level it was sold on (`FR-069`), so moving the network
+/// to res 8 is a change here and an expansion of the grid, not a migration of
+/// anything already written.
+pub const GRID_RESOLUTION: u8 = 7;
+
 /* -------------------------------------------------------------------------- */
 /* Pool                                                                       */
 /* -------------------------------------------------------------------------- */

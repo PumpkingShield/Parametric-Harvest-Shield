@@ -1,6 +1,6 @@
 import { BN, BorshInstructionCoder, type Idl } from '@coral-xyz/anchor'
 import { PUMPKING_IDL } from './idl/idl.ts'
-import { cellPda, policyPda, poolPda, vaultPda } from './pda.ts'
+import { cellPda, policyPda, poolPda, sensorPda, stakeVaultPda, vaultPda } from './pda.ts'
 import { PROGRAM_ID } from './program.ts'
 import { type AccountMeta, PublicKey, TOKEN_PROGRAM_ID, TransactionInstruction } from './web3.ts'
 
@@ -643,5 +643,69 @@ export function claimUnclaimedPayoutInstruction(
       ownerTokens: input.ownerTokens,
       tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
     },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* register_sensor                                                            */
+/* -------------------------------------------------------------------------- */
+
+export interface RegisterSensorInput {
+  /** Pays for the accounts; the sensor's vote, rewards and stake are theirs. */
+  operator: PublicKey
+  /**
+   * The key the sensor signs readings with. It co-signs the transaction:
+   * without that, anyone could register somebody else's device.
+   */
+  sensorKey: PublicKey
+  /** H3 index on the network's grid level (`FR-060`); the program checks it. */
+  cellId: bigint
+  programId?: PublicKey
+}
+
+/** Puts a sensor on the network — `FR-007`, open to anyone. */
+export function registerSensorInstruction(input: RegisterSensorInput): TransactionInstruction {
+  return buildInstruction('registerSensor', {
+    programId: input.programId ?? PROGRAM_ID,
+    accounts: { operator: input.operator, sensorKey: input.sensorKey },
+    args: { cellId: new BN(input.cellId.toString()) },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* stake_sensor                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface StakeSensorInput {
+  /** Must be the sensor's operator; the program checks it. */
+  operator: PublicKey
+  sensorKey: PublicKey
+  /** Must equal `pool.asset_mint`. */
+  assetMint: PublicKey
+  /** The operator's own token account. */
+  operatorTokens: PublicKey
+  amount: bigint
+  /** Defaults to the pool's stake vault — never the capital vault (`FR-051`). */
+  stakeVault?: PublicKey
+  tokenProgram?: PublicKey
+  programId?: PublicKey
+}
+
+/** Adds to a sensor's stake — `FR-050`. */
+export function stakeSensorInstruction(input: StakeSensorInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  const pool = poolPda(programId).address
+  return buildInstruction('stakeSensor', {
+    programId,
+    accounts: {
+      operator: input.operator,
+      // Seeded by a field of the account itself, which the IDL cannot follow.
+      sensor: sensorPda(input.sensorKey, programId).address,
+      assetMint: input.assetMint,
+      stakeVault: input.stakeVault ?? stakeVaultPda(pool, programId).address,
+      operatorTokens: input.operatorTokens,
+      tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
+    },
+    args: { amount: new BN(input.amount.toString()) },
   })
 }

@@ -135,4 +135,19 @@ pub enum PumpkingError {
 
     #[msg("The policy has no undelivered payout waiting")]
     PolicyNotUnclaimed,
+
+    #[msg("The cell id is not an H3 cell")]
+    NotAnH3Cell,
+
+    #[msg("The cell is not on the grid level the network registers on")]
+    WrongGridResolution,
+
+    #[msg("The cell has no free slot left in its contributors mask")]
+    CellIsFull,
+
+    #[msg("A stake must move at least one base unit")]
+    StakeTooSmall,
+
+    #[msg("Only the sensor's operator may do this")]
+    NotTheOperator,
 }

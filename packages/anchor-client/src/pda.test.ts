@@ -54,10 +54,9 @@ describe('u64Seed', () => {
 
 describe('derived addresses', () => {
   /**
-   * Frozen vectors. Everything but `sensor` is also checked against the IDL
-   * below, now that `issue_policy` describes the cell and the policy; `sensor`
-   * has no instruction yet, so this line is all that stands between a seed
-   * edit and a client that quietly addresses an account nobody ever created.
+   * Frozen vectors. Each is also checked against the IDL: the cell and the
+   * policy below, through `issue_policy`, and `sensor` in
+   * `instructions.test.ts`, through `register_sensor` (`T031`).
    */
   it('matches the recorded vectors', () => {
     const pool = poolPda(programId)

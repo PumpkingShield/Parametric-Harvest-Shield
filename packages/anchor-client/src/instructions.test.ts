@@ -10,7 +10,9 @@ import {
   initializePoolInstruction,
   issuePolicyInstruction,
   type PoolParams,
+  registerSensorInstruction,
   settlePolicyInstruction,
+  stakeSensorInstruction,
   submitDayRecordInstruction,
 } from './instructions.ts'
 import {
@@ -18,6 +20,7 @@ import {
   cellPda,
   policyPda,
   poolPda,
+  sensorPda,
   stakeVaultPda,
   vaultPda,
 } from './pda.ts'
@@ -423,12 +426,7 @@ describe('submitDayRecordInstruction', () => {
 
   it('derives the cell from the id and lists the accounts in order', () => {
     const instruction = submitDayRecordInstruction(input)
-    expect(accountNames('submitDayRecord')).toEqual([
-      'aggregator',
-      'pool',
-      'cell',
-      'systemProgram',
-    ])
+    expect(accountNames('submitDayRecord')).toEqual(['aggregator', 'pool', 'cell', 'systemProgram'])
     expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
       aggregator.toBase58(),
       poolPda(programId).address.toBase58(),
@@ -627,5 +625,74 @@ describe('claimUnclaimedPayoutInstruction', () => {
       caller.toBase58(),
     ])
     expect(keys.some((meta) => meta.pubkey.equals(owner))).toBe(false)
+  })
+})
+
+describe('registerSensorInstruction', () => {
+  const operator = key(11)
+  const sensorKey = key(12)
+  // `871e701b3ffffff`, the demo cell.
+  const cellId = 0x0871e701b3ffffffn
+  const input = { operator, sensorKey, cellId, programId }
+
+  it('round-trips the cell and derives the cell and the sensor from the IDL', () => {
+    const instruction = registerSensorInstruction(input)
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('registerSensor')
+    expect(BigInt(String(data.cellId))).toBe(cellId)
+
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+      sensorKey.toBase58(),
+      poolPda(programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      // The IDL's own seeds for `sensor`, now that an instruction names them,
+      // agree with the hand-written `sensorPda`.
+      sensorPda(sensorKey, programId).address.toBase58(),
+      SYSTEM_PROGRAM_ID.toBase58(),
+    ])
+  })
+
+  it('has the operator and the sensor key sign', () => {
+    const { keys } = registerSensorInstruction(input)
+    expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+      sensorKey.toBase58(),
+    ])
+  })
+})
+
+describe('stakeSensorInstruction', () => {
+  const operator = key(11)
+  const sensorKey = key(12)
+  const operatorTokens = key(13)
+  const input = { operator, sensorKey, assetMint, operatorTokens, amount: 1_000_000n, programId }
+
+  it('round-trips the amount and sends it to the stake vault, not the capital vault', () => {
+    const instruction = stakeSensorInstruction(input)
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('stakeSensor')
+    expect(String(data.amount)).toBe('1000000')
+
+    const pool = poolPda(programId).address
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+      pool.toBase58(),
+      sensorPda(sensorKey, programId).address.toBase58(),
+      assetMint.toBase58(),
+      stakeVaultPda(pool, programId).address.toBase58(),
+      operatorTokens.toBase58(),
+      TOKEN_PROGRAM_ID.toBase58(),
+    ])
+    expect(
+      instruction.keys.some((meta) => meta.pubkey.equals(vaultPda(pool, programId).address)),
+    ).toBe(false)
+  })
+
+  it('has only the operator sign', () => {
+    const { keys } = stakeSensorInstruction(input)
+    expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+    ])
   })
 })

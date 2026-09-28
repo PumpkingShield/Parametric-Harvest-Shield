@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { cellToChildren, cellToParent, latLngToCell } from 'h3-js'
 import { describe, expect, it } from 'vitest'
 import {
@@ -173,4 +174,29 @@ describe('published cell size — FR-060', () => {
     expect(() => cellSize(16)).toThrow(RangeError)
     expect(() => cellSize(-1)).toThrow(RangeError)
   })
+})
+
+/**
+ * The program checks cell ids with its own reading of the H3 bit layout
+ * (`programs/pumpking/src/h3.rs`, `T031`) and this module with `h3-js`. Both
+ * run the same fixture, generated from `h3-js` (`scripts/gen-h3-cells.mjs`),
+ * so a registration the chain accepts is one the interface can draw.
+ */
+describe('the shared H3 fixture', () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL('../../../fixtures/h3-cells.json', import.meta.url), 'utf8'),
+  ) as { cases: { id: string; valid: boolean; res: number | null; why: string }[] }
+
+  it('has cases on both sides', () => {
+    expect(fixture.cases.some((one) => one.valid)).toBe(true)
+    expect(fixture.cases.some((one) => !one.valid)).toBe(true)
+  })
+
+  for (const one of fixture.cases) {
+    it(`${one.why}: ${one.valid ? 'a cell' : 'not a cell'}`, () => {
+      const id = BigInt(one.id)
+      expect(isCellId(id)).toBe(one.valid)
+      if (one.res !== null) expect(cellResolution(id)).toBe(one.res)
+    })
+  }
 })

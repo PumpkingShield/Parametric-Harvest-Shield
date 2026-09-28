@@ -1,5 +1,5 @@
 export { BN } from '@coral-xyz/anchor'
-export type { CellStateAccount, PolicyAccount, PoolAccount } from './accounts.ts'
+export type { CellStateAccount, PolicyAccount, PoolAccount, SensorAccount } from './accounts.ts'
 export {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   accountDiscriminator,
@@ -7,9 +7,11 @@ export {
   decodeCellState,
   decodePolicy,
   decodePool,
+  decodeSensor,
   isPolicyActive,
   POLICY_ACTIVE,
   POLICY_DISCRIMINATOR,
+  SENSOR_DISCRIMINATOR,
 } from './accounts.ts'
 export { PUMPKING_IDL } from './idl/idl.ts'
 export type { Pumpking } from './idl/pumpking.ts'
@@ -25,7 +27,9 @@ export type {
   IssuePolicyInput,
   PolicyTerms,
   PoolParams,
+  RegisterSensorInput,
   SettlePolicyInput,
+  StakeSensorInput,
   SubmitDayRecordInput,
 } from './instructions.ts'
 export {
@@ -38,7 +42,9 @@ export {
   derivePdaFromIdl,
   initializePoolInstruction,
   issuePolicyInstruction,
+  registerSensorInstruction,
   settlePolicyInstruction,
+  stakeSensorInstruction,
   submitDayRecordInstruction,
 } from './instructions.ts'
 export type { Pda } from './pda.ts'

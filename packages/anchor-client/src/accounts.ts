@@ -25,6 +25,8 @@ export type PolicyAccount = IdlAccounts<Pumpking>['policy']
 export type CellStateAccount = IdlAccounts<Pumpking>['cellState']
 /** The on-chain `Pool`. */
 export type PoolAccount = IdlAccounts<Pumpking>['pool']
+/** The on-chain `Sensor` — the registry `FR-001` names. */
+export type SensorAccount = IdlAccounts<Pumpking>['sensor']
 
 /** The eight bytes an account of this type starts with. */
 export function accountDiscriminator(name: string): Uint8Array {
@@ -37,6 +39,9 @@ export function accountDiscriminator(name: string): Uint8Array {
 
 /** `Policy`'s discriminator — the `memcmp` a scan filters on. */
 export const POLICY_DISCRIMINATOR: Uint8Array = accountDiscriminator('policy')
+
+/** `Sensor`'s discriminator — what a scan of the registry filters on. */
+export const SENSOR_DISCRIMINATOR: Uint8Array = accountDiscriminator('sensor')
 
 function decode<T>(name: string, data: Uint8Array): T {
   // The coder wants a Buffer and checks the discriminator itself, so an
@@ -55,6 +60,10 @@ export function decodeCellState(data: Uint8Array): CellStateAccount {
 
 export function decodePool(data: Uint8Array): PoolAccount {
   return decode<PoolAccount>('pool', data)
+}
+
+export function decodeSensor(data: Uint8Array): SensorAccount {
+  return decode<SensorAccount>('sensor', data)
 }
 
 /**
