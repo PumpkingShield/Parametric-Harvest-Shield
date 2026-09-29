@@ -86,6 +86,14 @@ describe('readWorkerConfig', () => {
     expect(readWorkerConfig({ ...MINIMUM, MINIMUM_COVERAGE_X100: '0' }).minimumCoverageX100).toBe(0)
   })
 
+  it('re-reads the registry every five minutes unless told otherwise — T076', () => {
+    expect(readWorkerConfig(MINIMUM).registrySyncMs).toBe(300_000)
+    expect(readWorkerConfig({ ...MINIMUM, REGISTRY_SYNC_MS: '60000' }).registrySyncMs).toBe(60_000)
+    // Each read is a scan over every sensor there is; a period under a second
+    // is a misplaced digit, not a setting.
+    expect(() => readWorkerConfig({ ...MINIMUM, REGISTRY_SYNC_MS: '999' })).toThrow(ConfigError)
+  })
+
   it('refuses a backlog of zero days', () => {
     // `closeDueDays` refuses it too, at runtime, one cycle later.
     expect(() => readWorkerConfig({ ...MINIMUM, BACKLOG_DAYS: '0' })).toThrow(ConfigError)

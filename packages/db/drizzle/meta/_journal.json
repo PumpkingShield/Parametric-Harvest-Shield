@@ -8,6 +8,13 @@
       "when": 1788005126226,
       "tag": "0000_init_sensor_network",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790705707579,
+      "tag": "0001_registry_mirror",
+      "breakpoints": true
     }
   ]
 }

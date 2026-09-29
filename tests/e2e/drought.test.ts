@@ -92,6 +92,13 @@ const POLICY_ADDRESS = key(5)
 /** `FR-046`: the run of dry days this policy was sold against. */
 const SPELL_THRESHOLD = 14
 
+/**
+ * `pool.min_stake` on the devnet pools. Every scenario sensor here stands for
+ * one registered and staked on chain — the path the show takes from `T077` —
+ * so each is registered with exactly the minimum, the edge `FR-050` admits.
+ */
+const MIN_STAKE = 1_000_000n
+
 /* -------------------------------------------------------------------------- */
 /* The database, in memory                                                    */
 /* -------------------------------------------------------------------------- */
@@ -104,6 +111,8 @@ const SPELL_THRESHOLD = 14
 class Store implements ReadingStore, IntervalStore {
   registrations = new Map<string, SensorRegistration>()
   sensors = new Map<string, ScenarioSensor>()
+  /** The stake the registry mirror found on chain, per sensor. */
+  stakes = new Map<string, bigint>()
   rows: ReadingRow[] = []
   byCounter = new Set<string>()
   intervals: IntervalRow[] = []
@@ -111,7 +120,8 @@ class Store implements ReadingStore, IntervalStore {
 
   constructor(readonly cellId: bigint) {}
 
-  register(sensor: ScenarioSensor, kind: ReadingKindName): void {
+  register(sensor: ScenarioSensor, kind: ReadingKindName, stake: bigint): void {
+    this.stakes.set(sensor.pubkey, stake)
     this.registrations.set(sensor.pubkey, {
       pubkey: sensor.pubkey,
       cellId: this.cellId,
@@ -156,6 +166,7 @@ class Store implements ReadingStore, IntervalStore {
     _kind: ReadingKindName,
     from: Date,
     to: Date,
+    minStake: bigint,
   ): Promise<AcceptedReading[]> {
     const accepted: AcceptedReading[] = []
     for (const row of this.rows) {
@@ -164,6 +175,8 @@ class Store implements ReadingStore, IntervalStore {
       if (row.measuredAt.getTime() >= to.getTime()) continue
       const sensor = this.sensors.get(row.sensorPubkey)
       if (sensor === undefined) continue
+      // `votingSensor`: below the pool's minimum, stored and not counted.
+      if ((this.stakes.get(row.sensorPubkey) ?? 0n) < minStake) continue
       accepted.push({
         sensorPubkey: row.sensorPubkey,
         operator: sensor.operator,
@@ -274,7 +287,7 @@ async function playDrought(signed: readonly SignedReading[], scenario: Scenario)
   const cellId = cellIdFromH3Index(scenario.cell)
   const sensors = await scenarioSensors(scenario)
   const store = new Store(cellId)
-  for (const sensor of sensors) store.register(sensor, scenario.kind)
+  for (const sensor of sensors) store.register(sensor, scenario.kind, MIN_STAKE)
 
   // The sensor publishes the moment it measures; intake decides whether that
   // is inside the window (`FR-004`), and on this clock everything is.
@@ -303,6 +316,7 @@ async function playDrought(signed: readonly SignedReading[], scenario: Scenario)
     aggregator: AGGREGATOR,
     clock: scenarioClock(scenario, GENESIS),
     params: scenarioParams(scenario),
+    minStake: MIN_STAKE,
   }
   const settlement: SettleDeps = {
     store,

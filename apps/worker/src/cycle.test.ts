@@ -8,9 +8,12 @@ import {
 } from '@pumpking/anchor-client'
 import type {
   AcceptedReading,
+  ChainSensor,
   DayRow,
   IntervalRow,
   OpenDay,
+  RegistryMirrorStore,
+  RegistryRow,
   RetentionCutoffs,
   RetentionStore,
   SweepResult,
@@ -19,6 +22,7 @@ import { DayState } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { PoolSource } from './chain.ts'
 import { type CycleDeps, clockOf, paramsOf, runCycle, summarise } from './cycle.ts'
+import { type RegistrySource, registryMirror } from './registry.ts'
 import { retentionSweeper } from './retention.ts'
 import type { OpenPolicy } from './settle.ts'
 
@@ -123,7 +127,16 @@ class Store {
     }
     return Promise.resolve(open)
   }
-  acceptedReadings(): Promise<AcceptedReading[]> {
+  /** The minimum stake each median was taken under, in order. */
+  minStakes: bigint[] = []
+  acceptedReadings(
+    _cellId: bigint,
+    _kind: string,
+    _from: Date,
+    _to: Date,
+    minStake: bigint,
+  ): Promise<AcceptedReading[]> {
+    this.minStakes.push(minStake)
     return Promise.resolve([])
   }
   /** No day is closed yet, so every due day is closed by this cycle. */
@@ -368,8 +381,85 @@ describe('summarise', () => {
       ],
       closed: [{ policy: 'b', status: 'running' as const, spell: 1 }],
       swept: null,
+      registry: null,
     }
 
     expect(summarise(failed)).toEqual({ submitted: 1, settled: 0, closed: 0, failed: 2 })
+  })
+})
+
+/** A registry that answers from a list, and can be told to fail. */
+class Registry implements RegistrySource, RegistryMirrorStore {
+  chain: ChainSensor[] = []
+  rows: RegistryRow[] = []
+  fail = false
+  /** How many instructions had reached the chain when each read ran. */
+  sentBefore: number[] = []
+  sensors(): Promise<ChainSensor[]> {
+    this.sentBefore.push(chain.sent.length)
+    if (this.fail) return Promise.reject(new Error('429 Too Many Requests'))
+    return Promise.resolve(this.chain)
+  }
+  sensorRows(): Promise<RegistryRow[]> {
+    return Promise.resolve(this.rows)
+  }
+  mirrorSensors(rows: readonly ChainSensor[]): Promise<void> {
+    this.rows = [...this.rows, ...rows.map((row) => ({ ...row, mirrored: true }))]
+    return Promise.resolve()
+  }
+}
+
+describe('the registry in a cycle — T076', () => {
+  it('is read first, before any day is closed', async () => {
+    const registry = new Registry()
+    const report = await runCycle(
+      { ...deps, registry: registryMirror(registry, registry) },
+      new Date('2026-08-03T00:00:01Z'),
+    )
+
+    expect(registry.sentBefore).toEqual([0])
+    expect(chain.names).toEqual(['submitDayRecord', 'submitDayRecord'])
+    expect(report.registry).toEqual({ status: 'mirrored', onChain: 0, written: 0, missing: [] })
+  })
+
+  it('closes no day until the chain has been read once', async () => {
+    const registry = new Registry()
+    registry.fail = true
+    const mirror = registryMirror(registry, registry, 300_000, 30_000)
+
+    const first = await runCycle({ ...deps, registry: mirror }, new Date('2026-08-03T00:00:01Z'))
+    // A day closed now would be a median over whatever the database last held
+    // — on a fresh one, nobody — and the chain keeps it for good.
+    expect(first.skipped).toBe('registry-unread')
+    expect(first.registry?.status).toBe('failed')
+    expect(chain.sent).toEqual([])
+    expect(store.saved).toEqual([])
+
+    registry.fail = false
+    const second = await runCycle({ ...deps, registry: mirror }, new Date('2026-08-03T00:00:31Z'))
+    expect(second.skipped).toBeNull()
+    expect(chain.names).toEqual(['submitDayRecord', 'submitDayRecord'])
+  })
+
+  it('keeps closing days on the last registry when a later read fails', async () => {
+    const registry = new Registry()
+    const mirror = registryMirror(registry, registry, 300_000, 30_000)
+    await runCycle({ ...deps, registry: mirror }, new Date('2026-08-02T00:00:01Z'))
+
+    store.submittedDays = []
+    registry.fail = true
+    const report = await runCycle({ ...deps, registry: mirror }, new Date('2026-08-03T00:05:01Z'))
+    expect(report.skipped).toBeNull()
+    expect(report.registry?.status).toBe('failed')
+    expect(store.submittedDays).toEqual([0, 1])
+  })
+
+  it('takes the median under the minimum stake the pool publishes — FR-050', async () => {
+    account = pool({ minStake: new BN(1_000_000) })
+    await runCycle(deps, new Date('2026-08-03T00:00:01Z'))
+
+    // A worker holding its own copy of the minimum would disagree with the
+    // program the first time the authority changed it.
+    expect(store.minStakes).toEqual([1_000_000n, 1_000_000n])
   })
 })

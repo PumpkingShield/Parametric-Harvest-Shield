@@ -77,6 +77,8 @@ class FakeStore implements IntervalStore {
   days = new Map<string, DayRow>()
   /** What the store was asked for, in order — the sequence matters. */
   calls: string[] = []
+  /** The minimum stake each read of readings asked for. */
+  minStakes: bigint[] = []
 
   openDays(fromDay: number, toDay: number): Promise<OpenDay[]> {
     this.calls.push('openDays')
@@ -96,8 +98,10 @@ class FakeStore implements IntervalStore {
     _kind: string,
     from: Date,
     to: Date,
+    minStake: bigint,
   ): Promise<AcceptedReading[]> {
     this.calls.push('acceptedReadings')
+    this.minStakes.push(minStake)
     return Promise.resolve(
       this.readings.filter(
         (row) =>
@@ -167,6 +171,7 @@ beforeEach(() => {
     aggregator: PublicKey.default,
     clock: CLOCK,
     params: PARAMS,
+    minStake: 1_000_000n,
   }
 })
 
@@ -405,6 +410,13 @@ describe('closeCellDay', () => {
     expect(store.intervals[0]?.medianX100).toBe(10)
     expect(store.intervals[1]?.medianX100).toBe(20)
     expect(store.intervals[2]?.medianX100).toBeNull()
+  })
+
+  it('asks only for readings of sensors holding the minimum stake — FR-050', async () => {
+    await closeCellDay({ ...deps, minStake: 5_000_000n }, CELL_ID, 0)
+    // The filter is the store's (`votingSensor`); what is checked here is that
+    // the day is never taken over a set the minimum was not applied to.
+    expect(store.minStakes).toEqual([5_000_000n])
   })
 
   it('stores the day before it sends it, and the signature after', async () => {

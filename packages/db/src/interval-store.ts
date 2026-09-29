@@ -1,5 +1,5 @@
 import type { DayClassification, ReadingKindName } from '@pumpking/shared'
-import { and, asc, eq, gte, lt, lte, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, gte, isNotNull, lt, lte, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cellDays, cellHours, cells, operators, readings, sensors } from './schema.ts'
 
@@ -90,12 +90,18 @@ export interface IntervalStore {
    * statement and an empty answer, whatever the size of the network.
    */
   openDays(fromDay: number, toDay: number): Promise<OpenDay[]>
-  /** Accepted readings of one cell and kind in `[from, to)`, oldest first. */
+  /**
+   * Accepted readings of one cell and kind in `[from, to)`, oldest first —
+   * from voting sensors only (`votingSensor`).
+   *
+   * `minStake` is `pool.min_stake`, read from the chain the same cycle.
+   */
   acceptedReadings(
     cellId: bigint,
     kind: ReadingKindName,
     from: Date,
     to: Date,
+    minStake: bigint,
   ): Promise<AcceptedReading[]>
   /** The stored day, or null when it has not been closed yet. */
   dayRecord(cellId: bigint, dayIndex: number): Promise<DayRow | null>
@@ -125,6 +131,29 @@ function excluded(column: string): SQL {
   return sql.raw(`excluded.${column}`)
 }
 
+/**
+ * Whether a sensor's readings vote in its cell's median — `FR-050`, `FR-012`.
+ *
+ * Three conditions, each the chain's word rather than ours: the sensor is on
+ * chain (the registry mirror has seen its account, `T076`), it has not been
+ * excluded, and it holds at least the pool's minimum stake. A sensor that
+ * fails any of them keeps publishing, and its readings are stored and shown —
+ * they just carry no vote, and no bit of the day's `contributors` mask.
+ *
+ * On chain rather than "stake above the minimum" alone because `min_stake`
+ * may be zero, and a row nobody registered would then vote with a stake
+ * nobody put up.
+ */
+export function votingSensor(minStake: bigint): SQL {
+  if (minStake < 0n) throw new RangeError(`minStake cannot be negative: ${minStake}`)
+  // `and` of three present conditions is never undefined; the fallback only
+  // satisfies its signature.
+  return (
+    and(isNotNull(sensors.mirroredAt), eq(sensors.active, true), gte(sensors.stake, minStake)) ??
+    sql`false`
+  )
+}
+
 /** The `IntervalStore` backed by the real tables. */
 export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): IntervalStore {
   return {
@@ -145,7 +174,7 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
       return rows.map((row) => ({ cellId: BigInt(row.cell_id), dayIndex: Number(row.day_index) }))
     },
 
-    async acceptedReadings(cellId, kind, from, to) {
+    async acceptedReadings(cellId, kind, from, to, minStake) {
       const rows = await db
         .select({
           sensorPubkey: readings.sensorPubkey,
@@ -168,8 +197,7 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
             // `late` and `rejected` never counted; `outlier` stopped counting
             // when the sensor's reputation said so — FR-004, FR-011.
             eq(readings.status, 'accepted'),
-            // FR-012: an excluded sensor keeps publishing and stops voting.
-            eq(sensors.active, true),
+            votingSensor(minStake),
           ),
         )
         .orderBy(asc(readings.sensorPubkey), asc(readings.counter))

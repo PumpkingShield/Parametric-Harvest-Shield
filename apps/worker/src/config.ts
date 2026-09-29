@@ -85,6 +85,12 @@ const schema = z.object({
   /** `DEFAULT_BACKLOG_DAYS`: how far back a run reaches for days it missed. */
   BACKLOG_DAYS: z.coerce.number().int().min(1).default(7),
   /**
+   * `MIRROR_EVERY_MS`: how often the on-chain sensor registry is re-read
+   * (`T076`) — and so how stale a stake the median may run on. Not below a
+   * second: each read is a `getProgramAccounts` over every sensor there is.
+   */
+  REGISTRY_SYNC_MS: z.coerce.number().int().min(1_000).default(300_000),
+  /**
    * A URL pinged once a cycle so a free tier does not idle the API to sleep.
    *
    * Empty by default, and it points at the *other* service on purpose: a
@@ -106,6 +112,7 @@ export type WorkerConfig = {
   minimumCoverageX100: number
   cycleIntervalMs: number
   backlogDays: number
+  registrySyncMs: number
   keepAliveUrl: string | null
   shutdownTimeoutMs: number
 }
@@ -150,6 +157,7 @@ export function readWorkerConfig(env: Record<string, string | undefined>): Worke
     minimumCoverageX100: value.MINIMUM_COVERAGE_X100,
     cycleIntervalMs: value.CYCLE_INTERVAL_MS,
     backlogDays: value.BACKLOG_DAYS,
+    registrySyncMs: value.REGISTRY_SYNC_MS,
     keepAliveUrl: value.KEEPALIVE_URL.trim() === '' ? null : value.KEEPALIVE_URL.trim(),
     shutdownTimeoutMs: value.SHUTDOWN_TIMEOUT_MS,
   }

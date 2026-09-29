@@ -11,6 +11,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
 import type { DayClassification } from '@pumpking/shared'
@@ -108,6 +109,14 @@ export const sensors = pgTable(
     /** False once excluded for systematic outliers — FR-012. */
     active: boolean().notNull().default(true),
     registeredAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    /**
+     * When the registry mirror last found this sensor's `Sensor` account on
+     * chain (`T076`); null for a row only the scenario door (`ensureCell`)
+     * wrote. `FR-050` counts a vote only from a sensor that is on chain, so a
+     * null here is no vote whatever `stake` says — the stake is the chain's
+     * number, and a row the chain has never seen has none.
+     */
+    mirroredAt: timestamp({ withTimezone: true }),
   },
   (t) => [
     index('sensors_cell_idx').on(t.cellId),
@@ -115,8 +124,17 @@ export const sensors = pgTable(
     /**
      * MAX_SENSORS_PER_CELL = 32: one sensor per bitmask slot, or the day's
      * contributor set stops being readable.
+     *
+     * Among mirrored sensors only. The chain hands out the slots, and a row
+     * that is not on chain votes in no mask (`FR-050`), so its slot is a
+     * fixture's claim on a bit rather than a bit. Were it unique across every
+     * row, a scenario sensor holding slot 0 of a cell would keep the real
+     * sensor the program gave slot 0 out of the mirror — the chain losing to
+     * a fixture.
      */
-    unique('sensors_cell_slot_uq').on(t.cellId, t.slotInCell),
+    uniqueIndex('sensors_cell_slot_uq')
+      .on(t.cellId, t.slotInCell)
+      .where(sql`${t.mirroredAt} is not null`),
   ],
 )
 

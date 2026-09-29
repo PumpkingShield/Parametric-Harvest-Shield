@@ -29,6 +29,7 @@ function config(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     minimumCoverageX100: 75,
     cycleIntervalMs: 1_000,
     backlogDays: 7,
+    registrySyncMs: 300_000,
     keepAliveUrl: null,
     shutdownTimeoutMs: 15_000,
     ...overrides,
@@ -43,6 +44,7 @@ function report(overrides: Partial<CycleReport> = {}): CycleReport {
     settled: [],
     closed: [],
     swept: null,
+    registry: null,
     ...overrides,
   }
 }

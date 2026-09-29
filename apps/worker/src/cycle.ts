@@ -12,6 +12,7 @@ import {
   DEFAULT_BACKLOG_DAYS,
   type PoolClock,
 } from './interval.ts'
+import type { MirrorOutcome, RegistryMirror } from './registry.ts'
 import type { RetentionSweeper, SweepOutcome } from './retention.ts'
 import {
   type PolicySource,
@@ -23,12 +24,16 @@ import {
 /**
  * One turn of the worker — `T057`.
  *
- * Three dispatchers exist and none of them starts itself. That is the hole this
+ * The dispatchers exist and none of them starts itself. That is the hole this
  * project has now found three times: `close_policy` had a builder and no
  * caller, `settle_policy` had a dispatcher nothing ran, and the sensor registry
  * had a schema nobody wrote to. So the order is written down here, once, and it
  * is the whole of what a cycle does:
  *
+ * 0. **`syncIfDue`** — the on-chain sensor registry into the database
+ *    (`T076`), every few minutes. First, because every median the next step
+ *    takes counts only the sensors this says are staked (`FR-050`); and until
+ *    it has read the chain once in this process, no day is closed at all.
  * 1. **`closeDueDays`** — every day that is over and not yet on chain, for
  *    every cell. This is the only step that can produce a new day, and a new
  *    day is the only thing that can start or finish a policy's run.
@@ -74,6 +79,12 @@ export type CycleDeps = {
   programId?: PublicKey
   /** Absent in tests that are not about retention. */
   retention?: RetentionSweeper
+  /**
+   * Absent in tests that are not about the registry. Present in every real
+   * cycle (`rpcCycle`): without it the registry is whatever the database last
+   * held, and on a fresh one nothing votes.
+   */
+  registry?: RegistryMirror
 }
 
 /** Why a cycle did nothing, when it did nothing. */
@@ -82,6 +93,12 @@ export type CycleSkip =
   | 'no-pool'
   /** The clock the pool publishes is not one a day can be counted on. */
   | 'unusable-clock'
+  /**
+   * The registry mirror has not read the chain in this process yet. A day
+   * closed now would be a median over a registry of unknown age, written to
+   * the chain for good (`registry.ts`).
+   */
+  | 'registry-unread'
 
 export type CycleReport = {
   skipped: CycleSkip | null
@@ -98,11 +115,13 @@ export type CycleReport = {
   closed: CloseOutcome[]
   /** Null when no sweep was due this cycle. */
   swept: SweepOutcome | null
+  /** Null when no read of the registry was due this cycle. */
+  registry: MirrorOutcome | null
 }
 
 /** A fresh set of empty lists — never a shared one a caller could append to. */
 function nothing(): Omit<CycleReport, 'skipped' | 'aggregatorMatches'> {
-  return { days: [], settled: [], closed: [], swept: null }
+  return { days: [], settled: [], closed: [], swept: null, registry: null }
 }
 
 /** The pool's own clock, plus how finely this worker cuts a day. */
@@ -141,6 +160,11 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
     return { skipped: 'unusable-clock', aggregatorMatches, ...nothing() }
   }
 
+  const registry = deps.registry === undefined ? null : await deps.registry.syncIfDue(now)
+  if (deps.registry !== undefined && !deps.registry.synced) {
+    return { skipped: 'registry-unread', aggregatorMatches, ...nothing(), registry }
+  }
+
   const params = paramsOf(pool, deps.minimumCoverageX100)
 
   const days = await closeDueDays(
@@ -150,6 +174,8 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
       aggregator: deps.aggregator,
       clock,
       params,
+      // `FR-050`: the pool publishes the minimum, like every other threshold.
+      minStake: BigInt(pool.minStake.toString()),
       ...(deps.programId === undefined ? {} : { programId: deps.programId }),
     },
     now,
@@ -183,7 +209,7 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
           backlogHorizon(clock, now, deps.backlogDays ?? DEFAULT_BACKLOG_DAYS),
         )
 
-  return { skipped: null, aggregatorMatches, days, settled, closed, swept }
+  return { skipped: null, aggregatorMatches, days, settled, closed, swept, registry }
 }
 
 /** What a finished cycle is worth saying in one log line. */

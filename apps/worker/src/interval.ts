@@ -408,6 +408,11 @@ export type AggregatorDeps = {
   aggregator: PublicKey
   clock: PoolClock
   params: AggregationParams
+  /**
+   * `FR-050`: `pool.min_stake`. A sensor below it publishes and is stored,
+   * and is left out of the median and the `contributors` mask.
+   */
+  minStake: bigint
   programId?: PublicKey
 }
 
@@ -448,7 +453,13 @@ export async function closeCellDay(
     throw new RangeError('a day has at least one interval')
   }
 
-  const readings = await deps.store.acceptedReadings(cellId, deps.params.kind, from, to)
+  const readings = await deps.store.acceptedReadings(
+    cellId,
+    deps.params.kind,
+    from,
+    to,
+    deps.minStake,
+  )
 
   const intervals: ClosedInterval[] = []
   for (let index = 0; index < deps.clock.intervalsPerDay; index += 1) {

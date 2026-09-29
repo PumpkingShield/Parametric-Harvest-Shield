@@ -1,10 +1,11 @@
 import { Connection } from '@pumpking/anchor-client'
-import type { IntervalStore, RetentionStore } from '@pumpking/db'
+import type { IntervalStore, RegistryMirrorStore, RetentionStore } from '@pumpking/db'
 import type { Logger } from 'pino'
 import { rpcDaySubmitter, rpcPoolSource } from './chain.ts'
 import type { WorkerConfig } from './config.ts'
 import { type CycleDeps, type CycleReport, runCycle, summarise } from './cycle.ts'
 import { stalledAfterMs, type WorkerHealthState } from './health.ts'
+import { registryMirror, rpcRegistrySource } from './registry.ts'
 import { retentionSweeper } from './retention.ts'
 import { rpcPolicySource } from './settle.ts'
 
@@ -66,6 +67,7 @@ export function rpcCycle(
   config: WorkerConfig,
   store: IntervalStore,
   retention: RetentionStore,
+  registry: RegistryMirrorStore,
 ): CycleRunner {
   const connection = new Connection(config.rpcUrl, 'confirmed')
 
@@ -80,6 +82,11 @@ export function rpcCycle(
     backlogDays: config.backlogDays,
     programId: config.programId,
     retention: retentionSweeper(retention),
+    registry: registryMirror(
+      rpcRegistrySource(connection, config.programId),
+      registry,
+      config.registrySyncMs,
+    ),
   }
 
   return (now) => runCycle(deps, now)
@@ -125,6 +132,19 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
   async function turn(): Promise<void> {
     try {
       const report = await options.cycle(now())
+
+      if (report.registry?.status === 'failed') {
+        log.warn({ err: report.registry.error }, 'the registry read failed, trying again shortly')
+      } else if (report.registry?.status === 'mirrored') {
+        const { onChain, written, missing } = report.registry
+        if (missing.length > 0) {
+          // The program closes no `Sensor` account, so a mirrored sensor the
+          // scan did not return is a short answer or a changed program. Left
+          // voting; said loudly.
+          log.warn({ onChain, written, missing }, 'mirrored sensors missing from the chain')
+        } else if (written > 0) log.info({ onChain, written }, 'registry mirrored')
+        else log.debug({ onChain, written }, 'registry mirrored')
+      }
 
       if (report.skipped !== null) {
         // Once, and again when the reason changes. A worker started before
