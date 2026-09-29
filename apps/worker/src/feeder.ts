@@ -1,4 +1,3 @@
-import type { CellSetup } from '@pumpking/db'
 import {
   cellIdFromH3Index,
   type Reading,
@@ -56,14 +55,18 @@ export type FeederSensor = {
   seed: number
   /** Index into `FEEDER_CELLS`. */
   cell: number
-  slotInCell: number
-  /** Index into the operator wallets. `FR-009`: three operators, three votes. */
+  /**
+   * Which of the three operators registers and stakes it (`OPERATOR_A…C` in
+   * `scripts/devnet-register.mjs`). `FR-009`: three operators, three votes.
+   */
   operator: number
 }
 
 /**
- * The network: sensor `k` sits in cell `k mod 4`, slot `k div 4`, operator
- * `k mod 3` — so every cell holds all three operators and gets its three votes.
+ * The network: sensor `k` sits in cell `k mod 4` and belongs to operator
+ * `k mod 3` — so every cell holds all three operators and gets its three
+ * votes. Twenty-five sensors a cell, under the program's thirty-two; the slot
+ * each gets is the program's to hand out (`T077`).
  */
 export async function feederSensors(): Promise<FeederSensor[]> {
   return await Promise.all(
@@ -75,40 +78,20 @@ export async function feederSensors(): Promise<FeederSensor[]> {
         pubkey: await sensorPublicKey(secretKey),
         seed,
         cell: k % FEEDER_CELLS.length,
-        slotInCell: Math.floor(k / FEEDER_CELLS.length),
         operator: k % 3,
       }
     }),
   )
 }
 
-/** What the registry has to hold before intake accepts one of these readings. */
-export function feederCellSetups(
-  sensors: readonly FeederSensor[],
-  operatorWallets: readonly string[],
-): CellSetup[] {
-  if (operatorWallets.length !== 3) {
-    throw new RangeError(`the feeder needs three operator wallets, got ${operatorWallets.length}`)
-  }
-  return FEEDER_CELLS.map((hex, cell) => {
-    const cellId = cellIdFromH3Index(hex)
-    return {
-      cellId,
-      resolution: 7,
-      sensors: sensors
-        .filter((sensor) => sensor.cell === cell)
-        .map((sensor) => {
-          const operatorWallet = operatorWallets[sensor.operator]
-          if (operatorWallet === undefined) throw new Error('unreachable: three wallets checked')
-          return {
-            pubkey: sensor.pubkey,
-            kind: ReadingKind.PrecipitationMm,
-            slotInCell: sensor.slotInCell,
-            operatorWallet,
-          }
-        }),
-    }
-  })
+/**
+ * Where each sensor has to be registered, for the registry check a tick makes
+ * before it publishes (`votingProblems`) and for `scripts/devnet-register.mjs`.
+ */
+export function feederCellId(sensor: FeederSensor): bigint {
+  const hex = FEEDER_CELLS[sensor.cell]
+  if (hex === undefined) throw new RangeError(`no feeder cell ${sensor.cell}`)
+  return cellIdFromH3Index(hex)
 }
 
 /** The hour an instant falls in, counted from the unix epoch. */

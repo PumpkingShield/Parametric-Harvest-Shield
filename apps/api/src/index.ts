@@ -9,6 +9,7 @@ import {
   pgRegistryStore,
   pgRetentionStore,
 } from '@pumpking/db'
+import { rpcPoolSource } from '@pumpking/worker/chain'
 import { readWorkerConfig, ConfigError as WorkerConfigError } from '@pumpking/worker/config'
 import { healthOf } from '@pumpking/worker/health'
 import { guardProcess } from '@pumpking/worker/process-guard'
@@ -59,6 +60,9 @@ guardProcess(process, log)
 
 const database = createDb(config.databaseUrl)
 const connection = new Connection(config.rpcUrl, 'confirmed')
+// Read when a run is asked for, never cached: the minimum is the pool's, and a
+// pool that changes it is followed rather than argued with.
+const poolSource = rpcPoolSource(connection, config.programId)
 
 /**
  * The loop, when this deployment is the one that runs it.
@@ -97,6 +101,10 @@ const app = createApiApp({
   intervals: pgIntervalStore(database.db),
   policies: rpcPolicyLookup(connection, config.programId),
   registry: pgRegistryStore(database.db),
+  minStake: async () => {
+    const pool = await poolSource.read()
+    return pool === null ? null : BigInt(pool.minStake.toString())
+  },
   counters: pgCounterStore(database.db),
   scenarioMode: config.scenarioMode,
   webOrigin: config.webOrigin,

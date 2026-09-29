@@ -1,113 +1,110 @@
-import { cellResolution, ReadingKind, type ReadingKindName } from '@pumpking/shared'
-import { eq, inArray, sql } from 'drizzle-orm'
+import { cellResolution, ReadingKind } from '@pumpking/shared'
+import { eq, inArray, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cells, operators, sensors } from './schema.ts'
 
 /**
- * Putting a cell, its operators and its sensors into the registry — `FR-001`,
- * `FR-006`, `FR-009`.
+ * The sensor registry, as the rest of the service reads it — `FR-001`,
+ * `FR-050`.
  *
- * `POST /v1/readings` refuses a key it does not know (`FR-002`), so until
- * somebody writes these three tables the network cannot publish anything at
- * all. On M1 the sensors are our own keys and the weather is a scenario
- * (`fixtures/scenarios/`), and the run is the only thing that knows which
- * sensors it is about to use — so the run is what registers them. Open
- * registration is `register_sensor` on chain, which is `T031` and M2; this is
- * the M1 door and it is deliberately narrow: it can only make rows exist.
+ * Registration is on chain (`register_sensor`, `T031`), and nothing in this
+ * service writes it: the mirror below (`T076`) copies the program's accounts
+ * in, and everything else only asks. Until `T077` the show and the `SC-008`
+ * feeder had a door of their own, `ensureCell`, that put their keys into these
+ * tables directly. It is gone. A row that exists here and not on chain carries
+ * no vote, so a door that makes such rows is a way to run a network that is
+ * published, stored and shown — and silently counts for nothing.
  *
- * **Every method is idempotent and none of them updates.** A second run over
- * the same fixture must be a no-op rather than a rewrite: the slot a sensor
- * occupies, the cell it votes in and the operator its vote counts for are
- * facts the median and the on-chain `contributors` mask are computed from, and
- * quietly moving one under a running policy would change what a recorded day
- * meant after the fact. A row that exists and disagrees is left as it is.
- *
- * **Since `T076` the rows this door writes do not vote.** `FR-050` counts only
- * a sensor the registry mirror found on chain, so a sensor that exists only
- * here publishes and is stored, and carries no vote and no bit of the mask.
- * Its slot is a fixture's claim and nothing more, which is why the slot index
- * binds mirrored rows only (`schema.ts`). `T077` moves the show to on-chain
- * registration; until then this door keeps intake open for scenario keys.
+ * A run that means to publish (the show, the feeder) asks instead whether its
+ * sensors vote, and refuses to start when they do not: `votingProblems`.
  */
 
-/** A sensor as the registry needs it — `FR-001`. */
-export type SensorSetup = {
-  /** Base58 ed25519 public key; also the seed of the on-chain `Sensor` PDA. */
-  pubkey: string
-  kind: ReadingKindName
-  /** Position in the on-chain `contributors` bitmask, 0..31. */
-  slotInCell: number
-  /**
-   * Base58 wallet of the operator this sensor's vote counts for — `FR-009`
-   * makes the operator the unit of the vote, so a sensor without one is not a
-   * vote, and rewards and burnt stake settle against this key.
-   */
-  operatorWallet: string
-}
-
-/** A cell and the network that publishes into it. */
-export type CellSetup = {
-  cellId: bigint
-  /** `FR-060` makes the grid level a parameter, so it is stored, not assumed. */
-  resolution: number
-  sensors: readonly SensorSetup[]
-}
-
 export interface RegistryStore {
-  /**
-   * Makes the cell, its operators and its sensors exist. Idempotent.
-   *
-   * A row that already exists is left exactly as it is, including one the
-   * mirror has since written from the chain.
-   */
-  ensureCell(setup: CellSetup): Promise<void>
+  /** The rows of these sensors, mirrored or not. A key with no row is absent. */
+  rowsOf(pubkeys: readonly string[]): Promise<RegistryRow[]>
+}
+
+/** A sensor a run means to publish from, and the cell it means to publish into. */
+export type ExpectedSensor = { pubkey: string; cellId: bigint }
+
+/**
+ * Why a sensor cannot vote where a run expects it to — the same three
+ * conditions as `votingSensor`, and a fourth only a run can state.
+ */
+export type SensorProblem =
+  /** No row, or a row the mirror has never found on chain. */
+  | 'unregistered'
+  /** On chain, in a different cell. The chain fixed the cell at registration. */
+  | 'wrong-cell'
+  /** Excluded for systematic outliers — `FR-012`. */
+  | 'excluded'
+  /** Below `pool.min_stake` — `FR-050`. */
+  | 'understaked'
+
+export type SensorIssue = { pubkey: string; problem: SensorProblem }
+
+/**
+ * The sensors among `expected` that would publish without a vote, and why —
+ * empty when every one of them counts.
+ *
+ * Reads the mirror, not the chain: the median is taken over the mirror, so a
+ * sensor staked a minute ago that the mirror has not caught up with is, for
+ * the day being closed, not staked yet. Saying so before a run starts is
+ * cheaper than finding a day without coverage after.
+ */
+export function votingProblems(
+  expected: readonly ExpectedSensor[],
+  rows: readonly RegistryRow[],
+  minStake: bigint,
+): SensorIssue[] {
+  const byKey = new Map(rows.map((row) => [row.pubkey, row]))
+  const issues: SensorIssue[] = []
+  for (const sensor of expected) {
+    const row = byKey.get(sensor.pubkey)
+    const problem: SensorProblem | null =
+      row === undefined || !row.mirrored
+        ? 'unregistered'
+        : row.cellId !== sensor.cellId
+          ? 'wrong-cell'
+          : !row.active
+            ? 'excluded'
+            : row.stake < minStake
+              ? 'understaked'
+              : null
+    if (problem !== null) issues.push({ pubkey: sensor.pubkey, problem })
+  }
+  return issues
+}
+
+/** Every column the registry is compared on, with the operator's wallet. */
+async function selectRows(
+  db: PostgresJsDatabase<Record<string, never>>,
+  where?: SQL,
+): Promise<RegistryRow[]> {
+  const query = db
+    .select({
+      pubkey: sensors.pubkey,
+      operatorWallet: operators.wallet,
+      cellId: sensors.cellId,
+      slotInCell: sensors.slotInCell,
+      stake: sensors.stake,
+      accepted: sensors.accepted,
+      outliers: sensors.outliers,
+      active: sensors.active,
+      mirroredAt: sensors.mirroredAt,
+    })
+    .from(sensors)
+    .innerJoin(operators, eq(operators.id, sensors.operatorId))
+  const rows = await (where === undefined ? query : query.where(where))
+  return rows.map(({ mirroredAt, ...row }) => ({ ...row, mirrored: mirroredAt !== null }))
 }
 
 /** The `RegistryStore` backed by the real tables. */
 export function pgRegistryStore(db: PostgresJsDatabase<Record<string, never>>): RegistryStore {
   return {
-    async ensureCell(setup) {
-      await db
-        .insert(cells)
-        .values({ id: setup.cellId, resolution: setup.resolution })
-        .onConflictDoNothing({ target: cells.id })
-
-      const wallets = [...new Set(setup.sensors.map((sensor) => sensor.operatorWallet))]
-      if (wallets.length === 0) return
-
-      await db
-        .insert(operators)
-        .values(wallets.map((wallet) => ({ wallet })))
-        .onConflictDoNothing({ target: operators.wallet })
-
-      // Read back rather than `returning()`: the rows that already existed are
-      // not returned by an insert that did nothing about them, and those are
-      // exactly the ones a second run needs.
-      const rows = await db
-        .select({ id: operators.id, wallet: operators.wallet })
-        .from(operators)
-        .where(inArray(operators.wallet, wallets))
-      const idByWallet = new Map(rows.map((row) => [row.wallet, row.id]))
-
-      const values = setup.sensors.map((sensor) => {
-        const operatorId = idByWallet.get(sensor.operatorWallet)
-        if (operatorId === undefined) {
-          // The insert above put every wallet there; reaching this means the
-          // row vanished between the two statements.
-          throw new Error(`no operator row for wallet ${sensor.operatorWallet}`)
-        }
-        return {
-          pubkey: sensor.pubkey,
-          operatorId,
-          cellId: setup.cellId,
-          kind: sensor.kind,
-          slotInCell: sensor.slotInCell,
-        }
-      })
-
-      // Conflicting on the key alone, on purpose: a sensor already registered
-      // — by this door or by the chain — is left exactly as it is.
-      await db.insert(sensors).values(values).onConflictDoNothing({ target: sensors.pubkey })
+    async rowsOf(pubkeys) {
+      if (pubkeys.length === 0) return []
+      return await selectRows(db, inArray(sensors.pubkey, [...pubkeys]))
     },
   }
 }
@@ -120,11 +117,9 @@ export function pgRegistryStore(db: PostgresJsDatabase<Record<string, never>>): 
  * A `Sensor` account as the chain holds it — what the registry mirror copies
  * in (`T076`, `FR-001`, `FR-050`).
  *
- * Open registration is `register_sensor` on chain (`T031`), so after M2 the
- * three tables above are a cache of the program's registry, and this is the
- * door that fills them. Unlike `ensureCell` it **does** update: the chain is
- * the source of truth, and a row that disagrees with it is repaired by the
- * next read of the chain rather than defended (`schema.ts`).
+ * The only door into these tables. It updates: the chain is the source of
+ * truth, and a row that disagrees with it is repaired by the next read of the
+ * chain rather than defended (`schema.ts`).
  */
 export type ChainSensor = {
   /** Base58 `sensor_key`. */
@@ -156,8 +151,9 @@ export interface RegistryMirrorStore {
    * read.
    *
    * Every field is overwritten, including the cell, slot and operator of a
-   * row the scenario door wrote first — whatever the fixture said, the
-   * program's answer is the one the `contributors` mask is indexed by.
+   * row written before `T077` by the scenario door — whatever the fixture
+   * said, the program's answer is the one the `contributors` mask is indexed
+   * by.
    */
   mirrorSensors(rows: readonly ChainSensor[], at: Date): Promise<void>
 }
@@ -173,21 +169,7 @@ export function pgRegistryMirrorStore(
 ): RegistryMirrorStore {
   return {
     async sensorRows() {
-      const rows = await db
-        .select({
-          pubkey: sensors.pubkey,
-          operatorWallet: operators.wallet,
-          cellId: sensors.cellId,
-          slotInCell: sensors.slotInCell,
-          stake: sensors.stake,
-          accepted: sensors.accepted,
-          outliers: sensors.outliers,
-          active: sensors.active,
-          mirroredAt: sensors.mirroredAt,
-        })
-        .from(sensors)
-        .innerJoin(operators, eq(operators.id, sensors.operatorId))
-      return rows.map(({ mirroredAt, ...row }) => ({ ...row, mirrored: mirroredAt !== null }))
+      return await selectRows(db)
     },
 
     async mirrorSensors(rows, at) {

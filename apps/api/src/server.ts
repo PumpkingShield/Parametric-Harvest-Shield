@@ -35,8 +35,13 @@ export type ApiDeps = {
   /** The day journal, for `/v1/cells` and for a policy's current run. */
   intervals: Pick<IntervalStore, 'dayRecords'>
   policies: PolicyLookup
-  /** `FR-001`: on M1 only the scenario run writes it, and only its own cell. */
+  /** `FR-001`: read-only here; the worker's mirror is its only writer (`T077`). */
   registry: RegistryStore
+  /**
+   * `FR-050`: `pool.min_stake`, from the chain, for the scenario and feeder
+   * routes' check that their sensors vote. Null before `initialize_pool`.
+   */
+  minStake: () => Promise<bigint | null>
   /** `T067`: where each sensor's counter stopped, so a second run resumes it. */
   counters: CounterStore
   /** `SCENARIO_MODE=on`. False and every scenario path answers 404. */
@@ -54,7 +59,7 @@ export type ApiDeps = {
    */
   worker?: () => WorkerHealthWire
   /** `T058`: the `SC-008` feeder. Absent and `/v1/feeder` answers 404. */
-  feeder?: { token: string; operatorWallets: readonly string[] }
+  feeder?: { token: string }
   now?: () => Date
 }
 
@@ -118,6 +123,7 @@ export function createApiApp(deps: ApiDeps): Hono {
     createScenarioRoute({
       enabled: deps.scenarioMode,
       registry: deps.registry,
+      minStake: deps.minStake,
       counters: deps.counters,
       publisher: routeReadingPublisher(readings),
       now,
@@ -128,8 +134,8 @@ export function createApiApp(deps: ApiDeps): Hono {
     '/v1/feeder',
     createFeederRoute({
       token: deps.feeder?.token ?? null,
-      operatorWallets: deps.feeder?.operatorWallets ?? [],
       registry: deps.registry,
+      minStake: deps.minStake,
       counters: deps.counters,
       publisher: routeReadingPublisher(readings),
       now,

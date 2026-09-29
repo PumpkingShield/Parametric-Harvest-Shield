@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Funds the three demo keys and creates the mock asset — step 0 of docs/DEPLOY.md.
+# Funds the demo keys and creates the mock asset — step 0 of docs/DEPLOY.md.
 # Run from WSL: wsl -d <distro> -- bash <path to repo>/scripts/devnet-prepare.sh
 #
 # Everything here is CLI work from the deployer's wallet: SOL for the keys that
@@ -15,8 +15,11 @@ set -euo pipefail
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-URL=https://api.devnet.solana.com
-ENV_FILE="$REPO/.env"
+# Both overridable, so the same steps can be tried on a local validator
+# without touching the devnet .env: SOLANA_URL=http://127.0.0.1:8899
+# PUMPKING_ENV=<another file>.
+URL="${SOLANA_URL:-https://api.devnet.solana.com}"
+ENV_FILE="${PUMPKING_ENV:-$REPO/.env}"
 
 DECIMALS=6
 SUPPLY=1000000          # whole tokens minted to the treasury
@@ -28,6 +31,13 @@ POLICY_OWNER_SOL=0.02
 # 125% of the payout (frequency <= 100%, loaded by risk_loading_bps = 2500),
 # so this covers several demo policies at the default 1 000-token payout.
 POLICY_OWNER_TOKENS=10000
+# T077: the three operators register and stake the show's sensors and the
+# SC-008 feeder's. Registration costs rent — ~0.0016 SOL a Sensor account, and
+# the first sensor of a cell opens its CellState — so the busiest operator
+# (34 feeder sensors, one show sensor, two cells) spends ~0.08 SOL. Staking
+# costs `pool.min_stake` (one token) a sensor: 35 for that operator.
+OPERATOR_SOL=0.10
+OPERATOR_TOKENS=50
 
 [ -f "$ENV_FILE" ] || { echo "no .env — run: node scripts/devnet-keys.mjs"; exit 1; }
 
@@ -58,10 +68,12 @@ set_env() {
 POOL_AUTHORITY=$(address_of POOL_AUTHORITY_KEYPAIR)
 AGGREGATOR=$(address_of AGGREGATOR_KEYPAIR)
 POLICY_OWNER=$(address_of POLICY_OWNER_KEYPAIR)
+OPERATORS=("$(address_of OPERATOR_A_KEYPAIR)" "$(address_of OPERATOR_B_KEYPAIR)" "$(address_of OPERATOR_C_KEYPAIR)")
 
 echo "pool authority : $POOL_AUTHORITY"
 echo "aggregator     : $AGGREGATOR"
 echo "policy owner   : $POLICY_OWNER"
+echo "operators      : ${OPERATORS[*]}"
 echo "payer          : $(solana address)"
 echo
 
@@ -85,6 +97,7 @@ echo "funding:"
 fund "$POOL_AUTHORITY" "$POOL_AUTHORITY_SOL"
 fund "$AGGREGATOR" "$AGGREGATOR_SOL"
 fund "$POLICY_OWNER" "$POLICY_OWNER_SOL"
+for OPERATOR in "${OPERATORS[@]}"; do fund "$OPERATOR" "$OPERATOR_SOL"; done
 echo
 
 # --- the mock asset ----------------------------------------------------------
@@ -132,5 +145,24 @@ else
   echo "  $FARMER_TOKENS minted $POLICY_OWNER_TOKENS tokens"
 fi
 
+# --- the operators' token accounts -------------------------------------------
+# What they stake from (FR-051: the stake is in the pool's asset, and it goes
+# into the stake vault, never into capital). Minted from the mock asset like
+# the farmer's, for the same reason: the treasury's supply is the pool's.
 echo
-echo "Next: node scripts/devnet-init.mjs"
+echo "operators' token accounts:"
+for OPERATOR in "${OPERATORS[@]}"; do
+  TOKENS=$(spl-token address --token "$MINT" --owner "$OPERATOR" --verbose --url "$URL" | sed -n 's/^Associated token address: *//p')
+  [ -n "$TOKENS" ] || { echo "could not derive the token account of $OPERATOR"; exit 1; }
+  HAVE=$(spl-token balance --address "$TOKENS" --url "$URL" 2>/dev/null || echo 0)
+  if awk -v h="$HAVE" -v a="$OPERATOR_TOKENS" 'BEGIN { exit !(h >= a) }'; then
+    echo "  $TOKENS already holds $HAVE tokens"
+  else
+    spl-token create-account "$MINT" --owner "$OPERATOR" --url "$URL" --fee-payer "$HOME/.config/solana/id.json" >/dev/null 2>&1 || true
+    spl-token mint "$MINT" "$OPERATOR_TOKENS" "$TOKENS" --url "$URL" >/dev/null
+    echo "  $TOKENS minted $OPERATOR_TOKENS tokens"
+  fi
+done
+
+echo
+echo "Next: node scripts/devnet-init.mjs, then node scripts/devnet-register.mjs"

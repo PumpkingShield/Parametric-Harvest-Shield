@@ -1,8 +1,8 @@
 import type {
-  CellSetup,
   CounterStore,
   ReadingRow,
   ReadingStore,
+  RegistryRow,
   RegistryStore,
   SaveOutcome,
   SensorRegistration,
@@ -15,7 +15,7 @@ import {
   verifyReadingSignature,
 } from '@pumpking/shared'
 import { loadScenario, type Scenario } from '@pumpking/worker/scenario'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { FieldsBody } from '../errors.ts'
 import { createReadingsRoute } from './readings.ts'
 import {
@@ -28,9 +28,9 @@ import {
 
 const H3 = '871e701b3ffffff'
 const CELL_ID = cellIdFromH3Index(H3)
-const WALLET_A = 'So11111111111111111111111111111111111111112'
-const WALLET_B = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
-const WALLET_C = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
+const OPERATOR = 'So11111111111111111111111111111111111111112'
+/** `pool.min_stake` on the devnet pools. */
+const MIN_STAKE = 1_000_000n
 
 /**
  * A two-day scenario at one interval a day, so a run is four readings rather
@@ -47,8 +47,8 @@ function scenario(overrides: Record<string, unknown> = {}): Scenario {
     kind: ReadingKind.PrecipitationMm,
     params: { minimumVotes: 2, dryThresholdX100: 100, minimumCoverageX100: 75 },
     sensors: [
-      { seed: 11, operator: 'operator-a', slotInCell: 0, offsetX100: 0 },
-      { seed: 12, operator: 'operator-b', slotInCell: 1, offsetX100: 0 },
+      { seed: 11, operator: 'operator-a', offsetX100: 0 },
+      { seed: 12, operator: 'operator-b', offsetX100: 0 },
     ],
     programme: [{ days: 2, intervalX100: 0 }],
     expected: { days: 2, longestDrySpell: 2 },
@@ -56,15 +56,45 @@ function scenario(overrides: Record<string, unknown> = {}): Scenario {
   })
 }
 
+/** The mirrored registry, as the route reads it. It is never written here. */
 class FakeRegistry implements RegistryStore {
-  setups: CellSetup[] = []
-  fail: Error | null = null
+  rows = new Map<string, RegistryRow>()
+  asked: string[][] = []
 
-  ensureCell(setup: CellSetup): Promise<void> {
-    this.setups.push(setup)
-    return this.fail === null ? Promise.resolve() : Promise.reject(this.fail)
+  /** A sensor registered and staked on chain, and mirrored — overridable. */
+  vote(pubkey: string, overrides: Partial<RegistryRow> = {}): void {
+    this.rows.set(pubkey, {
+      pubkey,
+      operatorWallet: OPERATOR,
+      cellId: CELL_ID,
+      slotInCell: this.rows.size,
+      stake: MIN_STAKE,
+      accepted: 0,
+      outliers: 0,
+      active: true,
+      mirrored: true,
+      ...overrides,
+    })
+  }
+
+  rowsOf(pubkeys: readonly string[]): Promise<RegistryRow[]> {
+    this.asked.push([...pubkeys])
+    return Promise.resolve(
+      pubkeys.flatMap((pubkey) => {
+        const row = this.rows.get(pubkey)
+        return row === undefined ? [] : [row]
+      }),
+    )
   }
 }
+
+/** The keys of seeds 11, 12 and 13 — every scenario sensor there is. */
+let KEYS: string[] = []
+beforeAll(async () => {
+  KEYS = await Promise.all(
+    [11, 12, 13].map((seed) => sensorPublicKey(new Uint8Array(32).fill(seed))),
+  )
+})
 
 /**
  * The two questions `POST /v1/readings` asks of storage, and the one a
@@ -120,12 +150,15 @@ class FakePublisher implements ReadingPublisher {
 const STARTED_AT = new Date('2026-09-01T00:00:00.000Z')
 
 let registry: FakeRegistry
+let minStake: bigint | null
 let publisher: FakePublisher
 let store: FakeReadingStore
 let ids: number
 
 beforeEach(() => {
   registry = new FakeRegistry()
+  for (const key of KEYS) registry.vote(key)
+  minStake = MIN_STAKE
   publisher = new FakePublisher()
   store = new FakeReadingStore()
   ids = 0
@@ -142,6 +175,7 @@ function route(overrides: RouteOverrides = {}) {
   return createScenarioRoute({
     enabled: overrides.enabled ?? true,
     registry,
+    minStake: () => Promise.resolve(minStake),
     counters: store,
     publisher,
     load: overrides.load ?? (() => scenario()),
@@ -157,7 +191,7 @@ function route(overrides: RouteOverrides = {}) {
   })
 }
 
-const BODY = { scenario: 'tiny', operators: { 'operator-a': WALLET_A, 'operator-b': WALLET_B } }
+const BODY = { scenario: 'tiny' }
 
 async function post(body: unknown, overrides: RouteOverrides = {}): Promise<Response> {
   return await route(overrides).request('/run', {
@@ -227,14 +261,11 @@ describe('POST /v1/scenario/run', () => {
     )
   })
 
-  it('registers the cell, the operators and the sensors before publishing', async () => {
-    await post(BODY)
-    expect(registry.setups).toHaveLength(1)
-    const setup = registry.setups[0]
-    expect(setup?.cellId).toBe(CELL_ID)
-    expect(setup?.resolution).toBe(7)
-    expect(setup?.sensors.map((one) => one.operatorWallet)).toEqual([WALLET_A, WALLET_B])
-    expect(setup?.sensors.map((one) => one.slotInCell)).toEqual([0, 1])
+  it('asks the registry about exactly the scenario’s sensors, and writes nothing', async () => {
+    expect((await post(BODY)).status).toBe(202)
+    // Two sensors in the tiny scenario; the registry is read, and a
+    // `RegistryStore` has no method that could write it.
+    expect(registry.asked).toEqual([KEYS.slice(0, 2)])
   })
 
   it('publishes every reading the scenario produces, signed', async () => {
@@ -347,7 +378,7 @@ describe('POST /v1/scenario/run — refusals', () => {
     const off = route({ enabled: false })
     expect((await post(BODY, { enabled: false })).status).toBe(404)
     expect((await off.request('/run/run-1')).status).toBe(404)
-    expect(registry.setups).toEqual([])
+    expect(registry.asked).toEqual([])
   })
 
   it('refuses a body that is not JSON', async () => {
@@ -366,21 +397,14 @@ describe('POST /v1/scenario/run — refusals', () => {
     expect(body.error.details.fields[0]?.field).toBe('scenario')
   })
 
-  it('refuses an operator wallet that is not base58', async () => {
-    const response = await post({ ...BODY, operators: { 'operator-a': 'not a wallet' } })
-    expect(response.status).toBe(400)
-  })
-
   /**
-   * `FR-009` counts a vote per operator, so a missing wallet is a run that
-   * silently falls short of coverage rather than one that fails loudly.
+   * Whose vote a sensor carries is the chain's answer since `T077`; a body
+   * that tries to say it is a caller from before the change, and is told so.
    */
-  it('refuses when an operator the scenario names has no wallet', async () => {
-    const response = await post({ scenario: 'tiny', operators: { 'operator-a': WALLET_A } })
+  it('refuses operator wallets in the body — the chain names them', async () => {
+    const response = await post({ ...BODY, operators: { 'operator-a': OPERATOR } })
     expect(response.status).toBe(400)
-    const body = (await response.json()) as FieldsBody
-    expect(body.error.details.fields.map((one) => one.field)).toEqual(['operators.operator-b'])
-    expect(registry.setups).toEqual([])
+    expect(registry.asked).toEqual([])
   })
 
   it('answers 404 for a scenario there is no file for', async () => {
@@ -393,13 +417,34 @@ describe('POST /v1/scenario/run — refusals', () => {
   })
 
   /**
-   * A slot already held by a different key. Nothing has been published yet, so
-   * stopping is the whole fix.
+   * `FR-050`, `T077`: a sensor that does not vote would publish a drought the
+   * median never sees. Every reason is named, per sensor, and nothing is sent.
    */
-  it('refuses when the registry disagrees with the scenario', async () => {
-    registry.fail = new Error('duplicate key value violates sensors_cell_slot_uq')
+  it.each([
+    ['unregistered', () => registry.rows.delete(KEYS[1] ?? '')],
+    ['unregistered', () => registry.vote(KEYS[1] ?? '', { mirrored: false })],
+    ['wrong-cell', () => registry.vote(KEYS[1] ?? '', { cellId: CELL_ID + 1n })],
+    ['excluded', () => registry.vote(KEYS[1] ?? '', { active: false })],
+    ['understaked', () => registry.vote(KEYS[1] ?? '', { stake: MIN_STAKE - 1n })],
+  ] as const)('refuses when a sensor is %s', async (_problem, spoil) => {
+    spoil()
     const response = await post(BODY)
     expect(response.status).toBe(409)
+    const body = (await response.json()) as FieldsBody
+    expect(body.error.details.fields.map((one) => one.field)).toEqual([`sensors.${KEYS[1]}`])
+    expect(publisher.sent).toEqual([])
+  })
+
+  it('takes the minimum from the pool, not from itself', async () => {
+    minStake = MIN_STAKE + 1n
+    expect((await post(BODY)).status).toBe(409)
+  })
+
+  it('refuses before the pool exists', async () => {
+    minStake = null
+    const response = await post(BODY)
+    expect(response.status).toBe(409)
+    expect(registry.asked).toEqual([])
     expect(publisher.sent).toEqual([])
   })
 
@@ -443,6 +488,7 @@ describe('the fixture the demo is actually run on', () => {
     const app = createScenarioRoute({
       enabled: true,
       registry,
+      minStake: () => Promise.resolve(minStake),
       counters: store,
       publisher,
       now: () => STARTED_AT,
@@ -452,14 +498,7 @@ describe('the fixture the demo is actually run on', () => {
     const response = await app.request('/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        scenario: 'drought',
-        operators: {
-          'operator-a': WALLET_A,
-          'operator-b': WALLET_B,
-          'operator-c': WALLET_C,
-        },
-      }),
+      body: JSON.stringify({ scenario: 'drought' }),
     })
 
     expect(response.status).toBe(202)
@@ -506,6 +545,7 @@ describe('routeReadingPublisher', () => {
     const app = createScenarioRoute({
       enabled: true,
       registry,
+      minStake: () => Promise.resolve(minStake),
       counters: store,
       publisher: routeReadingPublisher(readings),
       load: () => scenario(),
@@ -561,6 +601,7 @@ describe('a second run against the same pool — T067', () => {
     const app = createScenarioRoute({
       enabled: true,
       registry,
+      minStake: () => Promise.resolve(minStake),
       counters: store,
       publisher: routeReadingPublisher(readings),
       load: () => scenario(),

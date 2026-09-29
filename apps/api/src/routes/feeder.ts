@@ -1,9 +1,9 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
-import type { CounterStore, RegistryStore } from '@pumpking/db'
+import { type CounterStore, type RegistryStore, votingProblems } from '@pumpking/db'
 import {
   dueHours,
   type FeederSensor,
-  feederCellSetups,
+  feederCellId,
   feederReadings,
   feederSensors,
   HOUR_MS,
@@ -33,6 +33,13 @@ import type { ReadingPublisher } from './scenario.ts'
  * switch and not `SCENARIO_MODE`, which would also open the route that invents
  * a drought.
  *
+ * **Its sensors must vote before it speaks** (`FR-050`, `T077`). The hundred
+ * sensors are registered and staked on chain by their three operators
+ * (`scripts/devnet-register.mjs --set feeder`); a tick checks the mirrored
+ * registry once per process and answers 409 until every one of them votes in
+ * its cell. A load test whose readings count for nothing measures the traffic
+ * and none of the work — no median, no coverage, no day worth recording.
+ *
  * **One tick at a time.** A tick that outlasts the scheduler's timeout is still
  * running when the next one arrives; the second answers 409 at once instead of
  * racing the first over the same counters. Racing would not corrupt anything —
@@ -56,9 +63,10 @@ export type FeederTickWire = {
 export type FeederRouteOptions = {
   /** `FEEDER_TOKEN`. Null and the route is not there. */
   token: string | null
-  /** `FR-009`: three wallets, one per operator. */
-  operatorWallets: readonly string[]
+  /** Read, never written: whether the feeder's sensors vote. */
   registry: RegistryStore
+  /** `pool.min_stake`, from the chain; null before `initialize_pool`. */
+  minStake: () => Promise<bigint | null>
   counters: CounterStore
   publisher: ReadingPublisher
   maxAgeMs?: number
@@ -94,9 +102,9 @@ export function createFeederRoute(options: FeederRouteOptions): Hono {
   }
 
   let sensors: Promise<FeederSensor[]> | null = null
-  // Once per process: `ensureCell` is idempotent, but asking it every tick
-  // would add four cells' worth of inserts to the traffic being measured.
-  let registered: Promise<void> | null = null
+  // Once per process, and remembered only when it passes: asking every tick
+  // would add a registry read and an RPC call to the traffic being measured.
+  let voting = false
   let busy = false
 
   route.post('/tick', async (context) => {
@@ -111,16 +119,27 @@ export function createFeederRoute(options: FeederRouteOptions): Hono {
     try {
       sensors ??= feederSensors()
       const network = await sensors
-      registered ??= (async () => {
-        for (const setup of feederCellSetups(network, options.operatorWallets)) {
-          await options.registry.ensureCell(setup)
+      if (!voting) {
+        const minStake = await options.minStake()
+        if (minStake === null) {
+          return apiError(context, 409, 'there is no pool on this cluster yet')
         }
-      })().catch((cause: unknown) => {
-        // Not remembered as done: the next tick tries again.
-        registered = null
-        throw cause
-      })
-      await registered
+        const issues = votingProblems(
+          network.map((sensor) => ({ pubkey: sensor.pubkey, cellId: feederCellId(sensor) })),
+          await options.registry.rowsOf(network.map((sensor) => sensor.pubkey)),
+          minStake,
+        )
+        if (issues.length > 0) {
+          const byProblem: Record<string, number> = {}
+          for (const issue of issues) byProblem[issue.problem] = (byProblem[issue.problem] ?? 0) + 1
+          return apiError(context, 409, 'not every feeder sensor votes', {
+            sensors: issues.length,
+            byProblem,
+            hint: 'run scripts/devnet-register.mjs --set feeder, and let the worker turn once',
+          })
+        }
+        voting = true
+      }
 
       const at = now()
       const counters = await options.counters.lastCounters(network.map((sensor) => sensor.pubkey))

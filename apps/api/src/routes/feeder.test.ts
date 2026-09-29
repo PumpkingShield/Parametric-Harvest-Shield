@@ -1,14 +1,15 @@
 import type {
-  CellSetup,
   CounterStore,
   ReadingRow,
   ReadingStore,
+  RegistryRow,
   RegistryStore,
   SaveOutcome,
   SensorRegistration,
 } from '@pumpking/db'
-import { HOUR_MS, hourOf } from '@pumpking/worker/feeder'
-import { describe, expect, it } from 'vitest'
+import { ReadingKind } from '@pumpking/shared'
+import { feederCellId, feederSensors, HOUR_MS, hourOf } from '@pumpking/worker/feeder'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { readApiConfig } from '../config.ts'
 import { createFeederRoute, type FeederTickWire } from './feeder.ts'
 import { createReadingsRoute } from './readings.ts'
@@ -17,34 +18,59 @@ import { type ReadingPublisher, routeReadingPublisher } from './scenario.ts'
 /**
  * The feeder through the real door: every reading it makes is parsed,
  * signature-checked and counter-checked by the readings route, against a
- * registry the feeder itself filled.
+ * registry the chain filled — here, as the mirror would have left it after
+ * `scripts/devnet-register.mjs --set feeder`.
  */
 
 const TOKEN = 'a-feeder-token-that-is-long-enough-to-pass'
-const WALLETS = [
-  'Vote111111111111111111111111111111111111111',
-  'Stake11111111111111111111111111111111111111',
-  'Config1111111111111111111111111111111111111',
-]
+const OPERATOR = 'Vote111111111111111111111111111111111111111'
+const MIN_STAKE = 1_000_000n
 const HOUR = hourOf(new Date('2026-10-01T10:00:00Z'))
+
+/** The hundred sensors as the mirror holds them once they are registered and staked. */
+let MIRRORED: RegistryRow[] = []
+beforeAll(async () => {
+  MIRRORED = (await feederSensors()).map((sensor) => ({
+    pubkey: sensor.pubkey,
+    operatorWallet: OPERATOR,
+    cellId: feederCellId(sensor),
+    slotInCell: Math.floor((sensor.seed - 101) / 4),
+    stake: MIN_STAKE,
+    accepted: 0,
+    outliers: 0,
+    active: true,
+    mirrored: true,
+  }))
+})
 
 /** Registry and intake over one set of rows, as in Postgres. */
 class Storage implements RegistryStore, ReadingStore, CounterStore {
-  setups: CellSetup[] = []
+  registry = new Map<string, RegistryRow>()
   registrations = new Map<string, SensorRegistration>()
   rows: ReadingRow[] = []
+  /** How many times the registry was read. */
+  asked = 0
 
-  ensureCell(setup: CellSetup): Promise<void> {
-    this.setups.push(setup)
-    for (const sensor of setup.sensors) {
-      this.registrations.set(sensor.pubkey, {
-        pubkey: sensor.pubkey,
-        cellId: setup.cellId,
-        kind: sensor.kind,
-        active: true,
+  constructor(rows: readonly RegistryRow[]) {
+    for (const row of rows) {
+      this.registry.set(row.pubkey, row)
+      this.registrations.set(row.pubkey, {
+        pubkey: row.pubkey,
+        cellId: row.cellId,
+        kind: ReadingKind.PrecipitationMm,
+        active: row.active,
       })
     }
-    return Promise.resolve()
+  }
+
+  rowsOf(pubkeys: readonly string[]): Promise<RegistryRow[]> {
+    this.asked += 1
+    return Promise.resolve(
+      pubkeys.flatMap((pubkey) => {
+        const row = this.registry.get(pubkey)
+        return row === undefined ? [] : [row]
+      }),
+    )
   }
 
   sensorFor(pubkey: string): Promise<SensorRegistration | null> {
@@ -78,15 +104,21 @@ class Storage implements RegistryStore, ReadingStore, CounterStore {
   }
 }
 
-function feeder(options: { token?: string | null; publisher?: ReadingPublisher } = {}) {
+function feeder(
+  options: {
+    token?: string | null
+    publisher?: ReadingPublisher
+    registry?: readonly RegistryRow[]
+  } = {},
+) {
   let clock = HOUR * HOUR_MS + 5 * 60_000
   const now = () => new Date(clock)
-  const storage = new Storage()
+  const storage = new Storage(options.registry ?? MIRRORED)
   const readings = createReadingsRoute({ store: storage, now })
   const app = createFeederRoute({
     token: options.token === undefined ? TOKEN : options.token,
-    operatorWallets: WALLETS,
     registry: storage,
+    minStake: () => Promise.resolve(MIN_STAKE),
     counters: storage,
     publisher: options.publisher ?? routeReadingPublisher(readings),
     now,
@@ -112,7 +144,7 @@ describe('POST /v1/feeder/tick', () => {
     expect(storage.rows).toEqual([])
   })
 
-  it('registers the network and publishes the current hour through intake', async () => {
+  it('publishes the current hour through intake', async () => {
     const { body, storage } = feeder()
     const tally = await body()
 
@@ -124,7 +156,6 @@ describe('POST /v1/feeder/tick', () => {
       repeated: 0,
       refused: 0,
     })
-    expect(storage.setups).toHaveLength(4)
     expect(storage.rows.every((row) => row.status === 'accepted')).toBe(true)
   })
 
@@ -135,12 +166,34 @@ describe('POST /v1/feeder/tick', () => {
     expect((await body()).sent).toBe(0)
   })
 
-  it('registers once per process, not once per tick', async () => {
+  it('checks the registry once per process, not once per tick', async () => {
     const { body, storage, advance } = feeder()
     await body()
     advance(HOUR_MS)
     await body()
-    expect(storage.setups).toHaveLength(4)
+    expect(storage.asked).toBe(1)
+  })
+
+  /**
+   * `FR-050`, `T077`: a load whose readings count for nothing measures the
+   * traffic and none of the work. Refused, said how many and why, and asked
+   * again on the next tick rather than remembered.
+   */
+  it('refuses to speak until every sensor votes, and asks again next tick', async () => {
+    const [first, ...rest] = MIRRORED
+    if (first === undefined) throw new Error('fixture')
+    const registry = [{ ...first, stake: MIN_STAKE - 1n }, ...rest.slice(1)]
+    const { tick, storage } = feeder({ registry })
+
+    const response = await tick()
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({
+      error: { details: { sensors: 2, byProblem: { understaked: 1, unregistered: 1 } } },
+    })
+    expect(storage.rows).toEqual([])
+
+    await tick()
+    expect(storage.asked).toBe(2)
   })
 
   it('catches up after missed ticks, and leaves out what intake would file as late', async () => {
@@ -197,30 +250,16 @@ describe('POST /v1/feeder/tick', () => {
 describe('the feeder configuration', () => {
   const base = { DATABASE_URL: 'postgres://x', SOLANA_RPC_URL: 'https://api.devnet.solana.com' }
 
-  it('is off unless both variables are set', () => {
+  it('is off without a token', () => {
     expect(readApiConfig(base).feeder).toBeNull()
-    expect(() => readApiConfig({ ...base, FEEDER_TOKEN: TOKEN })).toThrow(/FEEDER_OPERATORS/)
   })
 
-  it('refuses a short token and a wallet list that is not three', () => {
-    expect(() =>
-      readApiConfig({ ...base, FEEDER_TOKEN: 'short', FEEDER_OPERATORS: WALLETS.join(',') }),
-    ).toThrow(/FEEDER_TOKEN/)
-    expect(() =>
-      readApiConfig({
-        ...base,
-        FEEDER_TOKEN: TOKEN,
-        FEEDER_OPERATORS: WALLETS.slice(0, 2).join(','),
-      }),
-    ).toThrow(/FEEDER_OPERATORS/)
+  it('refuses a short token', () => {
+    expect(() => readApiConfig({ ...base, FEEDER_TOKEN: 'short' })).toThrow(/FEEDER_TOKEN/)
   })
 
-  it('reads both into the feeder', () => {
-    const config = readApiConfig({
-      ...base,
-      FEEDER_TOKEN: TOKEN,
-      FEEDER_OPERATORS: WALLETS.join(', '),
-    })
-    expect(config.feeder).toEqual({ token: TOKEN, operatorWallets: WALLETS })
+  it('needs no operator wallets since T077 — the chain names them', () => {
+    const config = readApiConfig({ ...base, FEEDER_TOKEN: TOKEN, FEEDER_OPERATORS: 'ignored' })
+    expect(config.feeder).toEqual({ token: TOKEN })
   })
 })

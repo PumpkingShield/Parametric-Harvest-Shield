@@ -1,7 +1,11 @@
-import type { CellSetup, CounterStore, RegistryStore } from '@pumpking/db'
+import {
+  type CounterStore,
+  type RegistryStore,
+  type SensorProblem,
+  votingProblems,
+} from '@pumpking/db'
 import {
   cellIdFromH3Index,
-  cellResolution,
   type Reading,
   type SignedReading,
   toSignedReadingWire,
@@ -47,15 +51,16 @@ import { apiError, fieldErrors } from '../errors.ts'
  * not exist at all. The factory refuses on its own rather than trusting the
  * wiring to leave it unmounted.
  *
- * **The run registers its own network** — `FR-001`, `FR-006`. `POST
- * /v1/readings` refuses a key it does not know, and on M1 nothing else writes
- * the sensor registry: open registration is `register_sensor` on chain, which
- * is M2. So the run puts its own cell, operators and sensors there first, out
- * of the fixture that already names them. The one thing the fixture does not
- * know is which on-chain wallet an operator label stands for, and this route
- * does not invent it: the mapping comes in the request, because
- * `operators.wallet` is where rewards and burnt stake settle and a key nobody
- * holds does not belong in that column.
+ * **The run's network is registered on chain, and the run checks it** —
+ * `FR-001`, `FR-050`, `T077`. On M1 this route wrote the fixture's sensors
+ * into the registry itself; since `T076` such rows carry no vote, so the show
+ * goes the way a real network does instead. Its operators register and stake
+ * the sensors with `register_sensor` and `stake_sensor`
+ * (`scripts/devnet-register.mjs`, once per deployment), the worker's mirror
+ * copies them in, and this route refuses to start — 409, naming each sensor
+ * and why — until every one of them votes in the scenario's cell. Starting
+ * anyway would publish a drought the median never sees, and the show would
+ * end in days without coverage rather than in a payout.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -152,20 +157,25 @@ type Run = RunWire
 /* The request                                                                */
 /* -------------------------------------------------------------------------- */
 
-/** Base58 ed25519 public key, 32 bytes — the width of a Solana address. */
-const WALLET = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
+/**
+ * What each `SensorProblem` means to whoever runs the show, and what fixes it.
+ * The mirror lags the chain by up to `REGISTRY_SYNC_MS`, and on the demo the
+ * worker is off between shows — a sensor registered a minute ago reads as
+ * unregistered here until the loop has turned once.
+ */
+const ISSUE_MESSAGES: Record<SensorProblem, string> = {
+  unregistered:
+    'not in the mirrored registry — run scripts/devnet-register.mjs, and let the worker turn once',
+  'wrong-cell': 'registered on chain in a different cell than the scenario names',
+  excluded: 'excluded on chain for systematic outliers (FR-012)',
+  understaked: 'staked below pool.min_stake (FR-050) — run scripts/devnet-register.mjs',
+}
 
 /** A scenario name is a file name, so it is a name and not a path. */
 const SCENARIO_NAME = /^[a-z][a-z0-9-]*$/
 
 const runRequestSchema = z.strictObject({
   scenario: z.string().regex(SCENARIO_NAME, 'must be a scenario name, lowercase and dashes'),
-  /**
-   * Label → wallet, for every operator the fixture names. `FR-009` counts a
-   * vote per operator, so the mapping decides how many votes a cell has, and
-   * getting it wrong is a run that silently falls short of coverage.
-   */
-  operators: z.record(z.string().min(1), z.string().regex(WALLET, 'must be a base58 wallet')),
   /**
    * Genesis of the pool the run is anchored to. Defaults to the instant the
    * run starts, which is what keeps every reading's arrival age near zero:
@@ -178,7 +188,13 @@ const runRequestSchema = z.strictObject({
 export type ScenarioRouteOptions = {
   /** `SCENARIO_MODE=on`. False makes every path here answer 404. */
   enabled: boolean
+  /** Read, never written: whether the scenario's sensors vote (`votingProblems`). */
   registry: RegistryStore
+  /**
+   * `pool.min_stake`, read from the chain when a run is asked for; null when
+   * the pool does not exist yet. The same number the aggregator filters on.
+   */
+  minStake: () => Promise<bigint | null>
   publisher: ReadingPublisher
   /** `T067`: where each sensor's counter stopped, so a later run resumes it. */
   counters: CounterStore
@@ -303,52 +319,33 @@ export function createScenarioRoute(options: ScenarioRouteOptions): Hono {
         })
       }
 
-      const missing = [...new Set(scenario.sensors.map((sensor) => sensor.operator))].filter(
-        (label) => request.operators[label] === undefined,
-      )
-      if (missing.length > 0) {
-        return apiError(context, 400, 'the run has no wallet for every operator the scenario names', {
-          fields: missing.map((label) => ({
-            field: `operators.${label}`,
-            message: 'must be a base58 wallet',
-          })),
-        })
-      }
-
       const requestedAt = now()
       const genesisTs = request.genesisTs === undefined ? requestedAt : new Date(request.genesisTs)
       const cellId = cellIdFromH3Index(scenario.cell)
       const sensors: ScenarioSensor[] = await scenarioSensors(scenario)
 
-      const setup: CellSetup = {
-        cellId,
-        resolution: cellResolution(cellId),
-        sensors: sensors.map((sensor) => {
-          const wallet = request.operators[sensor.operator]
-          if (wallet === undefined) throw new Error(`unreachable: ${sensor.operator} was checked`)
-          return {
-            pubkey: sensor.pubkey,
-            kind: scenario.kind,
-            slotInCell: sensor.slotInCell,
-            operatorWallet: wallet,
-          }
-        }),
+      const minStake = await options.minStake()
+      if (minStake === null) {
+        return apiError(context, 409, 'there is no pool on this cluster yet', {
+          fields: [{ field: 'scenario', message: 'initialize_pool has not been called' }],
+        })
       }
-      try {
-        await options.registry.ensureCell(setup)
-      } catch (cause) {
-        // A slot already taken by a different key, most likely. The run has
-        // not published anything, so saying so and stopping is the whole fix.
-        return apiError(context, 409, 'the registry disagrees with the scenario', {
-          fields: [
-            { field: 'scenario', message: cause instanceof Error ? cause.message : String(cause) },
-          ],
+      const issues = votingProblems(
+        sensors.map((sensor) => ({ pubkey: sensor.pubkey, cellId })),
+        await options.registry.rowsOf(sensors.map((sensor) => sensor.pubkey)),
+        minStake,
+      )
+      if (issues.length > 0) {
+        return apiError(context, 409, 'not every sensor of the scenario votes', {
+          fields: issues.map((issue) => ({
+            field: `sensors.${issue.pubkey}`,
+            message: ISSUE_MESSAGES[issue.problem],
+          })),
         })
       }
 
-      // Read after `ensureCell`, because a sensor the registry has just
-      // learned about has no counters, and before anything is published,
-      // because from here on this run is the only writer.
+      // Read before anything is published, because from here on this run is
+      // the only writer.
       const counters = await options.counters.lastCounters(sensors.map((sensor) => sensor.pubkey))
 
       // Where in the pool's life this run goes. On the first run the genesis is

@@ -7,9 +7,9 @@
   "kind": "precipitation_mm",
   "params": { "minimumVotes": 3, "dryThresholdX100": 100, "minimumCoverageX100": 75 },
   "sensors": [
-    { "seed": 11, "operator": "operator-a", "slotInCell": 0, "offsetX100": -5 },
-    { "seed": 12, "operator": "operator-b", "slotInCell": 1, "offsetX100": 0 },
-    { "seed": 13, "operator": "operator-c", "slotInCell": 2, "offsetX100": 5 }
+    { "seed": 11, "operator": "operator-a", "offsetX100": -5 },
+    { "seed": 12, "operator": "operator-b", "offsetX100": 0 },
+    { "seed": 13, "operator": "operator-c", "offsetX100": 5 }
   ],
   "programme": [
     { "days": 4, "intervalX100": 30 },

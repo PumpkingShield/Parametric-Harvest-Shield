@@ -70,11 +70,13 @@ const sensorSchema = z.strictObject({
   /**
    * Label of the operator this sensor belongs to. A label rather than a
    * wallet: `FR-009` groups votes by operator and a scenario has no opinion
-   * about which on-chain key that is — the registration a run is set up with
-   * maps labels to wallets.
+   * about which on-chain key that is — `scripts/devnet-register.mjs` maps
+   * labels to the wallets that register and stake it.
+   *
+   * No slot: the program hands the slot out at registration, in the order
+   * sensors register, and the registry mirror is where it is read (`T077`).
    */
   operator: z.string().min(1),
-  slotInCell: z.int().min(0).max(31),
   /**
    * Fixed deviation of this sensor from the day's weather, so the median has
    * something to do. Fixed and not random: a run has to repeat.
@@ -147,12 +149,6 @@ export function loadScenario(source: unknown): Scenario {
   const seeds = new Set(scenario.sensors.map((sensor) => sensor.seed))
   if (seeds.size !== scenario.sensors.length) {
     throw new RangeError('two sensors share a seed, and would share a key')
-  }
-  const slots = new Set(scenario.sensors.map((sensor) => sensor.slotInCell))
-  if (slots.size !== scenario.sensors.length) {
-    // The unique index on (cell_id, slot_in_cell) would refuse it, and the
-    // on-chain contributors mask would credit one sensor for another's day.
-    throw new RangeError('two sensors share a slot in the cell')
   }
   for (const stretch of scenario.programme) {
     for (const seed of stretch.silentSensors) {
@@ -322,7 +318,6 @@ export type ScenarioSensor = {
   /** Base58 ed25519 public key — what the registry and the readings name. */
   pubkey: string
   operator: string
-  slotInCell: number
   offsetX100: number
   seed: number
 }
@@ -343,7 +338,6 @@ export async function scenarioSensors(scenario: Scenario): Promise<ScenarioSenso
         secretKey,
         pubkey: await sensorPublicKey(secretKey),
         operator: sensor.operator,
-        slotInCell: sensor.slotInCell,
         offsetX100: sensor.offsetX100,
         seed: sensor.seed,
       }

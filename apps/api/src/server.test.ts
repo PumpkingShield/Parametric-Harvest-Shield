@@ -1,9 +1,10 @@
 import type {
-  CellSetup,
   CounterStore,
   DayRow,
   IntervalStore,
   ReadingRow,
+  RegistryRow,
+  RegistryStore,
   SaveOutcome,
   SensorRegistration,
 } from '@pumpking/db'
@@ -37,11 +38,12 @@ class Readings {
   }
 }
 
-class Registry {
-  cells: CellSetup[] = []
-  ensureCell(setup: CellSetup): Promise<void> {
-    this.cells.push(setup)
-    return Promise.resolve()
+/** An empty mirrored registry: nothing registered on chain yet. */
+class Registry implements RegistryStore {
+  asked = 0
+  rowsOf(): Promise<RegistryRow[]> {
+    this.asked += 1
+    return Promise.resolve([])
   }
 }
 
@@ -60,6 +62,7 @@ function app(overrides: Partial<ApiDeps> = {}) {
     intervals: days([]),
     policies: noPolicies,
     registry: new Registry(),
+    minStake: () => Promise.resolve(1_000_000n),
     counters: noCounters,
     scenarioMode: false,
     ...overrides,
@@ -200,7 +203,7 @@ describe('the four routes are mounted where the contract says', () => {
     const response = await app({ scenarioMode: true }).request('/v1/scenario/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ scenario: 'no-such-scenario', operators: {} }),
+      body: JSON.stringify({ scenario: 'no-such-scenario' }),
     })
 
     expect(response.status).toBe(404)
@@ -213,7 +216,7 @@ describe('the four routes are mounted where the contract says', () => {
     const started = await app({ scenarioMode: false }).request('/v1/scenario/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ scenario: 'drought', operators: {} }),
+      body: JSON.stringify({ scenario: 'drought' }),
     })
     const status = await app({ scenarioMode: false }).request('/v1/scenario/run/any-id')
 
@@ -237,19 +240,16 @@ describe('the scenario run publishes through the mounted intake', () => {
     const response = await server.request('/v1/scenario/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ scenario: 'drought', operators: {} }),
+      body: JSON.stringify({ scenario: 'drought' }),
     })
 
-    // Every operator the fixture names needs a wallet, and none was given: the
-    // run refuses before it registers anything or publishes anything.
-    expect(response.status).toBe(400)
+    // Nothing is registered on chain here, so none of the fixture's sensors
+    // votes: the run asks this app's registry, refuses, and publishes nothing.
+    expect(response.status).toBe(409)
     expect(await response.json()).toMatchObject({
-      error: {
-        code: 'INVALID_INPUT',
-        message: 'the run has no wallet for every operator the scenario names',
-      },
+      error: { code: 'CONFLICT', message: 'not every sensor of the scenario votes' },
     })
-    expect(registry.cells).toEqual([])
+    expect(registry.asked).toBe(1)
     expect(readings.saved).toEqual([])
   })
 })

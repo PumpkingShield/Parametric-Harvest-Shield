@@ -120,8 +120,12 @@ class Store implements ReadingStore, IntervalStore {
 
   constructor(readonly cellId: bigint) {}
 
+  /** The slot the program would hand out: registration order in an empty cell. */
+  slots = new Map<string, number>()
+
   register(sensor: ScenarioSensor, kind: ReadingKindName, stake: bigint): void {
     this.stakes.set(sensor.pubkey, stake)
+    this.slots.set(sensor.pubkey, this.slots.size)
     this.registrations.set(sensor.pubkey, {
       pubkey: sensor.pubkey,
       cellId: this.cellId,
@@ -180,7 +184,7 @@ class Store implements ReadingStore, IntervalStore {
       accepted.push({
         sensorPubkey: row.sensorPubkey,
         operator: sensor.operator,
-        slotInCell: sensor.slotInCell,
+        slotInCell: this.slots.get(row.sensorPubkey) ?? 0,
         valueX100: row.valueX100,
         measuredAt: row.measuredAt,
         counter: row.counter,

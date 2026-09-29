@@ -23,10 +23,10 @@
 //                           counts one vote per operator and `operators.wallet`
 //                           is where rewards land and burnt stake comes from,
 //                           so a scenario run has to name a key somebody holds
-//                           rather than one invented for the column. They sign
-//                           nothing on M1 — open registration and stake are
-//                           `register_sensor`, which is M2 — so they need no
-//                           SOL, and `devnet-prepare.sh` does not fund them.
+//                           rather than one invented for the column. Since
+//                           T077 they register and stake the show's and the
+//                           feeder's sensors (`devnet-register.mjs`), so
+//                           `devnet-prepare.sh` gives them SOL and tokens.
 //
 // Run: node scripts/devnet-keys.mjs
 // Idempotent: a key already in `.env` is kept, never regenerated.
@@ -34,7 +34,11 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { Keypair } from '../packages/anchor-client/src/index.ts'
 
-const ENV_PATH = new URL('../.env', import.meta.url)
+// `PUMPKING_ENV` names another file for another cluster (a local validator).
+const ENV_PATH =
+  process.env.PUMPKING_ENV === undefined || process.env.PUMPKING_ENV === ''
+    ? new URL('../.env', import.meta.url)
+    : process.env.PUMPKING_ENV
 
 const ROLES = [
   {
@@ -55,7 +59,7 @@ const ROLES = [
   ...['A', 'B', 'C'].map((letter) => ({
     name: `OPERATOR_${letter}_KEYPAIR`,
     what: `operator-${letter.toLowerCase()} of the fixtures: one vote in the cell, and where its rewards would land`,
-    sol: 'none — it signs nothing before M2',
+    sol: '~0.10 + 50 tokens — registers and stakes sensors (T077)',
   })),
 ]
 

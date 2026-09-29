@@ -6,7 +6,7 @@ import {
   dueHours,
   FEEDER_CELLS,
   FEEDER_SENSORS,
-  feederCellSetups,
+  feederCellId,
   feederReading,
   feederReadings,
   feederSensors,
@@ -15,7 +15,6 @@ import {
   lastFullHour,
 } from './feeder.ts'
 
-const WALLETS = ['wallet-a', 'wallet-b', 'wallet-c']
 const HOUR = hourOf(new Date('2026-10-01T10:00:00Z'))
 const at = (hour: number, minutes: number) => new Date(hour * HOUR_MS + minutes * 60_000)
 const MAX_AGE = 90 * 60_000
@@ -46,24 +45,16 @@ describe('the feeder network', () => {
     for (const hex of FEEDER_CELLS) expect(cellResolution(cellIdFromH3Index(hex))).toBe(7)
   })
 
-  it('gives every cell 25 sensors, distinct slots and all three operators', async () => {
-    const setups = feederCellSetups(await feederSensors(), WALLETS)
-    expect(setups).toHaveLength(4)
-    for (const setup of setups) {
-      expect(setup.sensors).toHaveLength(25)
-      const slots = setup.sensors.map((sensor) => sensor.slotInCell)
-      expect(new Set(slots).size).toBe(25)
-      expect(Math.max(...slots)).toBeLessThan(32)
-      // `FR-009`: the operator is the vote; three of them make a covered hour.
-      expect(new Set(setup.sensors.map((sensor) => sensor.operatorWallet))).toEqual(
-        new Set(WALLETS),
-      )
-    }
-  })
-
-  it('refuses anything but three operator wallets', async () => {
+  it('gives every cell 25 sensors and all three operators', async () => {
     const sensors = await feederSensors()
-    expect(() => feederCellSetups(sensors, WALLETS.slice(0, 2))).toThrow(RangeError)
+    for (const [index, hex] of FEEDER_CELLS.entries()) {
+      const inCell = sensors.filter((sensor) => feederCellId(sensor) === cellIdFromH3Index(hex))
+      expect(inCell.every((sensor) => sensor.cell === index)).toBe(true)
+      // Under the program's 32 slots, so every one of them can register.
+      expect(inCell).toHaveLength(25)
+      // `FR-009`: the operator is the vote; three of them make a covered hour.
+      expect(new Set(inCell.map((sensor) => sensor.operator))).toEqual(new Set([0, 1, 2]))
+    }
   })
 })
 

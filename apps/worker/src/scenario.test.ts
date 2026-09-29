@@ -48,6 +48,9 @@ function classifyRun(
   const clock = scenarioClock(scenario, genesisTs)
   const params = scenarioParams(scenario)
   const slots = new Map(sensors.map((sensor) => [sensor.pubkey, sensor]))
+  // Registration order, which is how the program hands slots out to sensors
+  // registered into an empty cell.
+  const slotOf = new Map(sensors.map((sensor, index) => [sensor.pubkey, index]))
 
   const accepted: AcceptedReading[] = readings.map((reading) => {
     const sensor = slots.get(reading.sensor)
@@ -55,7 +58,7 @@ function classifyRun(
     return {
       sensorPubkey: reading.sensor,
       operator: sensor.operator,
-      slotInCell: sensor.slotInCell,
+      slotInCell: slotOf.get(reading.sensor) ?? 0,
       valueX100: reading.valueX100,
       measuredAt: reading.measuredAt,
       counter: reading.counter,
@@ -796,13 +799,13 @@ describe('loadScenario', () => {
     )
   })
 
-  it('refuses two sensors in one slot', () => {
+  it('refuses a sensor that names its own slot — the program hands them out', () => {
     const scenario = base()
-    const sensors = scenario.sensors as { slotInCell: number }[]
-    const second = sensors[1]
-    if (second === undefined) throw new Error('fixture')
-    second.slotInCell = 0
-    expect(() => loadScenario(scenario)).toThrow(/share a slot/)
+    const sensors = scenario.sensors as Record<string, unknown>[]
+    const first = sensors[0]
+    if (first === undefined) throw new Error('fixture')
+    first.slotInCell = 0
+    expect(() => loadScenario(scenario)).toThrow()
   })
 
   it('refuses two sensors sharing a seed, and therefore a key', () => {

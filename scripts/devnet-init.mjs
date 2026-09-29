@@ -27,7 +27,12 @@ import {
   vaultPda,
 } from '../packages/anchor-client/src/index.ts'
 
-const ENV_PATH = new URL('../.env', import.meta.url)
+// `PUMPKING_ENV` names another file for another cluster (a local validator),
+// so trying the path never edits the devnet `.env`.
+const ENV_PATH =
+  process.env.PUMPKING_ENV === undefined || process.env.PUMPKING_ENV === ''
+    ? new URL('../.env', import.meta.url)
+    : process.env.PUMPKING_ENV
 const SCENARIO_PATH = new URL('../fixtures/scenarios/drought.json', import.meta.url)
 
 /** Whole tokens moved into the pool as underwriting capital. */
