@@ -5,13 +5,24 @@
 //! not hold, a number that is not a cell, a cell one level off the grid, a
 //! thirty-third sensor in a full mask, a stake from somebody who is not the
 //! operator, and a stake that would land in the capital vault.
+//!
+//! **The stake is not capital** (`FR-051`, `T032`) is tested from the other
+//! side: not what `stake_sensor` writes, but what the rest of the pool does
+//! while the stake vault holds several times its capital. The pool sells no
+//! cover past its capital, lets no cell owe more than capital allows, pays a
+//! payout that empties the capital to its last unit without reaching the
+//! stake, and has no instruction that moves money which will take the stake
+//! vault in place of the capital vault. Both vaults answer to the same pool
+//! PDA, so for the two transfers the pool signs — `settle_policy` and
+//! `claim_unclaimed_payout` — that address check is the only thing between a
+//! payout and the stake.
 
 mod harness;
 
 use anchor_lang::prelude::Pubkey as AnchorPubkey;
 use harness::*;
 use pumpking::errors::PumpkingError;
-use pumpking::instructions::{DayRecordParams, PoolParams};
+use pumpking::instructions::{DayRecordParams, PolicyParams, PoolParams};
 use pumpking::state::{CellState, Pool, Sensor, MAX_SENSORS_PER_CELL};
 
 const GENESIS_TS: i64 = 1_800_000_000;
@@ -19,12 +30,29 @@ const SECONDS_PER_DAY: u32 = 86_400;
 const DECIMALS: u8 = 6;
 const SOL: u64 = 1_000_000_000;
 const MIN_STAKE: u64 = 1_000_000;
-const OPERATOR_BALANCE: u64 = 50_000_000;
+const OPERATOR_BALANCE: u64 = 100_000_000;
 
 /// `871e701b3ffffff`, the demo cell — a real res 7 H3 cell.
 const CELL_ID: u64 = 0x0871_e701_b3ff_ffff;
 /// One of its res 8 children: a real cell, on the wrong level.
 const RES8_CELL: u64 = 0x0881_e701_b33f_ffff;
+
+/// What the depositor puts into the pool — all the capital it has.
+const CAPITAL: u64 = 10_000_000;
+/// The network the `FR-051` tests run on: three sensors, each staked this
+/// much. Together they hold six times the pool's capital, so a check that
+/// reached into the stake vault would sell, reserve or pay visibly more than
+/// capital allows.
+const NETWORK: u8 = 3;
+const NETWORK_STAKE: u64 = 20_000_000;
+/// Enough for the dearest policy these tests buy: cover for all the capital,
+/// priced at 2500 bps (four dry days in twenty, plus the risk loading).
+const FARMER_BALANCE: u64 = 10_000_000;
+
+const HISTORY_DAYS: u32 = 20;
+const WINDOW_START: u32 = 23;
+const WINDOW_END: u32 = 30;
+const SPELL_THRESHOLD: u8 = 5;
 
 fn authority() -> AnchorPubkey {
     key(1)
@@ -50,6 +78,18 @@ fn operator_tokens() -> AnchorPubkey {
 fn stranger_tokens() -> AnchorPubkey {
     key(9)
 }
+fn depositor() -> AnchorPubkey {
+    key(10)
+}
+fn depositor_tokens() -> AnchorPubkey {
+    key(11)
+}
+fn farmer() -> AnchorPubkey {
+    key(12)
+}
+fn farmer_tokens() -> AnchorPubkey {
+    key(13)
+}
 /// Sensor keys start at tag 100 so they never meet a role's.
 fn sensor_key(n: u8) -> AnchorPubkey {
     key(100 + n)
@@ -72,11 +112,17 @@ fn pool_params() -> PoolParams {
 }
 
 fn world() -> World {
+    world_with(pool_params())
+}
+
+fn world_with(params: PoolParams) -> World {
     let mut world = World::new(GENESIS_TS, SECONDS_PER_DAY);
     world.fund(authority(), 10 * SOL);
     world.fund(aggregator(), 10 * SOL);
     world.fund(operator(), 10 * SOL);
     world.fund(stranger(), 10 * SOL);
+    world.fund(depositor(), 10 * SOL);
+    world.fund(farmer(), 10 * SOL);
     world.create_mint(asset_mint(), DECIMALS, Some(minter()));
     world.create_token_account(
         operator_tokens(),
@@ -90,6 +136,8 @@ fn world() -> World {
         stranger(),
         OPERATOR_BALANCE,
     );
+    world.create_token_account(depositor_tokens(), asset_mint(), depositor(), CAPITAL);
+    world.create_token_account(farmer_tokens(), asset_mint(), farmer(), FARMER_BALANCE);
 
     let ix = instruction(
         pumpking::accounts::InitializePool {
@@ -101,9 +149,7 @@ fn world() -> World {
             token_program: token_program_id(),
             system_program: system_program_id(),
         },
-        pumpking::instruction::InitializePool {
-            params: pool_params(),
-        },
+        pumpking::instruction::InitializePool { params },
     );
     world.exec_ok(&ix);
     world
@@ -145,6 +191,155 @@ fn stake(
         },
         pumpking::instruction::StakeSensor { amount },
     )
+}
+
+/// The same pool, except one cell may owe all of its capital. With the cell
+/// limit out of the way, the only thing standing between a buyer and cover is
+/// the liquidity check `FR-019` — the one `FR-051` names.
+fn whole_pool_params() -> PoolParams {
+    PoolParams {
+        cell_exposure_bps: 10_000,
+        ..pool_params()
+    }
+}
+
+/* Every instruction that moves the pool's money takes the vault as an argument,
+ * so the tests below can hand each of them the stake vault instead. */
+
+fn deposit(vault: AnchorPubkey, amount: u64) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::DepositCapital {
+            depositor: depositor(),
+            pool: pool_pda(),
+            asset_mint: asset_mint(),
+            vault,
+            depositor_tokens: depositor_tokens(),
+            position: position_pda(depositor()),
+            token_program: token_program_id(),
+            system_program: system_program_id(),
+        },
+        pumpking::instruction::DepositCapital { amount },
+    )
+}
+
+fn issue(nonce: u64, payout: u64, vault: AnchorPubkey) -> solana_instruction::Instruction {
+    let params = PolicyParams {
+        nonce,
+        cell_id: CELL_ID,
+        spell_days_threshold: SPELL_THRESHOLD,
+        payout,
+        max_premium: payout,
+        window_start_day: WINDOW_START,
+        window_end_day: WINDOW_END,
+    };
+    instruction(
+        pumpking::accounts::IssuePolicy {
+            owner: farmer(),
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+            policy: policy_pda(farmer(), nonce),
+            asset_mint: asset_mint(),
+            vault,
+            owner_tokens: farmer_tokens(),
+            token_program: token_program_id(),
+            system_program: system_program_id(),
+        },
+        pumpking::instruction::IssuePolicy { params },
+    )
+}
+
+fn settle(nonce: u64, vault: AnchorPubkey) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::SettlePolicy {
+            caller: stranger(),
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+            policy: policy_pda(farmer(), nonce),
+            asset_mint: asset_mint(),
+            vault,
+            owner_tokens: farmer_tokens(),
+            token_program: token_program_id(),
+        },
+        pumpking::instruction::SettlePolicy {},
+    )
+}
+
+fn claim(nonce: u64, vault: AnchorPubkey) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::ClaimUnclaimedPayout {
+            caller: stranger(),
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+            policy: policy_pda(farmer(), nonce),
+            asset_mint: asset_mint(),
+            vault,
+            owner_tokens: farmer_tokens(),
+            token_program: token_program_id(),
+        },
+        pumpking::instruction::ClaimUnclaimedPayout {},
+    )
+}
+
+/// A day of the cell as the staked network measured it: slots 0..2 voting,
+/// the full day covered.
+fn submit_day(day_index: u32, dry: bool) -> solana_instruction::Instruction {
+    let params = DayRecordParams {
+        cell_id: CELL_ID,
+        day_index,
+        state: if dry { 1 } else { 2 },
+        contributors: 0b111,
+        readings_root: [0x5a; 32],
+        rainfall_x100: Some(if dry { 0 } else { 500 }),
+        covered_intervals: 24,
+        total_intervals: 24,
+    };
+    instruction(
+        pumpking::accounts::SubmitDayRecord {
+            aggregator: aggregator(),
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+            system_program: system_program_id(),
+        },
+        pumpking::instruction::SubmitDayRecord { params },
+    )
+}
+
+/// A pool with capital, and a cell its own staked network has measured for
+/// twenty days: three sensors registered in slots 0..2, each staked
+/// `NETWORK_STAKE`, and every day written with those three as its votes. Four
+/// of the twenty are dry, which prices cover at 2500 bps. The clock stays on
+/// day `HISTORY_DAYS`.
+fn staked_world(params: PoolParams) -> World {
+    let mut world = world_with(params);
+    world.exec_ok(&deposit(vault_pda(), CAPITAL));
+    for n in 0..NETWORK {
+        world.exec_ok(&register(operator(), sensor_key(n), CELL_ID));
+        world.exec_ok(&stake(
+            operator(),
+            operator_tokens(),
+            sensor_key(n),
+            NETWORK_STAKE,
+        ));
+    }
+    for day in 0..HISTORY_DAYS {
+        world.set_day(day + 1);
+        world.exec_ok(&submit_day(day, matches!(day, 3 | 8 | 14 | 19)));
+    }
+    world.set_day(HISTORY_DAYS);
+    world
+}
+
+/// The stake vault holds exactly what the network put up, and every sensor
+/// still holds its own share of it.
+fn assert_stake_untouched(world: &World) {
+    assert_eq!(
+        token_amount(world.account(stake_vault_pda())),
+        u64::from(NETWORK) * NETWORK_STAKE
+    );
+    for n in 0..NETWORK {
+        let sensor: Sensor = world.read(sensor_pda(sensor_key(n)));
+        assert_eq!(sensor.stake, NETWORK_STAKE);
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -357,4 +552,110 @@ fn a_stake_aimed_at_the_capital_vault_is_refused() {
     );
     world.exec_anchor_err(&ix, anchor_lang::error::ErrorCode::ConstraintAddress);
     assert_eq!(token_amount(world.account(vault_pda())), 0);
+}
+
+/* -------------------------------------------------------------------------- */
+/* FR-051 — the stake is not capital                                          */
+/* -------------------------------------------------------------------------- */
+
+#[test]
+fn the_stake_sells_no_cover_beyond_capital() {
+    // `FR-019` at its edge, with six times the capital sitting in the stake
+    // vault: one unit of cover past the capital is refused, the capital
+    // itself is not.
+    let mut world = staked_world(whole_pool_params());
+    world.exec_err(
+        &issue(1, CAPITAL + 1, vault_pda()),
+        PumpkingError::InsufficientLiquidity,
+    );
+    world.exec_ok(&issue(1, CAPITAL, vault_pda()));
+
+    // Sold out. What is free now is the capital share of that one premium —
+    // 2500 bps of the payout, less the tenth that goes to the cell's rewards
+    // (`FR-034`) — and one unit past it is refused just the same.
+    let premium = CAPITAL / 4;
+    let free = premium - premium / 10;
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.reserved_total, CAPITAL);
+    assert_eq!(pool.free_liquidity(), free);
+    world.exec_err(
+        &issue(2, free + 1, vault_pda()),
+        PumpkingError::InsufficientLiquidity,
+    );
+
+    // Selling cover moved nothing out of the stake vault.
+    assert_stake_untouched(&world);
+}
+
+#[test]
+fn the_stake_raises_no_cell_s_exposure_limit() {
+    // `FR-020`, the other limit capital sets: a tenth of it per cell,
+    // whatever the cell's own sensors have staked.
+    let mut world = staked_world(pool_params());
+    world.exec_err(
+        &issue(1, CAPITAL / 10 + 1, vault_pda()),
+        PumpkingError::CellExposureExceeded,
+    );
+    world.exec_ok(&issue(1, CAPITAL / 10, vault_pda()));
+
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.reserved, CAPITAL / 10);
+    assert_stake_untouched(&world);
+}
+
+#[test]
+fn a_payout_that_takes_all_the_capital_leaves_the_stake_where_it_was() {
+    // Cover for every unit of capital, and the drought it was bought
+    // against. The payout empties the capital to its last unit; the stake
+    // vault, held by the same pool PDA, is not one unit lighter.
+    let mut world = staked_world(whole_pool_params());
+    world.exec_ok(&issue(1, CAPITAL, vault_pda()));
+    let premium = CAPITAL / 4;
+
+    for day in WINDOW_START..WINDOW_START + u32::from(SPELL_THRESHOLD) {
+        world.set_day(day + 1);
+        world.exec_ok(&submit_day(day, true));
+    }
+    let before = token_amount(world.account(farmer_tokens()));
+    world.exec_ok(&settle(1, vault_pda()));
+
+    assert_eq!(
+        token_amount(world.account(farmer_tokens())),
+        before + CAPITAL
+    );
+    // What is left in the capital vault is that one premium: its capital
+    // share and the cell's reward reserve, nothing of the depositor's.
+    assert_eq!(token_amount(world.account(vault_pda())), premium);
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.capital_total, premium - premium / 10);
+    assert_eq!(pool.reserved_total, 0);
+
+    assert_stake_untouched(&world);
+}
+
+#[test]
+fn no_instruction_that_moves_money_takes_the_stake_vault_for_capital() {
+    // One vault swapped for the other, in each of the four instructions that
+    // move the pool's money. Deposit and premium would land in the stake
+    // vault and be counted as capital; settlement and a deferred payout
+    // would be signed by the pool PDA, which holds the stake vault too.
+    let mut world = staked_world(pool_params());
+    world.exec_ok(&issue(1, CAPITAL / 10, vault_pda()));
+    let vault_before = token_amount(world.account(vault_pda()));
+    let pool_before: Pool = world.read(pool_pda());
+
+    for ix in [
+        deposit(stake_vault_pda(), 1),
+        issue(2, CAPITAL / 10, stake_vault_pda()),
+        settle(1, stake_vault_pda()),
+        claim(1, stake_vault_pda()),
+    ] {
+        world.exec_anchor_err(&ix, anchor_lang::error::ErrorCode::ConstraintAddress);
+    }
+
+    assert_eq!(token_amount(world.account(vault_pda())), vault_before);
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.capital_total, pool_before.capital_total);
+    assert_eq!(pool.reserved_total, pool_before.reserved_total);
+    assert_stake_untouched(&world);
 }
