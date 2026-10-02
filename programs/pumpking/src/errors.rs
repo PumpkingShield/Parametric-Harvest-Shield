@@ -165,4 +165,22 @@ pub enum PumpkingError {
 
     #[msg("An excluded sensor's stake does not leave the stake vault")]
     SensorExcluded,
+
+    #[msg("Reputation can only be written for the day the cell recorded last")]
+    ReputationDayMismatch,
+
+    #[msg("The reputation record only grows forwards")]
+    ReputationDayNotNewer,
+
+    #[msg("A sensor cannot be an outlier in more intervals than it was judged in")]
+    OutliersExceedJudged,
+
+    #[msg("The reputation addresses a sensor slot the cell has not")]
+    ReputationOutOfRange,
+
+    #[msg("The sensor's outlier share over the window does not exclude it")]
+    OutlierShareNotBreached,
+
+    #[msg("The sensor is not excluded")]
+    SensorNotExcluded,
 }

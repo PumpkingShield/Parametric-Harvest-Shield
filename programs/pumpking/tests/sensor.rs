@@ -23,14 +23,23 @@
 //! day — not one day sooner, and not to anybody but the operator. Asking again
 //! restarts the count, and no pool can be created whose thaw is not longer
 //! than the outlier observation window.
+//!
+//! **Exclusion** (`FR-012`, `FR-052`, `T035`). A day's verdicts reach the chain
+//! with the day and for that day only; anyone can exclude a sensor whose
+//! record over the window breaches the share, and nobody can exclude one whose
+//! record does not. The whole stake, the thawing part included, becomes
+//! capital — the shares do not move — and the operator alone brings the
+//! sensor back, with a clean slate and no stake.
 
 mod harness;
 
 use anchor_lang::prelude::Pubkey as AnchorPubkey;
 use harness::*;
 use pumpking::errors::PumpkingError;
-use pumpking::instructions::{DayRecordParams, PolicyParams, PoolParams};
-use pumpking::state::{CellState, Pool, Sensor, MAX_SENSORS_PER_CELL, OUTLIER_WINDOW_DAYS};
+use pumpking::instructions::{DayRecordParams, DayReputationParams, PolicyParams, PoolParams};
+use pumpking::state::{
+    CellReputation, CellState, Pool, Sensor, MAX_SENSORS_PER_CELL, OUTLIER_WINDOW_DAYS,
+};
 
 const GENESIS_TS: i64 = 1_800_000_000;
 const SECONDS_PER_DAY: u32 = 86_400;
@@ -959,4 +968,277 @@ fn a_withdrawal_aimed_at_the_capital_vault_is_refused() {
     assert_eq!(token_amount(world.account(vault_pda())), CAPITAL);
     let sensor: Sensor = world.read(sensor_pda(sensor_key(0)));
     assert_eq!(sensor.unstaking, NETWORK_STAKE);
+}
+
+/* -------------------------------------------------------------------------- */
+/* FR-011, FR-012, FR-052 — reputation, exclusion, reinstatement              */
+/* -------------------------------------------------------------------------- */
+
+const SLOTS: usize = MAX_SENSORS_PER_CELL as usize;
+/// The slot of the network that lies in the exclusion tests.
+const LIAR: u8 = 2;
+
+fn reputation_pda(cell_id: u64) -> AnchorPubkey {
+    AnchorPubkey::find_program_address(
+        &[b"reputation", cell_id.to_le_bytes().as_ref()],
+        &pumpking::ID,
+    )
+    .0
+}
+
+fn read_reputation(world: &World) -> CellReputation {
+    let data = &world.account(reputation_pda(CELL_ID)).data;
+    bytemuck::pod_read_unaligned(&data[8..8 + CellReputation::SPACE])
+}
+
+fn submit_reputation(
+    signer: AnchorPubkey,
+    day_index: u32,
+    judged: [u16; SLOTS],
+    outliers: [u16; SLOTS],
+) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::SubmitDayReputation {
+            aggregator: signer,
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+            reputation: reputation_pda(CELL_ID),
+            system_program: system_program_id(),
+        },
+        pumpking::instruction::SubmitDayReputation {
+            params: DayReputationParams {
+                cell_id: CELL_ID,
+                day_index,
+                judged,
+                outliers,
+            },
+        },
+    )
+}
+
+/// A day of the network's verdicts: every slot judged in all 24 intervals,
+/// the liar an outlier in `lies` of them.
+fn verdicts(lies: u16) -> ([u16; SLOTS], [u16; SLOTS]) {
+    let mut judged = [0u16; SLOTS];
+    let mut outliers = [0u16; SLOTS];
+    for slot in 0..usize::from(NETWORK) {
+        judged[slot] = 24;
+    }
+    outliers[usize::from(LIAR)] = lies;
+    (judged, outliers)
+}
+
+fn exclude(sensor: AnchorPubkey, vault: AnchorPubkey) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::ExcludeSensor {
+            caller: stranger(),
+            pool: pool_pda(),
+            sensor: sensor_pda(sensor),
+            reputation: reputation_pda(CELL_ID),
+            asset_mint: asset_mint(),
+            stake_vault: stake_vault_pda(),
+            vault,
+            token_program: token_program_id(),
+        },
+        pumpking::instruction::ExcludeSensor {},
+    )
+}
+
+fn reinstate(operator: AnchorPubkey, sensor: AnchorPubkey) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::ReinstateSensor {
+            operator,
+            sensor: sensor_pda(sensor),
+            reputation: reputation_pda(CELL_ID),
+        },
+        pumpking::instruction::ReinstateSensor {},
+    )
+}
+
+/// The staked network of `staked_world`, with every day's verdicts written
+/// beside the day: the liar an outlier in `lies` of its 24 intervals a day.
+/// The clock stays on day `HISTORY_DAYS`, whose window is days 6..=19.
+fn judged_world(lies: u16) -> World {
+    let mut world = world_with(pool_params());
+    world.exec_ok(&deposit(vault_pda(), CAPITAL));
+    for n in 0..NETWORK {
+        world.exec_ok(&register(operator(), sensor_key(n), CELL_ID));
+        world.exec_ok(&stake(
+            operator(),
+            operator_tokens(),
+            sensor_key(n),
+            NETWORK_STAKE,
+        ));
+    }
+    for day in 0..HISTORY_DAYS {
+        world.set_day(day + 1);
+        world.exec_ok(&submit_day(day, false));
+        let (judged, outliers) = verdicts(lies);
+        world.exec_ok(&submit_reputation(aggregator(), day, judged, outliers));
+    }
+    world.set_day(HISTORY_DAYS);
+    world
+}
+
+#[test]
+fn a_day_s_verdicts_are_written_for_the_day_the_cell_recorded_and_no_other() {
+    let mut world = judged_world(0);
+    let reputation = read_reputation(&world);
+    assert_eq!(reputation.cell_id, CELL_ID);
+    assert_eq!(reputation.last_day(), Some(HISTORY_DAYS - 1));
+    assert_eq!(
+        reputation.window(LIAR, 6, 19),
+        (14 * 24, 0),
+        "the ring holds the window"
+    );
+
+    let (judged, outliers) = verdicts(1);
+    // Not the aggregator: one key writes the day log, and the same one writes this.
+    world.exec_err(
+        &submit_reputation(stranger(), HISTORY_DAYS - 1, judged, outliers),
+        PumpkingError::NotTheAggregator,
+    );
+    // The day the log has moved past, and a day the log does not have.
+    world.exec_err(
+        &submit_reputation(aggregator(), HISTORY_DAYS - 2, judged, outliers),
+        PumpkingError::ReputationDayMismatch,
+    );
+    world.exec_err(
+        &submit_reputation(aggregator(), HISTORY_DAYS, judged, outliers),
+        PumpkingError::ReputationDayMismatch,
+    );
+    // The day it was written for, a second time: forwards only.
+    world.exec_err(
+        &submit_reputation(aggregator(), HISTORY_DAYS - 1, judged, outliers),
+        PumpkingError::ReputationDayNotNewer,
+    );
+
+    // A slot the cell does not have, and more outliers than judgements.
+    world.set_day(HISTORY_DAYS + 1);
+    world.exec_ok(&submit_day(HISTORY_DAYS, false));
+    let mut beyond = judged;
+    beyond[usize::from(NETWORK)] = 1;
+    world.exec_err(
+        &submit_reputation(aggregator(), HISTORY_DAYS, beyond, outliers),
+        PumpkingError::ReputationOutOfRange,
+    );
+    let mut too_many = outliers;
+    too_many[0] = 25;
+    world.exec_err(
+        &submit_reputation(aggregator(), HISTORY_DAYS, judged, too_many),
+        PumpkingError::OutliersExceedJudged,
+    );
+}
+
+#[test]
+fn a_liar_is_excluded_by_anyone_and_its_whole_stake_becomes_capital() {
+    // 5 of 24 a day: 70 of 336 over the window, over a fifth.
+    let mut world = judged_world(5);
+    // Half the stake asked out first: thawing is no way out of the burn.
+    world.exec_ok(&request_unstake(
+        operator(),
+        sensor_key(LIAR),
+        NETWORK_STAKE / 2,
+    ));
+    let pool_before: Pool = world.read(pool_pda());
+    let vault_before = token_amount(world.account(vault_pda()));
+
+    world.exec_ok(&exclude(sensor_key(LIAR), vault_pda()));
+
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(LIAR)));
+    assert!(!sensor.active);
+    assert_eq!((sensor.stake, sensor.unstaking), (0, 0));
+    assert_eq!(sensor.unlock_at_day, None);
+    assert_eq!((sensor.accepted, sensor.outliers), (336 - 70, 70));
+
+    assert_eq!(
+        token_amount(world.account(vault_pda())),
+        vault_before + NETWORK_STAKE
+    );
+    assert_eq!(
+        token_amount(world.account(stake_vault_pda())),
+        u64::from(NETWORK - 1) * NETWORK_STAKE
+    );
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(
+        pool.capital_total,
+        pool_before.capital_total + NETWORK_STAKE
+    );
+    assert_eq!(
+        pool.shares_total, pool_before.shares_total,
+        "the burn is the depositors' to keep"
+    );
+
+    // Excluded once, and that is all.
+    world.exec_err(
+        &exclude(sensor_key(LIAR), vault_pda()),
+        PumpkingError::SensorExcluded,
+    );
+}
+
+#[test]
+fn a_sensor_inside_the_threshold_is_excluded_by_nobody() {
+    // 4 of 24 a day is 56 of 336: often off, not over a fifth.
+    let mut world = judged_world(4);
+    for n in 0..NETWORK {
+        world.exec_err(
+            &exclude(sensor_key(n), vault_pda()),
+            PumpkingError::OutlierShareNotBreached,
+        );
+    }
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(LIAR)));
+    assert!(sensor.active);
+    assert_eq!(sensor.stake, NETWORK_STAKE);
+}
+
+#[test]
+fn a_burn_aimed_anywhere_but_the_capital_vault_is_refused() {
+    let mut world = judged_world(24);
+    world.exec_anchor_err(
+        &exclude(sensor_key(LIAR), stake_vault_pda()),
+        anchor_lang::error::ErrorCode::ConstraintAddress,
+    );
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(LIAR)));
+    assert!(sensor.active);
+}
+
+#[test]
+fn only_the_operator_reinstates_and_the_slate_is_clean_and_unstaked() {
+    let mut world = judged_world(24);
+    world.exec_err(
+        &reinstate(operator(), sensor_key(LIAR)),
+        PumpkingError::SensorNotExcluded,
+    );
+    world.exec_ok(&exclude(sensor_key(LIAR), vault_pda()));
+
+    world.exec_err(
+        &reinstate(stranger(), sensor_key(LIAR)),
+        PumpkingError::NotTheOperator,
+    );
+    world.exec_ok(&reinstate(operator(), sensor_key(LIAR)));
+
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(LIAR)));
+    assert!(sensor.active);
+    assert_eq!(sensor.stake, 0);
+    assert_eq!((sensor.accepted, sensor.outliers), (0, 0));
+    // Back, but without a vote until it is staked anew.
+    assert!(!sensor.votes(MIN_STAKE));
+
+    // The record that excluded it is gone, and the others' is not.
+    let reputation = read_reputation(&world);
+    assert_eq!(reputation.window(LIAR, 0, HISTORY_DAYS), (0, 0));
+    assert_eq!(reputation.window(0, 6, 19), (14 * 24, 0));
+    world.exec_err(
+        &exclude(sensor_key(LIAR), vault_pda()),
+        PumpkingError::OutlierShareNotBreached,
+    );
+
+    world.exec_ok(&stake(
+        operator(),
+        operator_tokens(),
+        sensor_key(LIAR),
+        MIN_STAKE,
+    ));
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(LIAR)));
+    assert!(sensor.votes(MIN_STAKE));
 }

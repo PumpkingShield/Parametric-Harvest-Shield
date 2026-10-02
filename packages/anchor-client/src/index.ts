@@ -1,9 +1,16 @@
 export { BN } from '@coral-xyz/anchor'
-export type { CellStateAccount, PolicyAccount, PoolAccount, SensorAccount } from './accounts.ts'
+export type {
+  CellReputationAccount,
+  CellStateAccount,
+  PolicyAccount,
+  PoolAccount,
+  SensorAccount,
+} from './accounts.ts'
 export {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   accountDiscriminator,
   associatedTokenAddress,
+  decodeCellReputation,
   decodeCellState,
   decodePolicy,
   decodePool,
@@ -11,6 +18,7 @@ export {
   isPolicyActive,
   POLICY_ACTIVE,
   POLICY_DISCRIMINATOR,
+  reputationWindow,
   SENSOR_DISCRIMINATOR,
 } from './accounts.ts'
 export { PUMPKING_IDL } from './idl/idl.ts'
@@ -20,18 +28,22 @@ export type {
   ClosePolicyInput,
   DayClassification,
   DayRecord,
+  DayReputation,
   DecodedInstruction,
   DepositCapitalInput,
+  ExcludeSensorInput,
   InitializePoolInput,
   InstructionInput,
   IssuePolicyInput,
   PolicyTerms,
   PoolParams,
   RegisterSensorInput,
+  ReinstateSensorInput,
   RequestUnstakeInput,
   SettlePolicyInput,
   StakeSensorInput,
   SubmitDayRecordInput,
+  SubmitDayReputationInput,
   WithdrawStakeInput,
 } from './instructions.ts'
 export {
@@ -42,13 +54,17 @@ export {
   decodeInstruction,
   depositCapitalInstruction,
   derivePdaFromIdl,
+  excludeSensorInstruction,
   initializePoolInstruction,
   issuePolicyInstruction,
   registerSensorInstruction,
+  reinstateSensorInstruction,
   requestUnstakeInstruction,
+  SENSOR_SLOTS,
   settlePolicyInstruction,
   stakeSensorInstruction,
   submitDayRecordInstruction,
+  submitDayReputationInstruction,
   withdrawStakeInstruction,
 } from './instructions.ts'
 export type { Pda } from './pda.ts'
@@ -61,6 +77,8 @@ export {
   POOL_SEED,
   policyPda,
   poolPda,
+  REPUTATION_SEED,
+  reputationPda,
   SENSOR_SEED,
   STAKE_VAULT_SEED,
   sensorPda,

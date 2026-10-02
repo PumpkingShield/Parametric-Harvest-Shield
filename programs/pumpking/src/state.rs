@@ -18,6 +18,8 @@ pub const CELL_SEED: &[u8] = b"cell";
 pub const SENSOR_SEED: &[u8] = b"sensor";
 pub const POLICY_SEED: &[u8] = b"policy";
 pub const CAPITAL_SEED: &[u8] = b"lp";
+/// A cell's outlier record — `FR-011`, `FR-012`.
+pub const REPUTATION_SEED: &[u8] = b"reputation";
 
 /// Basis points, the unit every published share is expressed in.
 pub const BPS_DENOMINATOR: u64 = 10_000;
@@ -77,6 +79,10 @@ pub const OUTLIER_SHARE_BPS: u16 = 2000;
 /// hourly intervals. Below it one bad hour would be a hundred per cent.
 #[constant]
 pub const OUTLIER_MIN_JUDGED: u16 = 72;
+
+/// Days a cell's reputation ring holds: exactly the window, because a day
+/// older than it is a day no exclusion may count.
+pub const REPUTATION_DAYS: usize = OUTLIER_WINDOW_DAYS as usize;
 
 /* -------------------------------------------------------------------------- */
 /* Pool                                                                       */
@@ -381,6 +387,148 @@ impl Sensor {
     pub fn votes(&self, min_stake: u64) -> bool {
         self.active && self.stake >= min_stake
     }
+}
+
+/* -------------------------------------------------------------------------- */
+/* CellReputation                                                             */
+/* -------------------------------------------------------------------------- */
+
+/// One day of a cell's verdicts, per sensor slot — `FR-011`.
+#[zero_copy]
+#[derive(PartialEq, Eq, Debug)]
+pub struct ReputationDay {
+    pub day_index: u32,
+    /// Intervals each slot was judged in that day.
+    pub judged: [u16; MAX_SENSORS_PER_CELL as usize],
+    /// Of those, the ones it was an outlier in.
+    pub outliers: [u16; MAX_SENSORS_PER_CELL as usize],
+}
+
+impl ReputationDay {
+    const EMPTY: Self = Self {
+        day_index: 0,
+        judged: [0; MAX_SENSORS_PER_CELL as usize],
+        outliers: [0; MAX_SENSORS_PER_CELL as usize],
+    };
+}
+
+/// Why a reputation day cannot be written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReputationError {
+    /// The ring only grows forwards, like the day log it follows.
+    NotNewer,
+}
+
+/// PDA `["reputation", cell_id]` — the record `exclude_sensor` judges by.
+///
+/// Its own account rather than more of `CellState`: the cell's layout is what
+/// the deployed demo pool already holds, and a ring of the window is all the
+/// program ever needs to read. A day older than `OUTLIER_WINDOW_DAYS` counts
+/// for no exclusion, so it is overwritten rather than kept.
+///
+/// **Zero-copy**, unlike every other account here. At close to two kilobytes
+/// the ring does not fit beside anything else in the 4 KiB frame
+/// `try_accounts` is given — boxing does not help, because the struct is
+/// built on the stack before it is boxed — so it is read in place. The fields
+/// are laid out with no padding, which makes the bytes the same as Borsh would
+/// write and keeps the client's decoder honest.
+#[account(zero_copy)]
+pub struct CellReputation {
+    pub cell_id: u64,
+    /// The last day written, meaningful only once `has_days` is set.
+    pub last_day_index: u32,
+    pub bump: u8,
+    /// `1` once a day has been written. Not an `Option`: zero-copy has none.
+    pub has_days: u8,
+    pub padding: [u8; 2],
+    /// Indexed by `day_index % REPUTATION_DAYS`.
+    pub days: [ReputationDay; REPUTATION_DAYS],
+}
+
+impl CellReputation {
+    /// Bytes after the discriminator.
+    pub const SPACE: usize = std::mem::size_of::<Self>();
+
+    /// The last day written, or `None` before the first.
+    pub fn last_day(&self) -> Option<u32> {
+        (self.has_days != 0).then_some(self.last_day_index)
+    }
+
+    /// Writes one day, which has to be newer than the last.
+    pub fn record_day(
+        &mut self,
+        day_index: u32,
+        judged: [u16; MAX_SENSORS_PER_CELL as usize],
+        outliers: [u16; MAX_SENSORS_PER_CELL as usize],
+    ) -> std::result::Result<(), ReputationError> {
+        if let Some(last) = self.last_day() {
+            if day_index <= last {
+                return Err(ReputationError::NotNewer);
+            }
+        }
+        self.days[day_index as usize % REPUTATION_DAYS] = ReputationDay {
+            day_index,
+            judged,
+            outliers,
+        };
+        self.last_day_index = day_index;
+        self.has_days = 1;
+        Ok(())
+    }
+
+    /// A slot's judged and outlier intervals over the days `[from, to]`.
+    ///
+    /// An entry left from an earlier lap of the ring carries its own day and
+    /// falls outside the range, so a day nobody wrote counts for nothing —
+    /// which is right: no record is not a bad one.
+    pub fn window(&self, slot: u8, from: u32, to: u32) -> (u32, u32) {
+        let slot = usize::from(slot);
+        if slot >= MAX_SENSORS_PER_CELL as usize {
+            return (0, 0);
+        }
+        let mut judged = 0u32;
+        let mut outliers = 0u32;
+        for day in &self.days {
+            if day.day_index < from || day.day_index > to {
+                continue;
+            }
+            // A ring that was never written is all zeroes, day 0 included:
+            // it lands in the range only to add nothing.
+            judged += u32::from(day.judged[slot]);
+            outliers += u32::from(day.outliers[slot]);
+        }
+        (judged, outliers)
+    }
+
+    /// Forgets a slot's history — the clean slate `reinstate_sensor` gives.
+    pub fn clear_slot(&mut self, slot: u8) {
+        let slot = usize::from(slot);
+        if slot >= MAX_SENSORS_PER_CELL as usize {
+            return;
+        }
+        for day in &mut self.days {
+            day.judged[slot] = 0;
+            day.outliers[slot] = 0;
+        }
+    }
+
+    pub fn empty(cell_id: u64, bump: u8) -> Self {
+        Self {
+            cell_id,
+            last_day_index: 0,
+            bump,
+            has_days: 0,
+            padding: [0; 2],
+            days: [ReputationDay::EMPTY; REPUTATION_DAYS],
+        }
+    }
+}
+
+/// The days an exclusion on `today` counts: the window of closed days before
+/// it — `[today − OUTLIER_WINDOW_DAYS, today − 1]` — or none on day zero.
+pub fn outlier_window(today: u32) -> Option<(u32, u32)> {
+    let to = today.checked_sub(1)?;
+    Some((today.saturating_sub(u32::from(OUTLIER_WINDOW_DAYS)), to))
 }
 
 /* -------------------------------------------------------------------------- */
@@ -714,6 +862,73 @@ mod tests {
         assert!(!sensor(1_000_000, false).votes(1_000));
     }
 
+    fn slots(pairs: &[(usize, u16)]) -> [u16; MAX_SENSORS_PER_CELL as usize] {
+        let mut out = [0u16; MAX_SENSORS_PER_CELL as usize];
+        for &(slot, n) in pairs {
+            out[slot] = n;
+        }
+        out
+    }
+
+    #[test]
+    fn the_reputation_ring_sums_a_slot_over_the_window_only() {
+        let mut rep = CellReputation::empty(1, 255);
+        for day in 0..20u32 {
+            rep.record_day(day, slots(&[(2, 24)]), slots(&[(2, (day % 2) as u16)]))
+                .unwrap();
+        }
+        // Days 6..=19 survive the ring; day 5 was overwritten by day 19.
+        assert_eq!(rep.window(2, 6, 19), (14 * 24, 7));
+        assert_eq!(rep.window(2, 0, 5), (0, 0));
+        assert_eq!(rep.window(2, 18, 19), (48, 1));
+        // Another slot, and a slot the mask cannot address, have nothing.
+        assert_eq!(rep.window(3, 0, 19), (0, 0));
+        assert_eq!(rep.window(MAX_SENSORS_PER_CELL, 0, 19), (0, 0));
+    }
+
+    #[test]
+    fn the_reputation_ring_has_no_padding() {
+        // What makes the zero-copy bytes the Borsh bytes the client decodes.
+        assert_eq!(std::mem::size_of::<ReputationDay>(), 4 + 2 * 2 * 32);
+        assert_eq!(
+            CellReputation::SPACE,
+            8 + 4 + 1 + 1 + 2 + REPUTATION_DAYS * std::mem::size_of::<ReputationDay>()
+        );
+    }
+
+    #[test]
+    fn the_reputation_ring_only_grows_forwards() {
+        let mut rep = CellReputation::empty(1, 255);
+        rep.record_day(7, slots(&[]), slots(&[])).unwrap();
+        assert_eq!(
+            rep.record_day(7, slots(&[]), slots(&[])),
+            Err(ReputationError::NotNewer)
+        );
+        assert_eq!(
+            rep.record_day(3, slots(&[]), slots(&[])),
+            Err(ReputationError::NotNewer)
+        );
+        // A gap is fine: a day the aggregator had no verdicts for adds nothing.
+        rep.record_day(30, slots(&[]), slots(&[])).unwrap();
+    }
+
+    #[test]
+    fn a_cleared_slot_has_no_history_and_the_others_keep_theirs() {
+        let mut rep = CellReputation::empty(1, 255);
+        rep.record_day(1, slots(&[(0, 24), (1, 24)]), slots(&[(0, 24), (1, 3)]))
+            .unwrap();
+        rep.clear_slot(0);
+        assert_eq!(rep.window(0, 0, 13), (0, 0));
+        assert_eq!(rep.window(1, 0, 13), (24, 3));
+    }
+
+    #[test]
+    fn the_outlier_window_is_the_closed_days_before_today() {
+        assert_eq!(outlier_window(0), None);
+        assert_eq!(outlier_window(1), Some((0, 0)));
+        assert_eq!(outlier_window(20), Some((6, 19)));
+    }
+
     #[test]
     fn coverage_is_what_the_last_recorded_day_carried() {
         // FR-022. Zero on a cell nothing has been written to — which is every
@@ -765,6 +980,7 @@ mod tests {
             8 + Sensor::INIT_SPACE,
             8 + Policy::INIT_SPACE,
             8 + CapitalPosition::INIT_SPACE,
+            8 + CellReputation::SPACE,
         ] {
             assert!(space <= MAX_INIT, "account of {space} bytes is too large");
         }

@@ -1,8 +1,9 @@
 import type { PoolAccount, PublicKey } from '@pumpking/anchor-client'
-import type { IntervalStore } from '@pumpking/db'
+import type { CellSlotStore, IntervalStore } from '@pumpking/db'
 import { ReadingKind } from '@pumpking/shared'
 import type { PoolSource } from './chain.ts'
 import { type CloseDeps, type CloseOutcome, closeAfterDays } from './close.ts'
+import { type ExclusionSource, type ExcludeOutcome, excludeAfterDays } from './exclude.ts'
 import {
   type AggregationParams,
   backlogHorizon,
@@ -44,7 +45,10 @@ import {
  *    After settlement, because it releases capacity rather than money, and a
  *    window that finished on the same day it triggered is owed a payout, not a
  *    closure.
- * 4. **`sweepIfDue`** — readings and hourly medians past their retention
+ * 4. **`excludeAfterDays`** — sensors whose record over the window, now one
+ *    day longer, breaches the outlier share (`T035`). After the money, because
+ *    an exclusion moves a stake into capital and nobody is waiting on it.
+ * 5. **`sweepIfDue`** — readings and hourly medians past their retention
  *    (`T055`), once an hour. Last, because it has no deadline, and never newer
  *    than the oldest day step 1 could still close.
  *
@@ -79,6 +83,8 @@ export type CycleDeps = {
   programId?: PublicKey
   /** Absent in tests that are not about retention. */
   retention?: RetentionSweeper
+  /** Absent in tests that are not about exclusion — `T035`. */
+  exclusion?: { slots: CellSlotStore; chain: ExclusionSource }
   /**
    * Absent in tests that are not about the registry. Present in every real
    * cycle (`rpcCycle`): without it the registry is whatever the database last
@@ -113,6 +119,7 @@ export type CycleReport = {
   days: DayOutcome[]
   settled: SettleOutcome[]
   closed: CloseOutcome[]
+  excluded: ExcludeOutcome[]
   /** Null when no sweep was due this cycle. */
   swept: SweepOutcome | null
   /** Null when no read of the registry was due this cycle. */
@@ -121,7 +128,7 @@ export type CycleReport = {
 
 /** A fresh set of empty lists — never a shared one a caller could append to. */
 function nothing(): Omit<CycleReport, 'skipped' | 'aggregatorMatches'> {
-  return { days: [], settled: [], closed: [], swept: null, registry: null }
+  return { days: [], settled: [], closed: [], excluded: [], swept: null, registry: null }
 }
 
 /** The pool's own clock, plus how finely this worker cuts a day. */
@@ -201,6 +208,22 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
   }
   const closed = await closeAfterDays(close, days)
 
+  const excluded =
+    deps.exclusion === undefined
+      ? []
+      : await excludeAfterDays(
+          {
+            ...deps.exclusion,
+            submitter: deps.submitter,
+            caller: deps.aggregator,
+            assetMint: pool.assetMint,
+            clock,
+            ...(deps.programId === undefined ? {} : { programId: deps.programId }),
+          },
+          days,
+          now,
+        )
+
   const swept =
     deps.retention === undefined
       ? null
@@ -209,7 +232,7 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
           backlogHorizon(clock, now, deps.backlogDays ?? DEFAULT_BACKLOG_DAYS),
         )
 
-  return { skipped: null, aggregatorMatches, days, settled, closed, swept, registry }
+  return { skipped: null, aggregatorMatches, days, settled, closed, excluded, swept, registry }
 }
 
 /** What a finished cycle is worth saying in one log line. */
@@ -217,7 +240,8 @@ export type CycleSummary = {
   submitted: number
   settled: number
   closed: number
-  /** Days, settlements and closures the cluster refused. */
+  excluded: number
+  /** Days, settlements, closures and exclusions the cluster refused. */
   failed: number
 }
 
@@ -226,9 +250,11 @@ export function summarise(report: CycleReport): CycleSummary {
     submitted: report.days.filter((day) => day.status === 'submitted').length,
     settled: report.settled.filter((one) => one.status === 'settled').length,
     closed: report.closed.filter((one) => one.status === 'closed').length,
+    excluded: report.excluded.filter((one) => one.status === 'excluded').length,
     failed:
       report.days.filter((day) => day.status === 'failed').length +
       report.settled.filter((one) => one.status === 'failed').length +
-      report.closed.filter((one) => one.status === 'failed').length,
+      report.closed.filter((one) => one.status === 'failed').length +
+      report.excluded.filter((one) => one.status === 'failed').length,
   }
 }

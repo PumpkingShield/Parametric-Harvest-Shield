@@ -19,6 +19,10 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
 anchor-spl = "0.32.1"
+# `#[account(zero_copy)]` derives `Pod`/`Zeroable` through the crate's own
+# `bytemuck`, so it has to be a direct dependency. Pinned to the version
+# anchor-lang already brings — the lock does not move.
+bytemuck = { version = "=1.25.2", features = ["derive", "min_const_generics"] }
 
 [dev-dependencies]
 # Плетіння акаунтів (init, сіди, token::authority) перевіряє лише справжній

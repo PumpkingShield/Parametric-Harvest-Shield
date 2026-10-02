@@ -1,6 +1,14 @@
 import { BN, BorshInstructionCoder, type Idl } from '@coral-xyz/anchor'
 import { PUMPKING_IDL } from './idl/idl.ts'
-import { cellPda, policyPda, poolPda, sensorPda, stakeVaultPda, vaultPda } from './pda.ts'
+import {
+  cellPda,
+  policyPda,
+  poolPda,
+  reputationPda,
+  sensorPda,
+  stakeVaultPda,
+  vaultPda,
+} from './pda.ts'
 import { PROGRAM_ID } from './program.ts'
 import { type AccountMeta, PublicKey, TOKEN_PROGRAM_ID, TransactionInstruction } from './web3.ts'
 
@@ -774,6 +782,136 @@ export function withdrawStakeInstruction(input: WithdrawStakeInput): Transaction
       stakeVault: input.stakeVault ?? stakeVaultPda(pool, programId).address,
       operatorTokens: input.operatorTokens,
       tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
+    },
+    args: {},
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* submit_day_reputation                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Sensor slots of a cell — `MAX_SENSORS_PER_CELL`, one per bit of the mask. */
+export const SENSOR_SLOTS = 32
+
+export interface DayReputation {
+  cellId: bigint
+  dayIndex: number
+  /** Intervals each slot was judged in, indexed by slot; `SENSOR_SLOTS` long. */
+  judged: readonly number[]
+  /** Of those, the ones the slot was an outlier in. */
+  outliers: readonly number[]
+}
+
+export interface SubmitDayReputationInput {
+  /** Must be `pool.aggregator`, as for the day it accompanies. */
+  aggregator: PublicKey
+  reputation: DayReputation
+  programId?: PublicKey
+}
+
+/**
+ * Writes a day of the cell's verdicts — `FR-011`. Goes in the same
+ * transaction as `submitDayRecordInstruction`, after it: the program accepts
+ * it only for the day the cell recorded last.
+ */
+export function submitDayReputationInstruction(
+  input: SubmitDayReputationInput,
+): TransactionInstruction {
+  const { reputation } = input
+  for (const [name, counts] of [
+    ['judged', reputation.judged],
+    ['outliers', reputation.outliers],
+  ] as const) {
+    if (counts.length !== SENSOR_SLOTS) {
+      throw new RangeError(`${name} must have ${SENSOR_SLOTS} slots, got ${counts.length}`)
+    }
+    for (const count of counts) {
+      if (!Number.isInteger(count) || count < 0 || count > 65_535) {
+        throw new RangeError(`${name} holds ${count}, which is not a u16`)
+      }
+    }
+  }
+  return buildInstruction('submitDayReputation', {
+    programId: input.programId ?? PROGRAM_ID,
+    accounts: { aggregator: input.aggregator },
+    args: {
+      params: {
+        cellId: new BN(reputation.cellId.toString()),
+        dayIndex: reputation.dayIndex,
+        judged: [...reputation.judged],
+        outliers: [...reputation.outliers],
+      },
+    },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* exclude_sensor                                                             */
+/* -------------------------------------------------------------------------- */
+
+export interface ExcludeSensorInput {
+  /** Anyone; signs and pays the fee, gains nothing. */
+  caller: PublicKey
+  sensorKey: PublicKey
+  /** The sensor's cell — the reputation account is seeded by it. */
+  cellId: bigint
+  /** Must equal `pool.asset_mint`. */
+  assetMint: PublicKey
+  stakeVault?: PublicKey
+  /** Defaults to the pool's capital vault, where the burnt stake goes. */
+  vault?: PublicKey
+  tokenProgram?: PublicKey
+  programId?: PublicKey
+}
+
+/**
+ * Excludes a sensor whose record over the window breaches the outlier share
+ * and burns its stake into capital — `FR-012`, `FR-052`. Permissionless.
+ */
+export function excludeSensorInstruction(input: ExcludeSensorInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  const pool = poolPda(programId).address
+  return buildInstruction('excludeSensor', {
+    programId,
+    accounts: {
+      caller: input.caller,
+      // Both seeded by fields of the sensor account, which the IDL cannot follow.
+      sensor: sensorPda(input.sensorKey, programId).address,
+      reputation: reputationPda(input.cellId, programId).address,
+      assetMint: input.assetMint,
+      stakeVault: input.stakeVault ?? stakeVaultPda(pool, programId).address,
+      vault: input.vault ?? vaultPda(pool, programId).address,
+      tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
+    },
+    args: {},
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* reinstate_sensor                                                           */
+/* -------------------------------------------------------------------------- */
+
+export interface ReinstateSensorInput {
+  /** Must be the sensor's operator; the program checks it. */
+  operator: PublicKey
+  sensorKey: PublicKey
+  cellId: bigint
+  programId?: PublicKey
+}
+
+/**
+ * Brings an excluded sensor back with a clean slate and no stake — `FR-012`.
+ * It votes again only once staked to the minimum anew.
+ */
+export function reinstateSensorInstruction(input: ReinstateSensorInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  return buildInstruction('reinstateSensor', {
+    programId,
+    accounts: {
+      operator: input.operator,
+      sensor: sensorPda(input.sensorKey, programId).address,
+      reputation: reputationPda(input.cellId, programId).address,
     },
     args: {},
   })

@@ -16,6 +16,7 @@ import {
   POOL_SEED,
   policyPda,
   poolPda,
+  REPUTATION_SEED,
   SENSOR_SEED,
   STAKE_VAULT_SEED,
   sensorPda,
@@ -130,6 +131,7 @@ describe('agreement with the IDL', () => {
     SENSOR_SEED,
     POLICY_SEED,
     CAPITAL_SEED,
+    REPUTATION_SEED,
   ]
 
   it('declares every literal seed the program uses', () => {

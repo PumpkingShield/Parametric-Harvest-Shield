@@ -316,6 +316,120 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "excludeSensor",
+      "docs": [
+        "Excludes a sensor whose outlier share over the window breaches the",
+        "published threshold and burns its stake into capital — `FR-012`,",
+        "`FR-052`. Permissionless: the record and the rule are both on chain."
+      ],
+      "discriminator": [
+        241,
+        91,
+        40,
+        72,
+        56,
+        187,
+        76,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Anyone. No key decides an exclusion, as none decides a payout: the",
+            "record is on chain and the rule is the program's."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sensor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.sensor_key",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reputation",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  112,
+                  117,
+                  116,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.cell_id",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "assetMint"
+        },
+        {
+          "name": "stakeVault",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "docs": [
+            "`FR-052`: the burnt stake becomes capital."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "initializePool",
       "docs": [
         "Creates the pool, its capital vault and its stake vault, and fixes the",
@@ -686,6 +800,85 @@ export const PUMPKING_IDL: Pumpking = {
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "reinstateSensor",
+      "docs": [
+        "Brings an excluded sensor back with a clean slate and no stake; it",
+        "votes again once staked to the minimum anew — `FR-012`."
+      ],
+      "discriminator": [
+        167,
+        148,
+        110,
+        9,
+        235,
+        92,
+        86,
+        39
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true,
+          "relations": [
+            "sensor"
+          ]
+        },
+        {
+          "name": "sensor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.sensor_key",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reputation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  112,
+                  117,
+                  116,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.cell_id",
+                "account": "sensor"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
     },
     {
       "name": "requestUnstake",
@@ -1067,6 +1260,110 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "submitDayReputation",
+      "docs": [
+        "Writes a day of the cell's outlier verdicts, per sensor slot —",
+        "`FR-011`. Sent with `submit_day_record`, for the day it just wrote."
+      ],
+      "discriminator": [
+        206,
+        175,
+        75,
+        190,
+        39,
+        76,
+        51,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "aggregator",
+          "docs": [
+            "The same single role that writes the day log — `FR-015`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.cell_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reputation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  112,
+                  117,
+                  116,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.cell_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "dayReputationParams"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "withdrawStake",
       "docs": [
         "Returns thawed stake to its operator once the delay, longer than the",
@@ -1169,6 +1466,19 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "cellReputation",
+      "discriminator": [
+        240,
+        161,
+        55,
+        122,
+        210,
+        71,
+        127,
+        223
+      ]
+    },
+    {
       "name": "cellState",
       "discriminator": [
         183,
@@ -1236,6 +1546,19 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "dayReputationRecorded",
+      "discriminator": [
+        136,
+        216,
+        99,
+        164,
+        86,
+        10,
+        186,
+        190
+      ]
+    },
+    {
       "name": "payoutClaimed",
       "discriminator": [
         200,
@@ -1288,6 +1611,19 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "sensorExcludedForOutliers",
+      "discriminator": [
+        163,
+        30,
+        49,
+        103,
+        100,
+        45,
+        180,
+        156
+      ]
+    },
+    {
       "name": "sensorRegistered",
       "discriminator": [
         203,
@@ -1298,6 +1634,19 @@ export const PUMPKING_IDL: Pumpking = {
         25,
         44,
         6
+      ]
+    },
+    {
+      "name": "sensorReinstated",
+      "discriminator": [
+        0,
+        136,
+        66,
+        135,
+        88,
+        167,
+        203,
+        142
       ]
     },
     {
@@ -1610,6 +1959,36 @@ export const PUMPKING_IDL: Pumpking = {
       "code": 6053,
       "name": "sensorExcluded",
       "msg": "An excluded sensor's stake does not leave the stake vault"
+    },
+    {
+      "code": 6054,
+      "name": "reputationDayMismatch",
+      "msg": "Reputation can only be written for the day the cell recorded last"
+    },
+    {
+      "code": 6055,
+      "name": "reputationDayNotNewer",
+      "msg": "The reputation record only grows forwards"
+    },
+    {
+      "code": 6056,
+      "name": "outliersExceedJudged",
+      "msg": "A sensor cannot be an outlier in more intervals than it was judged in"
+    },
+    {
+      "code": 6057,
+      "name": "reputationOutOfRange",
+      "msg": "The reputation addresses a sensor slot the cell has not"
+    },
+    {
+      "code": 6058,
+      "name": "outlierShareNotBreached",
+      "msg": "The sensor's outlier share over the window does not exclude it"
+    },
+    {
+      "code": 6059,
+      "name": "sensorNotExcluded",
+      "msg": "The sensor is not excluded"
     }
   ],
   "types": [
@@ -1632,6 +2011,80 @@ export const PUMPKING_IDL: Pumpking = {
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cellReputation",
+      "docs": [
+        "PDA `[\"reputation\", cell_id]` — the record `exclude_sensor` judges by.",
+        "",
+        "Its own account rather than more of `CellState`: the cell's layout is what",
+        "the deployed demo pool already holds, and a ring of the window is all the",
+        "program ever needs to read. A day older than `OUTLIER_WINDOW_DAYS` counts",
+        "for no exclusion, so it is overwritten rather than kept.",
+        "",
+        "**Zero-copy**, unlike every other account here. At close to two kilobytes",
+        "the ring does not fit beside anything else in the 4 KiB frame",
+        "`try_accounts` is given — boxing does not help, because the struct is",
+        "built on the stack before it is boxed — so it is read in place. The fields",
+        "are laid out with no padding, which makes the bytes the same as Borsh would",
+        "write and keeps the client's decoder honest."
+      ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "lastDayIndex",
+            "docs": [
+              "The last day written, meaningful only once `has_days` is set."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "hasDays",
+            "docs": [
+              "`1` once a day has been written. Not an `Option`: zero-copy has none."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "padding",
+            "type": {
+              "array": [
+                "u8",
+                2
+              ]
+            }
+          },
+          {
+            "name": "days",
+            "docs": [
+              "Indexed by `day_index % REPUTATION_DAYS`."
+            ],
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "reputationDay"
+                  }
+                },
+                14
+              ]
+            }
           }
         ]
       }
@@ -1880,6 +2333,95 @@ export const PUMPKING_IDL: Pumpking = {
           {
             "name": "totalIntervals",
             "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dayReputationParams",
+      "docs": [
+        "One day of a cell's verdicts, written by the aggregator — `FR-011`.",
+        "",
+        "It travels in the same transaction as `submit_day_record`, after it, and is",
+        "accepted only for the day the cell recorded last: the two halves of a day",
+        "land together or not at all, and reputation can never be written for a day",
+        "the log does not have. Like the day log it only grows forwards, so what a",
+        "sensor's record says on a given day is fixed that day — an exclusion later",
+        "is judged on numbers that were public before anybody's stake was at stake.",
+        "",
+        "What the program checks is shape, not truth: a slot the cell has, and no",
+        "more outliers than judgements. Which intervals were outliers is the",
+        "aggregator's arithmetic over readings the chain never sees, made public as",
+        "`sensor_verdicts` and reproducible from the readings by anyone."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "dayIndex",
+            "type": "u32"
+          },
+          {
+            "name": "judged",
+            "docs": [
+              "Intervals each sensor slot was judged in."
+            ],
+            "type": {
+              "array": [
+                "u16",
+                32
+              ]
+            }
+          },
+          {
+            "name": "outliers",
+            "docs": [
+              "Of those, the ones the slot was an outlier in."
+            ],
+            "type": {
+              "array": [
+                "u16",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "dayReputationRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "dayIndex",
+            "type": "u32"
+          },
+          {
+            "name": "judged",
+            "type": {
+              "array": [
+                "u16",
+                32
+              ]
+            }
+          },
+          {
+            "name": "outliers",
+            "type": {
+              "array": [
+                "u16",
+                32
+              ]
+            }
           }
         ]
       }
@@ -2444,6 +2986,49 @@ export const PUMPKING_IDL: Pumpking = {
       }
     },
     {
+      "name": "reputationDay",
+      "docs": [
+        "One day of a cell's verdicts, per sensor slot — `FR-011`."
+      ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "dayIndex",
+            "type": "u32"
+          },
+          {
+            "name": "judged",
+            "docs": [
+              "Intervals each slot was judged in that day."
+            ],
+            "type": {
+              "array": [
+                "u16",
+                32
+              ]
+            }
+          },
+          {
+            "name": "outliers",
+            "docs": [
+              "Of those, the ones it was an outlier in."
+            ],
+            "type": {
+              "array": [
+                "u16",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "sensor",
       "docs": [
         "PDA `[\"sensor\", sensor_key]`, where the seed is the ed25519 key the sensor",
@@ -2535,6 +3120,52 @@ export const PUMPKING_IDL: Pumpking = {
       }
     },
     {
+      "name": "sensorExcludedForOutliers",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "windowFromDay",
+            "docs": [
+              "The window the record was summed over, both ends inclusive."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "windowToDay",
+            "type": "u32"
+          },
+          {
+            "name": "judged",
+            "type": "u32"
+          },
+          {
+            "name": "outliers",
+            "type": "u32"
+          },
+          {
+            "name": "burnt",
+            "docs": [
+              "Voting and thawing stake together, now capital."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "sensorRegistered",
       "type": {
         "kind": "struct",
@@ -2554,6 +3185,22 @@ export const PUMPKING_IDL: Pumpking = {
           {
             "name": "slotInCell",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sensorReinstated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
           }
         ]
       }

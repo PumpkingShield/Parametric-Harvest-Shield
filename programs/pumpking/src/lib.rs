@@ -92,4 +92,26 @@ pub mod pumpking {
     pub fn withdraw_stake(ctx: Context<WithdrawStake>) -> Result<()> {
         instructions::sensor::withdraw_stake(ctx)
     }
+
+    /// Writes a day of the cell's outlier verdicts, per sensor slot —
+    /// `FR-011`. Sent with `submit_day_record`, for the day it just wrote.
+    pub fn submit_day_reputation(
+        ctx: Context<SubmitDayReputation>,
+        params: DayReputationParams,
+    ) -> Result<()> {
+        instructions::reputation::submit_day_reputation(ctx, params)
+    }
+
+    /// Excludes a sensor whose outlier share over the window breaches the
+    /// published threshold and burns its stake into capital — `FR-012`,
+    /// `FR-052`. Permissionless: the record and the rule are both on chain.
+    pub fn exclude_sensor(ctx: Context<ExcludeSensor>) -> Result<()> {
+        instructions::sensor::exclude_sensor(ctx)
+    }
+
+    /// Brings an excluded sensor back with a clean slate and no stake; it
+    /// votes again once staked to the minimum anew — `FR-012`.
+    pub fn reinstate_sensor(ctx: Context<ReinstateSensor>) -> Result<()> {
+        instructions::sensor::reinstate_sensor(ctx)
+    }
 }

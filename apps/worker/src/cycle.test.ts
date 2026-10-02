@@ -225,7 +225,7 @@ describe('the order of a cycle', () => {
       'settlePolicy',
       'closePolicy',
     ])
-    expect(summarise(report)).toEqual({ submitted: 2, settled: 1, closed: 1, failed: 0 })
+    expect(summarise(report)).toEqual({ submitted: 2, settled: 1, closed: 1, excluded: 0, failed: 0 })
   })
 
   it('settles against the mint the pool publishes, not one it was told', async () => {
@@ -383,11 +383,21 @@ describe('summarise', () => {
         { policy: 'a', status: 'failed' as const, spell: 3, error: new Error('blockhash') },
       ],
       closed: [{ policy: 'b', status: 'running' as const, spell: 1 }],
+      excluded: [
+        { sensor: 's', status: 'failed' as const, judged: 72, outliers: 30, error: new Error('x') },
+        { sensor: 't', status: 'excluded' as const, judged: 72, outliers: 30, txSignature: 'tx' },
+      ],
       swept: null,
       registry: null,
     }
 
-    expect(summarise(failed)).toEqual({ submitted: 1, settled: 0, closed: 0, failed: 2 })
+    expect(summarise(failed)).toEqual({
+      submitted: 1,
+      settled: 0,
+      closed: 0,
+      excluded: 1,
+      failed: 3,
+    })
   })
 })
 

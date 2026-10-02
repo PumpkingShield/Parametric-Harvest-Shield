@@ -1,7 +1,10 @@
 import {
   type DayRecord,
+  type DayReputation,
   type PublicKey,
+  SENSOR_SLOTS,
   submitDayRecordInstruction,
+  submitDayReputationInstruction,
   type TransactionInstruction,
 } from '@pumpking/anchor-client'
 import type { AcceptedReading, DayRow, IntervalRow, IntervalStore, VerdictRow } from '@pumpking/db'
@@ -400,6 +403,36 @@ export function closeDay(
   }
 }
 
+/**
+ * A day's verdicts as the chain keeps them: per sensor slot, how many
+ * intervals it was judged in and how many it was an outlier in — `FR-011`.
+ *
+ * Null when nobody was judged: a day without a single interval with a value
+ * adds nothing to anybody's record, and the transaction is smaller without it.
+ */
+export function dayReputation(
+  intervals: readonly ClosedInterval[],
+  slotOf: ReadonlyMap<string, number>,
+): DayReputation | null {
+  const first = intervals[0]
+  if (first === undefined) return null
+  const judged = new Array<number>(SENSOR_SLOTS).fill(0)
+  const outliers = new Array<number>(SENSOR_SLOTS).fill(0)
+  let any = false
+  for (const interval of intervals) {
+    for (const verdict of interval.verdicts) {
+      const slot = slotOf.get(verdict.sensor)
+      if (slot === undefined) {
+        throw new RangeError(`sensor ${verdict.sensor} was judged without a slot`)
+      }
+      judged[slot] = (judged[slot] ?? 0) + 1
+      if (verdict.outlier) outliers[slot] = (outliers[slot] ?? 0) + 1
+      any = true
+    }
+  }
+  return any ? { cellId: first.cellId, dayIndex: first.dayIndex, judged, outliers } : null
+}
+
 /** The `cell_days` row of a record, keeping a signature it already carries. */
 export function dayRow(record: DayRecord, txSignature: string | null): DayRow {
   return {
@@ -425,8 +458,14 @@ export function dayRow(record: DayRecord, txSignature: string | null): DayRow {
  * `rpcDaySubmitter` in `chain.ts`.
  */
 export interface DaySubmitter {
-  /** Sends and confirms, returning the transaction signature. */
-  submit(instruction: TransactionInstruction): Promise<string>
+  /**
+   * Sends and confirms one transaction, returning its signature. More than one
+   * instruction only where they must land together — a day and its verdicts.
+   */
+  submit(
+    instruction: TransactionInstruction,
+    ...rest: readonly TransactionInstruction[]
+  ): Promise<string>
 }
 
 export type AggregatorDeps = {
@@ -518,12 +557,20 @@ export async function closeCellDay(
   const record = closeDay(intervals, deps.params)
   await deps.store.saveDay(dayRow(record, null))
 
-  const instruction = submitDayRecordInstruction({
-    aggregator: deps.aggregator,
-    record,
-    ...(deps.programId === undefined ? {} : { programId: deps.programId }),
-  })
-  const txSignature = await deps.submitter.submit(instruction)
+  const programId = deps.programId === undefined ? {} : { programId: deps.programId }
+  const instruction = submitDayRecordInstruction({ aggregator: deps.aggregator, record, ...programId })
+  // The day's verdicts ride in the same transaction, after the day: the
+  // program takes them only for the day the cell recorded last, so the two
+  // land together or not at all (`T035`).
+  const slotOf = new Map(readings.map((reading) => [reading.sensorPubkey, reading.slotInCell]))
+  const reputation = dayReputation(intervals, slotOf)
+  const txSignature =
+    reputation === null
+      ? await deps.submitter.submit(instruction)
+      : await deps.submitter.submit(
+          instruction,
+          submitDayReputationInstruction({ aggregator: deps.aggregator, reputation, ...programId }),
+        )
   await deps.store.markDaySubmitted(cellId, dayIndex, txSignature)
 
   return { cellId, dayIndex, status: 'submitted', txSignature }

@@ -43,6 +43,7 @@ function report(overrides: Partial<CycleReport> = {}): CycleReport {
     days: [],
     settled: [],
     closed: [],
+    excluded: [],
     swept: null,
     registry: null,
     ...overrides,
@@ -180,7 +181,7 @@ describe('startWorker', () => {
     })
 
     await vi.advanceTimersByTimeAsync(0)
-    expect(worker.state.lastCycle).toEqual({ submitted: 1, settled: 0, closed: 0, failed: 0 })
+    expect(worker.state.lastCycle).toEqual({ submitted: 1, settled: 0, closed: 0, excluded: 0, failed: 0 })
     expect(worker.state.lastSkipped).toBeNull()
 
     await worker.stop()

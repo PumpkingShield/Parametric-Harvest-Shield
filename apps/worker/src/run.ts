@@ -1,7 +1,13 @@
 import { Connection } from '@pumpking/anchor-client'
-import type { IntervalStore, RegistryMirrorStore, RetentionStore } from '@pumpking/db'
+import type {
+  CellSlotStore,
+  IntervalStore,
+  RegistryMirrorStore,
+  RetentionStore,
+} from '@pumpking/db'
 import type { Logger } from 'pino'
 import { rpcDaySubmitter, rpcPoolSource } from './chain.ts'
+import { rpcExclusionSource } from './exclude.ts'
 import type { WorkerConfig } from './config.ts'
 import { type CycleDeps, type CycleReport, runCycle, summarise } from './cycle.ts'
 import { stalledAfterMs, type WorkerHealthState } from './health.ts'
@@ -68,6 +74,7 @@ export function rpcCycle(
   store: IntervalStore,
   retention: RetentionStore,
   registry: RegistryMirrorStore,
+  slots: CellSlotStore,
 ): CycleRunner {
   const connection = new Connection(config.rpcUrl, 'confirmed')
 
@@ -87,6 +94,7 @@ export function rpcCycle(
       registry,
       config.registrySyncMs,
     ),
+    exclusion: { slots, chain: rpcExclusionSource(connection, config.programId) },
   }
 
   return (now) => runCycle(deps, now)
@@ -158,7 +166,7 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
         const summary = summarise(report)
         const line = { ...summary, aggregatorMatches: report.aggregatorMatches }
         if (summary.failed > 0) log.warn(line, 'cycle finished with failures')
-        else if (summary.submitted + summary.settled + summary.closed > 0) log.info(line, 'cycle')
+        else if (summary.submitted + summary.settled + summary.closed + summary.excluded > 0) log.info(line, 'cycle')
         else log.debug(line, 'cycle')
 
         if (report.swept?.status === 'failed') {

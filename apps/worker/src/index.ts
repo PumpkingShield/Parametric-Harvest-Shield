@@ -1,4 +1,10 @@
-import { createDb, pgIntervalStore, pgRegistryMirrorStore, pgRetentionStore } from '@pumpking/db'
+import {
+  createDb,
+  pgCellSlotStore,
+  pgIntervalStore,
+  pgRegistryMirrorStore,
+  pgRetentionStore,
+} from '@pumpking/db'
 import { pino } from 'pino'
 import { ConfigError, readWorkerConfig } from './config.ts'
 import { createHealthServer } from './health.ts'
@@ -43,6 +49,7 @@ const worker = startWorker({
     pgIntervalStore(database.db),
     pgRetentionStore(database.db),
     pgRegistryMirrorStore(database.db),
+    pgCellSlotStore(database.db),
   ),
 })
 

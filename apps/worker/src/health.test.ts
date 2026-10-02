@@ -35,7 +35,7 @@ describe('healthOf', () => {
       state({
         lastCycleAt: at(20),
         cycles: 4,
-        lastCycle: { submitted: 1, settled: 0, closed: 0, failed: 0 },
+        lastCycle: { submitted: 1, settled: 0, closed: 0, excluded: 0, failed: 0 },
       }),
       at(25),
       MINUTE,

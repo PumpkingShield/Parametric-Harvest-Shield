@@ -25,15 +25,24 @@
 //! vault, still answerable for what the sensor's readings did; `withdraw_stake`
 //! pays it out once `unstake_delay_days` have passed — a delay the pool cannot
 //! set shorter than the window outliers are counted over.
+//!
+//! **Exclusion is anyone's to call and the program's to decide** (`FR-012`,
+//! `FR-052`). `exclude_sensor` takes no word from anybody: it sums the
+//! sensor's slot over the window in the cell's `CellReputation` — written a
+//! day at a time, forwards only, beside the day log — applies the published
+//! rule, and burns the whole stake, thawing part included, into capital.
+//! Coming back is the operator's own act (`reinstate_sensor`) and costs a new
+//! stake: the slate is clean, the old stake is gone.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::errors::PumpkingError;
 use crate::h3;
+use crate::outlier::breaches_outlier_share;
 use crate::state::{
-    CellState, Pool, Sensor, CELL_SEED, GRID_RESOLUTION, MAX_SENSORS_PER_CELL, POOL_SEED,
-    SENSOR_SEED,
+    outlier_window, CellReputation, CellState, Pool, Sensor, CELL_SEED, GRID_RESOLUTION,
+    MAX_SENSORS_PER_CELL, POOL_SEED, REPUTATION_SEED, SENSOR_SEED,
 };
 
 #[event]
@@ -51,6 +60,26 @@ pub struct StakeWithdrawn {
     pub sensor_key: Pubkey,
     pub operator: Pubkey,
     pub amount: u64,
+}
+
+#[event]
+pub struct SensorExcludedForOutliers {
+    pub sensor_key: Pubkey,
+    pub operator: Pubkey,
+    pub cell_id: u64,
+    /// The window the record was summed over, both ends inclusive.
+    pub window_from_day: u32,
+    pub window_to_day: u32,
+    pub judged: u32,
+    pub outliers: u32,
+    /// Voting and thawing stake together, now capital.
+    pub burnt: u64,
+}
+
+#[event]
+pub struct SensorReinstated {
+    pub sensor_key: Pubkey,
+    pub operator: Pubkey,
 }
 
 #[event]
@@ -395,6 +424,176 @@ pub fn withdraw_stake(ctx: Context<WithdrawStake>) -> Result<()> {
     Ok(())
 }
 
+/// The record an exclusion on `today` stands on, or why there is none —
+/// `FR-012`. Returns the window and the slot's judged and outlier counts.
+pub fn exclusion_record(
+    sensor: &Sensor,
+    reputation: &CellReputation,
+    today: u32,
+) -> Result<(u32, u32, u32, u32)> {
+    require!(sensor.active, PumpkingError::SensorExcluded);
+    let (from, to) = outlier_window(today).ok_or(PumpkingError::OutlierShareNotBreached)?;
+    let (judged, outliers) = reputation.window(sensor.slot_in_cell, from, to);
+    require!(
+        breaches_outlier_share(judged, outliers),
+        PumpkingError::OutlierShareNotBreached
+    );
+    Ok((from, to, judged, outliers))
+}
+
+#[derive(Accounts)]
+pub struct ExcludeSensor<'info> {
+    /// Anyone. No key decides an exclusion, as none decides a payout: the
+    /// record is on chain and the rule is the program's.
+    pub caller: Signer<'info>,
+
+    #[account(mut, seeds = [POOL_SEED], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [SENSOR_SEED, sensor.sensor_key.as_ref()],
+        bump = sensor.bump,
+    )]
+    pub sensor: Account<'info, Sensor>,
+
+    // Zero-copy: the ring is read in place, never copied onto the stack.
+    #[account(
+        seeds = [REPUTATION_SEED, sensor.cell_id.to_le_bytes().as_ref()],
+        bump = reputation.load()?.bump,
+    )]
+    pub reputation: AccountLoader<'info, CellReputation>,
+
+    #[account(address = pool.asset_mint)]
+    pub asset_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, address = pool.stake_vault)]
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-052`: the burnt stake becomes capital.
+    #[account(mut, address = pool.vault)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+/// Excludes a sensor whose record over the window breaches the outlier share,
+/// and burns its stake into capital — `FR-012`, `FR-052`.
+pub fn exclude_sensor(ctx: Context<ExcludeSensor>) -> Result<()> {
+    let today = ctx
+        .accounts
+        .pool
+        .day_index(Clock::get()?.unix_timestamp)
+        .ok_or(PumpkingError::DayIndexUnavailable)?;
+    let (from, to, judged, outliers) = exclusion_record(
+        &ctx.accounts.sensor,
+        &*ctx.accounts.reputation.load()?,
+        today,
+    )?;
+
+    let burnt = ctx
+        .accounts
+        .sensor
+        .stake
+        .checked_add(ctx.accounts.sensor.unstaking)
+        .ok_or(PumpkingError::MathOverflow)?;
+
+    if burnt > 0 {
+        let pool_bump = ctx.accounts.pool.bump;
+        let seeds: &[&[u8]] = &[POOL_SEED, &[pool_bump]];
+        // Money first, accounting second.
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.stake_vault.to_account_info(),
+                    mint: ctx.accounts.asset_mint.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                    authority: ctx.accounts.pool.to_account_info(),
+                },
+                &[seeds],
+            ),
+            burnt,
+            ctx.accounts.asset_mint.decimals,
+        )?;
+    }
+
+    // Capital grows and the shares do not: the burn is the depositors' to
+    // keep, which is what makes collusion cost the colluders.
+    let pool = &mut ctx.accounts.pool;
+    pool.capital_total = pool
+        .capital_total
+        .checked_add(burnt)
+        .ok_or(PumpkingError::MathOverflow)?;
+
+    let sensor = &mut ctx.accounts.sensor;
+    sensor.stake = 0;
+    sensor.unstaking = 0;
+    sensor.unlock_at_day = None;
+    sensor.active = false;
+    // The record it was excluded on, readable from the account itself.
+    sensor.accepted = judged - outliers;
+    sensor.outliers = outliers;
+
+    emit!(SensorExcludedForOutliers {
+        sensor_key: sensor.sensor_key,
+        operator: sensor.operator,
+        cell_id: sensor.cell_id,
+        window_from_day: from,
+        window_to_day: to,
+        judged,
+        outliers,
+        burnt,
+    });
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct ReinstateSensor<'info> {
+    pub operator: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SENSOR_SEED, sensor.sensor_key.as_ref()],
+        bump = sensor.bump,
+        has_one = operator @ PumpkingError::NotTheOperator,
+    )]
+    pub sensor: Account<'info, Sensor>,
+
+    #[account(
+        mut,
+        seeds = [REPUTATION_SEED, sensor.cell_id.to_le_bytes().as_ref()],
+        bump = reputation.load()?.bump,
+    )]
+    pub reputation: AccountLoader<'info, CellReputation>,
+}
+
+/// Brings an excluded sensor back with a clean slate — `FR-012`.
+///
+/// The operator's own act and nobody else's, as registration is (`FR-007`).
+/// What it restores is the right to vote, not a vote: the stake burnt with
+/// the exclusion is gone, and the sensor counts again only once it is staked
+/// to the minimum anew. Its slot's history is cleared — otherwise the very
+/// record that excluded it would let anyone exclude it again the moment it
+/// came back, for nothing it did since.
+pub fn reinstate_sensor(ctx: Context<ReinstateSensor>) -> Result<()> {
+    let sensor = &mut ctx.accounts.sensor;
+    require!(!sensor.active, PumpkingError::SensorNotExcluded);
+    sensor.active = true;
+    sensor.accepted = 0;
+    sensor.outliers = 0;
+    ctx.accounts
+        .reputation
+        .load_mut()?
+        .clear_slot(sensor.slot_in_cell);
+
+    emit!(SensorReinstated {
+        sensor_key: sensor.sensor_key,
+        operator: sensor.operator,
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,6 +751,83 @@ mod tests {
             code(PumpkingError::MathOverflow)
         );
         assert_eq!(sensor.stake, 1_000);
+    }
+
+    fn record(
+        slot: usize,
+        days: std::ops::Range<u32>,
+        judged: u16,
+        outliers: u16,
+    ) -> CellReputation {
+        let mut rep = CellReputation::empty(DEMO_CELL, 255);
+        for day in days {
+            let mut j = [0u16; MAX_SENSORS_PER_CELL as usize];
+            let mut o = [0u16; MAX_SENSORS_PER_CELL as usize];
+            j[slot] = judged;
+            o[slot] = outliers;
+            rep.record_day(day, j, o).unwrap();
+        }
+        rep
+    }
+
+    #[test]
+    fn a_breaching_record_over_the_window_excludes() {
+        // Days 6..=19, 24 judged a day, 5 outliers a day: 70 of 336 > 20 %.
+        let rep = record(0, 6..20, 24, 5);
+        assert_eq!(
+            exclusion_record(&staked(1_000), &rep, 20).unwrap(),
+            (6, 19, 336, 70)
+        );
+    }
+
+    #[test]
+    fn a_record_at_the_threshold_does_not() {
+        // 4 of 24 a day is 16.7 %: a sensor that is often off, not one that lies.
+        let rep = record(0, 6..20, 24, 4);
+        assert_eq!(
+            code_of(exclusion_record(&staked(1_000), &rep, 20).unwrap_err()),
+            code(PumpkingError::OutlierShareNotBreached)
+        );
+    }
+
+    #[test]
+    fn days_that_left_the_window_count_for_nothing() {
+        // A sensor that lied a fortnight ago and has been clean since.
+        let mut rep = record(0, 0..10, 24, 24);
+        for day in 10..30 {
+            let mut j = [0u16; MAX_SENSORS_PER_CELL as usize];
+            j[0] = 24;
+            rep.record_day(day, j, [0; MAX_SENSORS_PER_CELL as usize])
+                .unwrap();
+        }
+        assert_eq!(
+            code_of(exclusion_record(&staked(1_000), &rep, 30).unwrap_err()),
+            code(PumpkingError::OutlierShareNotBreached)
+        );
+    }
+
+    #[test]
+    fn another_slot_s_record_is_not_this_sensor_s() {
+        let rep = record(5, 6..20, 24, 24);
+        assert_eq!(
+            code_of(exclusion_record(&staked(1_000), &rep, 20).unwrap_err()),
+            code(PumpkingError::OutlierShareNotBreached)
+        );
+    }
+
+    #[test]
+    fn an_excluded_sensor_is_not_excluded_twice_and_day_zero_has_no_window() {
+        let rep = record(0, 6..20, 24, 24);
+        let mut sensor = staked(1_000);
+        sensor.active = false;
+        assert_eq!(
+            code_of(exclusion_record(&sensor, &rep, 20).unwrap_err()),
+            code(PumpkingError::SensorExcluded)
+        );
+        assert_eq!(
+            code_of(exclusion_record(&staked(1_000), &rep, 0).unwrap_err()),
+            code(PumpkingError::OutlierShareNotBreached)
+        );
     }
 
     #[test]

@@ -34,6 +34,8 @@ export const SENSOR_SEED = utf8.encode('sensor')
 export const POLICY_SEED = utf8.encode('policy')
 /** `["lp", owner]` — a capital position. */
 export const CAPITAL_SEED = utf8.encode('lp')
+/** A cell's outlier record — `FR-011`, `FR-012`. */
+export const REPUTATION_SEED = utf8.encode('reputation')
 
 /** A derived address and the bump that produced it. */
 export interface Pda {
@@ -74,6 +76,10 @@ export function stakeVaultPda(pool: PublicKey, programId: PublicKey = PROGRAM_ID
 
 export function cellPda(cellId: bigint, programId: PublicKey = PROGRAM_ID): Pda {
   return derive([CELL_SEED, u64Seed(cellId)], programId)
+}
+
+export function reputationPda(cellId: bigint, programId: PublicKey = PROGRAM_ID): Pda {
+  return derive([REPUTATION_SEED, u64Seed(cellId)], programId)
 }
 
 export function sensorPda(sensorKey: PublicKey, programId: PublicKey = PROGRAM_ID): Pda {

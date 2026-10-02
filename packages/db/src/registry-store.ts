@@ -1,5 +1,5 @@
 import { cellResolution, ReadingKind } from '@pumpking/shared'
-import { eq, inArray, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cells, operators, sensors } from './schema.ts'
 
@@ -97,6 +97,31 @@ async function selectRows(
     .innerJoin(operators, eq(operators.id, sensors.operatorId))
   const rows = await (where === undefined ? query : query.where(where))
   return rows.map(({ mirroredAt, ...row }) => ({ ...row, mirrored: mirroredAt !== null }))
+}
+
+/** A mirrored sensor of a cell, by the slot the chain gave it. */
+export type CellSlot = { pubkey: string; slotInCell: number }
+
+/**
+ * The slots of a cell, as the mirror last read them — what turns a slot of
+ * the cell's reputation ring back into the sensor it belongs to (`T035`).
+ */
+export interface CellSlotStore {
+  slotsOf(cellId: bigint): Promise<CellSlot[]>
+}
+
+export function pgCellSlotStore(db: PostgresJsDatabase<Record<string, never>>): CellSlotStore {
+  return {
+    async slotsOf(cellId) {
+      // Mirrored rows only: the slot is the chain's, and a row the chain has
+      // never confirmed holds an old fixture's claim on a bit, not a bit.
+      return await db
+        .select({ pubkey: sensors.pubkey, slotInCell: sensors.slotInCell })
+        .from(sensors)
+        .where(and(eq(sensors.cellId, cellId), isNotNull(sensors.mirroredAt)))
+        .orderBy(asc(sensors.slotInCell))
+    },
+  }
 }
 
 /** The `RegistryStore` backed by the real tables. */

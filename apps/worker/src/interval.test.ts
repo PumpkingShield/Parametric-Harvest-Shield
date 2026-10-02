@@ -1,4 +1,4 @@
-import { PublicKey, type TransactionInstruction } from '@pumpking/anchor-client'
+import { decodeInstruction, PublicKey, type TransactionInstruction } from '@pumpking/anchor-client'
 import type {
   AcceptedReading,
   DayRow,
@@ -25,6 +25,7 @@ import {
   closeDueDays,
   closeInterval,
   type DaySubmitter,
+  dayReputation,
   dayIndexAt,
   dayStart,
   intervalStart,
@@ -168,11 +169,14 @@ class FakeStore implements IntervalStore {
 
 class FakeSubmitter implements DaySubmitter {
   sent: TransactionInstruction[] = []
+  /** Every transaction, as the instructions it carried. */
+  transactions: TransactionInstruction[][] = []
   failWith: Error | null = null
 
-  submit(instruction: TransactionInstruction): Promise<string> {
+  submit(instruction: TransactionInstruction, ...rest: TransactionInstruction[]): Promise<string> {
     if (this.failWith !== null) return Promise.reject(this.failWith)
     this.sent.push(instruction)
+    this.transactions.push([instruction, ...rest])
     return Promise.resolve(`signature-${this.sent.length}`)
   }
 }
@@ -462,6 +466,31 @@ describe('closeCellDay', () => {
       .toEqual([[sensorKey(3), intervalStart(CLOCK, 0, 0)]])
   })
 
+  it('sends the day and its verdicts in one transaction, the day first — T035', async () => {
+    store.readings = [
+      ...quorum([300, 300, 0], new Date(GENESIS.getTime() + 60_000)),
+      ...quorum([300, 300, 290], new Date(GENESIS.getTime() + 3_600_000 + 60_000)),
+    ]
+    await closeCellDay(deps, CELL_ID, 0)
+
+    expect(submitter.transactions).toHaveLength(1)
+    const [day, reputation] = submitter.transactions[0] ?? []
+    expect(day).toBeDefined()
+    expect(reputation).toBeDefined()
+    expect(decodeInstruction(day?.data ?? new Uint8Array())?.name).toBe('submitDayRecord')
+    const decoded = decodeInstruction(reputation?.data ?? new Uint8Array())
+    expect(decoded?.name).toBe('submitDayReputation')
+    const data = decoded?.data as { params: { judged: number[]; outliers: number[] } } | undefined
+    const params = data?.params ?? { judged: [], outliers: [] }
+    expect(params.judged.slice(0, 4)).toEqual([2, 2, 2, 0])
+    expect(params.outliers.slice(0, 4)).toEqual([0, 0, 1, 0])
+  })
+
+  it('sends the day alone when nobody was judged', async () => {
+    await closeCellDay(deps, CELL_ID, 0)
+    expect(submitter.transactions.map((tx) => tx.length)).toEqual([1])
+  })
+
   it('buckets readings by the interval they were measured in', async () => {
     store.readings = [
       ...quorum([10, 10, 10], new Date(GENESIS.getTime() + 60_000)),
@@ -625,5 +654,38 @@ describe('closeDueDays', () => {
       `${OTHER_CELL}:submitted`,
       `${OTHER_CELL}:submitted`,
     ])
+  })
+})
+
+describe('dayReputation', () => {
+  const position = (intervalIndex: number) => ({
+    cellId: CELL_ID,
+    dayIndex: 3,
+    intervalIndex,
+    start: intervalStart(CLOCK, 3, intervalIndex),
+  })
+
+  it('counts each slot’s judgements and outliers over the day', () => {
+    const intervals = [
+      closeInterval(quorum([300, 300, 0], GENESIS), position(0), PARAMS),
+      closeInterval(quorum([300, 300, 0], GENESIS), position(1), PARAMS),
+      // No value: nobody judged.
+      closeInterval(quorum([300, 0], GENESIS), position(2), PARAMS),
+    ]
+    const slotOf = new Map([1, 2, 3].map((seed, slot) => [sensorKey(seed), slot]))
+    const reputation = dayReputation(intervals, slotOf)
+    expect(reputation?.dayIndex).toBe(3)
+    expect(reputation?.judged.slice(0, 4)).toEqual([2, 2, 2, 0])
+    expect(reputation?.outliers.slice(0, 4)).toEqual([0, 0, 2, 0])
+    expect(reputation?.judged).toHaveLength(32)
+  })
+
+  it('is nothing for a day nobody was judged in', () => {
+    expect(dayReputation([closeInterval([], position(0), PARAMS)], new Map())).toBeNull()
+  })
+
+  it('refuses a verdict whose sensor it cannot place', () => {
+    const intervals = [closeInterval(quorum([300, 300, 0], GENESIS), position(0), PARAMS)]
+    expect(() => dayReputation(intervals, new Map())).toThrow(RangeError)
   })
 })

@@ -7,14 +7,18 @@ import {
   closePolicyInstruction,
   DayState,
   depositCapitalInstruction,
+  excludeSensorInstruction,
   initializePoolInstruction,
   issuePolicyInstruction,
   type PoolParams,
   registerSensorInstruction,
+  reinstateSensorInstruction,
   requestUnstakeInstruction,
+  SENSOR_SLOTS,
   settlePolicyInstruction,
   stakeSensorInstruction,
   submitDayRecordInstruction,
+  submitDayReputationInstruction,
   withdrawStakeInstruction,
 } from './instructions.ts'
 import {
@@ -22,6 +26,7 @@ import {
   cellPda,
   policyPda,
   poolPda,
+  reputationPda,
   sensorPda,
   stakeVaultPda,
   vaultPda,
@@ -754,6 +759,86 @@ describe('withdrawStakeInstruction', () => {
     const { keys } = withdrawStakeInstruction(input)
     expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
       operator.toBase58(),
+    ])
+  })
+})
+
+describe('submitDayReputationInstruction', () => {
+  const cellId = 0x0871e701b3ffffffn
+  const judged = Array.from({ length: SENSOR_SLOTS }, (_, slot) => (slot < 3 ? 24 : 0))
+  const outliers = Array.from({ length: SENSOR_SLOTS }, (_, slot) => (slot === 2 ? 9 : 0))
+
+  it('round-trips both arrays and derives the cell and its reputation from the IDL', () => {
+    const instruction = submitDayReputationInstruction({
+      aggregator,
+      reputation: { cellId, dayIndex: 41, judged, outliers },
+      programId,
+    })
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('submitDayReputation')
+    const params = data.params as { dayIndex: number; judged: number[]; outliers: number[] }
+    expect(params.dayIndex).toBe(41)
+    expect(params.judged).toEqual(judged)
+    expect(params.outliers).toEqual(outliers)
+
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      aggregator.toBase58(),
+      poolPda(programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      // The IDL's own seeds agree with the hand-written `reputationPda`.
+      reputationPda(cellId, programId).address.toBase58(),
+      SYSTEM_PROGRAM_ID.toBase58(),
+    ])
+  })
+
+  it('refuses arrays the program could not take', () => {
+    const input = (j: number[], o: number[]) => ({
+      aggregator,
+      reputation: { cellId, dayIndex: 1, judged: j, outliers: o },
+    })
+    expect(() => submitDayReputationInstruction(input(judged.slice(1), outliers))).toThrow(RangeError)
+    expect(() =>
+      submitDayReputationInstruction(input(judged.map(() => 65_536), outliers)),
+    ).toThrow(RangeError)
+  })
+})
+
+describe('excludeSensorInstruction', () => {
+  const cellId = 0x0871e701b3ffffffn
+  const caller = key(14)
+  const sensorKey = key(12)
+
+  it('burns from the stake vault into the capital vault, signed by anyone', () => {
+    const instruction = excludeSensorInstruction({ caller, sensorKey, cellId, assetMint, programId })
+    expect(decode(instruction.data).name).toBe('excludeSensor')
+    const pool = poolPda(programId).address
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      caller.toBase58(),
+      pool.toBase58(),
+      sensorPda(sensorKey, programId).address.toBase58(),
+      reputationPda(cellId, programId).address.toBase58(),
+      assetMint.toBase58(),
+      stakeVaultPda(pool, programId).address.toBase58(),
+      vaultPda(pool, programId).address.toBase58(),
+      TOKEN_PROGRAM_ID.toBase58(),
+    ])
+    expect(
+      instruction.keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58()),
+    ).toEqual([caller.toBase58()])
+  })
+})
+
+describe('reinstateSensorInstruction', () => {
+  it("is the operator's alone and touches no money", () => {
+    const cellId = 0x0871e701b3ffffffn
+    const operator = key(11)
+    const sensorKey = key(12)
+    const instruction = reinstateSensorInstruction({ operator, sensorKey, cellId, programId })
+    expect(decode(instruction.data).name).toBe('reinstateSensor')
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+      sensorPda(sensorKey, programId).address.toBase58(),
+      reputationPda(cellId, programId).address.toBase58(),
     ])
   })
 })

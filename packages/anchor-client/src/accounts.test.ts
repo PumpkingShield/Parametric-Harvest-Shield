@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   accountDiscriminator,
   associatedTokenAddress,
+  decodeCellReputation,
   decodeCellState,
   decodePolicy,
   decodePool,
   isPolicyActive,
   POLICY_DISCRIMINATOR,
   type PolicyAccount,
+  reputationWindow,
 } from './accounts.ts'
 import { PUMPKING_IDL } from './idl/idl.ts'
 import { PublicKey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from './web3.ts'
@@ -148,5 +150,49 @@ describe('associatedTokenAddress', () => {
       associatedTokenAddress(owner, mint, TOKEN_PROGRAM_ID).toBase58(),
     )
     expect(new Set(addresses).size).toBe(3)
+  })
+})
+
+describe('decodeCellReputation', () => {
+  /**
+   * Laid out by hand as `#[repr(C)]` puts it on chain — not through the coder,
+   * which would only agree with itself. `CellReputation` is zero-copy, and the
+   * client reads it with the Borsh coder; this is what proves the two agree.
+   */
+  function reputationBytes(days: { day: number; judged: number[]; outliers: number[] }[]): Uint8Array {
+    const DAY_BYTES = 4 + 2 * 2 * 32
+    const bytes = new Uint8Array(8 + 8 + 4 + 1 + 1 + 2 + 14 * DAY_BYTES)
+    const view = new DataView(bytes.buffer)
+    bytes.set(accountDiscriminator('cellReputation'), 0)
+    view.setBigUint64(8, 613196570331971583n, true)
+    view.setUint32(16, 19, true)
+    view.setUint8(20, 254)
+    view.setUint8(21, 1)
+    for (const { day, judged, outliers } of days) {
+      const at = 24 + (day % 14) * DAY_BYTES
+      view.setUint32(at, day, true)
+      for (const [slot, n] of judged.entries()) view.setUint16(at + 4 + slot * 2, n, true)
+      for (const [slot, n] of outliers.entries()) view.setUint16(at + 4 + 64 + slot * 2, n, true)
+    }
+    return bytes
+  }
+
+  it('reads the zero-copy layout field for field', () => {
+    const decoded = decodeCellReputation(
+      reputationBytes([
+        { day: 18, judged: [24, 24, 24], outliers: [0, 0, 7] },
+        { day: 19, judged: [24, 24, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65_535], outliers: [1, 0, 9] },
+      ]),
+    )
+    expect(decoded.cellId.toString()).toBe('613196570331971583')
+    expect(decoded.lastDayIndex).toBe(19)
+    expect(decoded.bump).toBe(254)
+    expect(decoded.hasDays).toBe(1)
+    expect(decoded.days).toHaveLength(14)
+    expect(decoded.days[19 % 14]?.judged[31]).toBe(65_535)
+
+    expect(reputationWindow(decoded, 2, 6, 19)).toEqual({ judged: 48, outliers: 16 })
+    expect(reputationWindow(decoded, 0, 19, 19)).toEqual({ judged: 24, outliers: 1 })
+    expect(reputationWindow(decoded, 2, 0, 17)).toEqual({ judged: 0, outliers: 0 })
   })
 })

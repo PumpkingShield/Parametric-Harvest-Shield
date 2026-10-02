@@ -27,6 +27,8 @@ export type CellStateAccount = IdlAccounts<Pumpking>['cellState']
 export type PoolAccount = IdlAccounts<Pumpking>['pool']
 /** The on-chain `Sensor` — the registry `FR-001` names. */
 export type SensorAccount = IdlAccounts<Pumpking>['sensor']
+/** The on-chain `CellReputation` — a cell's verdicts over the window. */
+export type CellReputationAccount = IdlAccounts<Pumpking>['cellReputation']
 
 /** The eight bytes an account of this type starts with. */
 export function accountDiscriminator(name: string): Uint8Array {
@@ -64,6 +66,36 @@ export function decodePool(data: Uint8Array): PoolAccount {
 
 export function decodeSensor(data: Uint8Array): SensorAccount {
   return decode<SensorAccount>('sensor', data)
+}
+
+/**
+ * `CellReputation` is zero-copy on chain. Its fields are laid out with no
+ * padding, so the bytes are the ones Borsh would write and the same coder
+ * reads them; the round-trip test is what holds that true.
+ */
+export function decodeCellReputation(data: Uint8Array): CellReputationAccount {
+  return decode<CellReputationAccount>('cellReputation', data)
+}
+
+/**
+ * A slot's judged and outlier intervals over days `[from, to]` — the sum
+ * `CellReputation::window` takes on chain, for deciding whether an exclusion
+ * would pass before paying for the transaction that asks.
+ */
+export function reputationWindow(
+  reputation: CellReputationAccount,
+  slot: number,
+  from: number,
+  to: number,
+): { judged: number; outliers: number } {
+  let judged = 0
+  let outliers = 0
+  for (const day of reputation.days) {
+    if (day.dayIndex < from || day.dayIndex > to) continue
+    judged += day.judged[slot] ?? 0
+    outliers += day.outliers[slot] ?? 0
+  }
+  return { judged, outliers }
 }
 
 /**

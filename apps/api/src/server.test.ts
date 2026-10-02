@@ -106,7 +106,7 @@ describe('GET /health', () => {
         uptimeSeconds: 12,
         cycles: 3,
         lastCycleAgoSeconds: 1,
-        lastCycle: { submitted: 2, settled: 1, closed: 0, failed: 0 },
+        lastCycle: { submitted: 2, settled: 1, closed: 0, excluded: 0, failed: 0 },
         lastSkipped: null,
         lastError: null,
       }),
