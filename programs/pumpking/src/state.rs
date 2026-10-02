@@ -56,6 +56,28 @@ pub const GRID_RESOLUTION: u8 = 7;
 #[constant]
 pub const OUTLIER_WINDOW_DAYS: u16 = 14;
 
+/// The smallest distance from the cell median that is ever an outlier —
+/// `FR-011`, in hundredths of a millimetre: 0.20 mm, the step of a typical
+/// tipping-bucket gauge. Applied off chain; published here so the rule the
+/// aggregator judges by is the program's, not the aggregator's.
+#[constant]
+pub const OUTLIER_FLOOR_X100: u32 = 20;
+
+/// The share of the cell median a value may be off by before it is an
+/// outlier — `FR-011`. The distance is `max(floor, median · this)`.
+#[constant]
+pub const OUTLIER_REL_BPS: u16 = 5000;
+
+/// Above this share of outlier intervals in the window a sensor is excluded —
+/// `FR-012`.
+#[constant]
+pub const OUTLIER_SHARE_BPS: u16 = 2000;
+
+/// Judged intervals the window needs before the share counts — three days of
+/// hourly intervals. Below it one bad hour would be a hundred per cent.
+#[constant]
+pub const OUTLIER_MIN_JUDGED: u16 = 72;
+
 /* -------------------------------------------------------------------------- */
 /* Pool                                                                       */
 /* -------------------------------------------------------------------------- */

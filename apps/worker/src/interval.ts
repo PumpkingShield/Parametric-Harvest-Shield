@@ -4,7 +4,7 @@ import {
   submitDayRecordInstruction,
   type TransactionInstruction,
 } from '@pumpking/anchor-client'
-import type { AcceptedReading, DayRow, IntervalRow, IntervalStore } from '@pumpking/db'
+import type { AcceptedReading, DayRow, IntervalRow, IntervalStore, VerdictRow } from '@pumpking/db'
 import {
   canonicalIntervalBytes,
   canonicalReadingBytes,
@@ -12,9 +12,11 @@ import {
   classifyDay,
   DayState,
   encodeBase58,
+  judgeInterval,
   merkleRoot,
   type OperatorVote,
   type ReadingKindName,
+  type SensorVerdict,
 } from '@pumpking/shared'
 
 /**
@@ -175,6 +177,11 @@ export type ClosedInterval = {
    * decision, not this one's: an interval without a value contributes nobody.
    */
   contributors: number
+  /**
+   * Every sensor of the interval against its value — `FR-011`. Empty when the
+   * interval has none: no median, nothing to be off from.
+   */
+  verdicts: SensorVerdict[]
 }
 
 /** Where an interval sits. Passed in because a bucket of readings cannot say. */
@@ -274,7 +281,28 @@ export function closeInterval(
     votes: median.votes,
     readingsRoot: root === null ? null : encodeBase58(root),
     contributors,
+    // Judged against the median these same readings made, never the other way
+    // round: reputation is a second pass over the result, and the median does
+    // not depend on the verdicts it produces.
+    verdicts: judgeInterval(
+      ordered.map((reading) => ({ sensor: reading.sensorPubkey, valueX100: reading.valueX100 })),
+      median.medianX100,
+    ),
   }
+}
+
+/** The `sensor_verdicts` rows of a closed interval. */
+export function verdictRows(interval: ClosedInterval): VerdictRow[] {
+  return interval.verdicts.map((verdict) => ({
+    sensorPubkey: verdict.sensor,
+    cellId: interval.cellId,
+    kind: interval.kind,
+    intervalStart: interval.start,
+    dayIndex: interval.dayIndex,
+    valueX100: verdict.valueX100,
+    medianX100: verdict.medianX100,
+    outlier: verdict.outlier,
+  }))
 }
 
 /** The `cell_hours` row of a closed interval. */
@@ -478,6 +506,14 @@ export async function closeCellDay(
   }
 
   await deps.store.saveIntervals(intervals.map(intervalRow))
+  // Before the day, like the intervals: a crash after this line re-closes the
+  // day, and the replace makes the second pass's verdicts the only ones.
+  await deps.store.replaceDayVerdicts(
+    cellId,
+    deps.params.kind,
+    dayIndex,
+    intervals.flatMap(verdictRows),
+  )
 
   const record = closeDay(intervals, deps.params)
   await deps.store.saveDay(dayRow(record, null))

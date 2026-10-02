@@ -15,6 +15,13 @@
       "when": 1790705707579,
       "tag": "0001_registry_mirror",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790939701484,
+      "tag": "0002_sensor_verdicts",
+      "breakpoints": true
     }
   ]
 }

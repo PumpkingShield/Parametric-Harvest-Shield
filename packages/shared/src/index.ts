@@ -19,7 +19,18 @@ export type { CellMedian, MedianParams, OperatorVote, SensorReading } from './me
 export { cellMedian, medianX100 } from './median.ts'
 export type { MerkleProof } from './merkle.ts'
 export { MERKLE_HASH_BYTES, merkleProof, merkleRoot, verifyMerkleProof } from './merkle.ts'
-export { OUTLIER_WINDOW_DAYS } from './outlier.ts'
+export type { JudgedReading, OutlierCounts, SensorVerdict } from './outlier.ts'
+export {
+  breachesOutlierShare,
+  isOutlier,
+  judgeInterval,
+  OUTLIER_FLOOR_X100,
+  OUTLIER_MIN_JUDGED,
+  OUTLIER_REL_BPS,
+  OUTLIER_SHARE_BPS,
+  OUTLIER_WINDOW_DAYS,
+  outlierShareBps,
+} from './outlier.ts'
 export {
   BPS_DENOMINATOR,
   dryDayFrequencyBps,

@@ -164,9 +164,10 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
         if (report.swept?.status === 'failed') {
           log.warn({ err: report.swept.error }, 'the retention sweep failed, next try in an hour')
         } else if (report.swept?.status === 'swept') {
-          const { readings, cellHours } = report.swept
-          if (readings + cellHours > 0) log.info({ readings, cellHours }, 'retention sweep')
-          else log.debug({ readings, cellHours }, 'retention sweep')
+          const { readings, cellHours, verdicts } = report.swept
+          const line = { readings, cellHours, verdicts }
+          if (readings + cellHours + verdicts > 0) log.info(line, 'retention sweep')
+          else log.debug(line, 'retention sweep')
         }
 
         if (!report.aggregatorMatches) {

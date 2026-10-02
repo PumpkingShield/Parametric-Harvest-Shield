@@ -1,5 +1,12 @@
 import { PublicKey, type TransactionInstruction } from '@pumpking/anchor-client'
-import type { AcceptedReading, DayRow, IntervalRow, IntervalStore, OpenDay } from '@pumpking/db'
+import type {
+  AcceptedReading,
+  DayRow,
+  IntervalRow,
+  IntervalStore,
+  OpenDay,
+  VerdictRow,
+} from '@pumpking/db'
 import {
   canonicalReadingBytes,
   cellIdFromH3Index,
@@ -74,6 +81,8 @@ class FakeStore implements IntervalStore {
   cells: bigint[] = [CELL_ID]
   readings: AcceptedReading[] = []
   intervals: IntervalRow[] = []
+  /** `sensor_verdicts`, keyed by cell and day the way a replace addresses them. */
+  verdicts = new Map<string, VerdictRow[]>()
   days = new Map<string, DayRow>()
   /** What the store was asked for, in order — the sequence matters. */
   calls: string[] = []
@@ -128,6 +137,17 @@ class FakeStore implements IntervalStore {
   saveIntervals(rows: readonly IntervalRow[]): Promise<void> {
     this.calls.push('saveIntervals')
     this.intervals.push(...rows)
+    return Promise.resolve()
+  }
+
+  replaceDayVerdicts(
+    cellId: bigint,
+    _kind: string,
+    dayIndex: number,
+    rows: readonly VerdictRow[],
+  ): Promise<void> {
+    this.calls.push('replaceDayVerdicts')
+    this.verdicts.set(`${cellId}/${dayIndex}`, [...rows])
     return Promise.resolve()
   }
 
@@ -239,6 +259,33 @@ describe('closeInterval', () => {
     expect(closed.medianX100).toBe(200)
   })
 
+  it('judges every sensor against the median its readings made — FR-011', () => {
+    const closed = closeInterval(
+      [
+        ...quorum([300, 310, 0], GENESIS),
+        // A second reading of the liar's: still one sensor in one interval.
+        reading({ sensorPubkey: sensorKey(3), operator: 'operator-3', slotInCell: 2, valueX100: 0 }),
+      ],
+      POSITION,
+      PARAMS,
+    )
+    expect(closed.medianX100).toBe(300)
+    expect(closed.verdicts.map((one) => [one.sensor, one.valueX100, one.outlier])).toEqual(
+      [
+        [sensorKey(1), 300, false],
+        [sensorKey(2), 310, false],
+        [sensorKey(3), 0, true],
+      ].sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1)),
+    )
+    // Reputation is a second pass: the liar is still in the median, the mask
+    // and the root of the interval it was judged in.
+    expect(closed.contributors).toBe(0b111)
+  })
+
+  it('judges nobody in an interval without a value', () => {
+    expect(closeInterval(quorum([10, 900], GENESIS), POSITION, PARAMS).verdicts).toEqual([])
+  })
+
   it('has no value below the minimum votes, and still has a root', () => {
     const closed = closeInterval(quorum([10, 20], GENESIS), POSITION, PARAMS)
     expect(closed.medianX100).toBeNull()
@@ -314,6 +361,7 @@ function intervals(valuesX100: readonly (number | null)[]): ClosedInterval[] {
     votes: [],
     readingsRoot: value === null ? null : encodeBase58(new Uint8Array(32).fill(index + 1)),
     contributors: value === null ? 0 : 0b111,
+    verdicts: [],
   }))
 }
 
@@ -399,6 +447,21 @@ describe('closeDay', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('closeCellDay', () => {
+  it('stores the verdicts of the day, by interval and pool day', async () => {
+    const second = new Date(GENESIS.getTime() + 3_600_000 + 60_000)
+    store.readings = [
+      ...quorum([300, 300, 0], new Date(GENESIS.getTime() + 60_000)),
+      ...quorum([300, 300, 290], second),
+    ]
+    await closeCellDay(deps, CELL_ID, 0)
+
+    const rows = store.verdicts.get(`${CELL_ID}/0`) ?? []
+    expect(rows).toHaveLength(6)
+    expect(rows.every((row) => row.dayIndex === 0 && row.cellId === CELL_ID)).toBe(true)
+    expect(rows.filter((row) => row.outlier).map((row) => [row.sensorPubkey, row.intervalStart]))
+      .toEqual([[sensorKey(3), intervalStart(CLOCK, 0, 0)]])
+  })
+
   it('buckets readings by the interval they were measured in', async () => {
     store.readings = [
       ...quorum([10, 10, 10], new Date(GENESIS.getTime() + 60_000)),
@@ -425,6 +488,7 @@ describe('closeCellDay', () => {
     expect(store.calls).toEqual([
       'acceptedReadings',
       'saveIntervals',
+      'replaceDayVerdicts',
       'saveDay',
       'markDaySubmitted',
     ])

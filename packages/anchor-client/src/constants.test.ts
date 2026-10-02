@@ -1,5 +1,11 @@
 import type { Idl } from '@coral-xyz/anchor'
-import { OUTLIER_WINDOW_DAYS } from '@pumpking/shared'
+import {
+  OUTLIER_FLOOR_X100,
+  OUTLIER_MIN_JUDGED,
+  OUTLIER_REL_BPS,
+  OUTLIER_SHARE_BPS,
+  OUTLIER_WINDOW_DAYS,
+} from '@pumpking/shared'
 import { describe, expect, it } from 'vitest'
 import { PUMPKING_IDL } from './idl/idl.ts'
 
@@ -17,7 +23,13 @@ function programConstant(name: string): string {
 }
 
 describe('constants twinned with @pumpking/shared', () => {
-  it('agrees with the program on the outlier observation window', () => {
-    expect(programConstant('outlierWindowDays')).toBe(String(OUTLIER_WINDOW_DAYS))
+  it.each([
+    ['outlierWindowDays', OUTLIER_WINDOW_DAYS],
+    ['outlierFloorX100', OUTLIER_FLOOR_X100],
+    ['outlierRelBps', OUTLIER_REL_BPS],
+    ['outlierShareBps', OUTLIER_SHARE_BPS],
+    ['outlierMinJudged', OUTLIER_MIN_JUDGED],
+  ])('agrees with the program on %s', (name, value) => {
+    expect(programConstant(name)).toBe(String(value))
   })
 })

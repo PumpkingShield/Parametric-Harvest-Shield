@@ -1,6 +1,6 @@
 import { lt } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
-import { cellHours, readings } from './schema.ts'
+import { cellHours, readings, sensorVerdicts } from './schema.ts'
 
 /**
  * How long the raw material stays — `SC-012`, `T055`.
@@ -42,6 +42,13 @@ export type RetentionCutoffs = {
 export type SweepResult = {
   readings: number
   cellHours: number
+  /**
+   * `sensor_verdicts` (`T034`) go with the readings they were judged from, by
+   * the same cutoff: thirty days on a real clock is twice the window outliers
+   * are counted over, and a verdict outliving its readings would be a claim
+   * about an interval nobody can check any more.
+   */
+  verdicts: number
 }
 
 const DAY_MS = 86_400_000
@@ -109,7 +116,14 @@ export function pgRetentionStore(db: PostgresJsDatabase<Record<string, never>>):
       const sweptHours = await db
         .delete(cellHours)
         .where(lt(cellHours.createdAt, cutoffs.cellHours))
-      return { readings: sweptReadings.count, cellHours: sweptHours.count }
+      const sweptVerdicts = await db
+        .delete(sensorVerdicts)
+        .where(lt(sensorVerdicts.createdAt, cutoffs.readings))
+      return {
+        readings: sweptReadings.count,
+        cellHours: sweptHours.count,
+        verdicts: sweptVerdicts.count,
+      }
     },
   }
 }

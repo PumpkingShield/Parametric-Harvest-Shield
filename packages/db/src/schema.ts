@@ -173,6 +173,50 @@ export const readings = pgTable(
 )
 
 /**
+ * A sensor's standing in one interval — FR-011, `T034`. One row per sensor per
+ * interval that had a value, not per reading: a sensor's value there is the
+ * median of its own readings, so publishing more of them buys no reputation.
+ *
+ * Kept apart from `readings.status` on purpose. The median and the Merkle root
+ * of an interval are taken over its accepted readings, and an interval is
+ * re-closed until its day reaches the chain; relabelling a reading `outlier`
+ * would take it out of the next pass and move both under the trace. A verdict
+ * is a judgement about the interval, not a filter on what it was made of.
+ *
+ * `day_index` is the pool's day, because the window outliers are counted over
+ * (`OUTLIER_WINDOW_DAYS`) is the program's, in the program's days.
+ */
+export const sensorVerdicts = pgTable(
+  'sensor_verdicts',
+  {
+    sensorPubkey: text()
+      .notNull()
+      .references(() => sensors.pubkey),
+    cellId: cellId()
+      .notNull()
+      .references(() => cells.id),
+    kind: readingKind().notNull(),
+    /** Start of the interval, the same instant `cell_hours.hour_start` holds. */
+    intervalStart: timestamp({ withTimezone: true }).notNull(),
+    dayIndex: integer().notNull(),
+    /** The median of the sensor's own readings in the interval. */
+    valueX100: valueX100('value_x100').notNull(),
+    /** The cell's median it was judged against. */
+    medianX100: valueX100('median_x100').notNull(),
+    outlier: boolean().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // The key leads with the sensor, which is how an operator's page reads
+    // it. The second index is what replacing a day deletes by. No index on
+    // `created_at`, for the reason `cell_hours` has none: an hourly sweep over
+    // a table this size is cheaper than an index the free tier pays for daily.
+    primaryKey({ columns: [t.sensorPubkey, t.intervalStart, t.kind] }),
+    index('sensor_verdicts_cell_day_idx').on(t.cellId, t.kind, t.dayIndex),
+  ],
+)
+
+/**
  * Hourly cell median — FR-008. `voteCount` counts operators, not sensors: many
  * sensors of one operator carry one vote between them (FR-009), so a cell can
  * hold thirty sensors and still fall short of coverage.

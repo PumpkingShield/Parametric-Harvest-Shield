@@ -1,0 +1,25 @@
+{
+  "comment": "Shared between packages/shared/src/outlier.ts and programs/pumpking/src/outlier.rs. `distance` is the FR-011 rule and runs in TS only: the program never sees a reading. `share` is the FR-012 rule and runs on both sides, because T035 excludes on chain. Values are hundredths of a millimetre per interval; the constants are OUTLIER_FLOOR_X100 = 20, OUTLIER_REL_BPS = 5000, OUTLIER_SHARE_BPS = 2000, OUTLIER_MIN_JUDGED = 72.",
+  "distance": [
+    { "name": "agreeing with the median exactly", "valueX100": 340, "medianX100": 340, "outlier": false },
+    { "name": "a dry hour, a sensor at the floor", "valueX100": 20, "medianX100": 0, "outlier": false },
+    { "name": "a dry hour, one hundredth past the floor", "valueX100": 21, "medianX100": 0, "outlier": true },
+    { "name": "light rain: the floor is wider than half the median", "valueX100": 0, "medianX100": 30, "outlier": true },
+    { "name": "light rain within the floor", "valueX100": 10, "medianX100": 30, "outlier": false },
+    { "name": "a downpour, exactly half the median off", "valueX100": 1500, "medianX100": 3000, "outlier": false },
+    { "name": "a downpour, one hundredth past half", "valueX100": 1499, "medianX100": 3000, "outlier": true },
+    { "name": "reporting a drought through a downpour", "valueX100": 0, "medianX100": 3000, "outlier": true },
+    { "name": "above the median counts the same as below", "valueX100": 4501, "medianX100": 3000, "outlier": true },
+    { "name": "above the median, at the edge", "valueX100": 4500, "medianX100": 3000, "outlier": false }
+  ],
+  "share": [
+    { "name": "no history is no verdict", "judged": 0, "outliers": 0, "breaches": false },
+    { "name": "every interval an outlier, but too few to judge", "judged": 71, "outliers": 71, "breaches": false },
+    { "name": "enough to judge, exactly at the threshold", "judged": 100, "outliers": 20, "breaches": false },
+    { "name": "enough to judge, one past the threshold", "judged": 100, "outliers": 21, "breaches": true },
+    { "name": "the minimum sample, a fifth exactly", "judged": 72, "outliers": 14, "breaches": false },
+    { "name": "the minimum sample, just over a fifth", "judged": 72, "outliers": 15, "breaches": true },
+    { "name": "a clean sensor over the whole window", "judged": 336, "outliers": 0, "breaches": false },
+    { "name": "a sensor gone bad in the second week", "judged": 336, "outliers": 168, "breaches": true }
+  ]
+}

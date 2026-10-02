@@ -1,7 +1,7 @@
 import type { DayClassification, ReadingKindName } from '@pumpking/shared'
 import { and, asc, eq, gte, isNotNull, lt, lte, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
-import { cellDays, cellHours, cells, operators, readings, sensors } from './schema.ts'
+import { cellDays, cellHours, cells, operators, readings, sensorVerdicts, sensors } from './schema.ts'
 
 /**
  * What aggregation needs of the database, and nothing else — `FR-008`,
@@ -67,6 +67,18 @@ export type DayRow = {
   txSignature: string | null
 }
 
+/** A sensor's standing in one interval, as `sensor_verdicts` holds it — `FR-011`. */
+export type VerdictRow = {
+  sensorPubkey: string
+  cellId: bigint
+  kind: ReadingKindName
+  intervalStart: Date
+  dayIndex: number
+  valueX100: number
+  medianX100: number
+  outlier: boolean
+}
+
 /** A day of a cell that still has to reach the chain. */
 export type OpenDay = { cellId: bigint; dayIndex: number }
 
@@ -116,6 +128,20 @@ export interface IntervalStore {
    */
   dayRecords(cellId: bigint, fromDay: number, toDay: number): Promise<DayRow[]>
   saveIntervals(rows: readonly IntervalRow[]): Promise<void>
+  /**
+   * The verdicts of one day of one cell, replacing whatever an earlier pass
+   * over that day stored — `FR-011`.
+   *
+   * Replacing, not merging: a sensor judged on the first pass may not be on the
+   * second (it dropped below the stake, or the chain excluded it), and a row
+   * left behind would count an interval against it that the day no longer has.
+   */
+  replaceDayVerdicts(
+    cellId: bigint,
+    kind: ReadingKindName,
+    dayIndex: number,
+    rows: readonly VerdictRow[],
+  ): Promise<void>
   saveDay(row: DayRow): Promise<void>
   markDaySubmitted(cellId: bigint, dayIndex: number, txSignature: string): Promise<void>
 }
@@ -262,6 +288,26 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
             disputed: excluded('disputed'),
           },
         })
+    },
+
+    async replaceDayVerdicts(cellId, kind, dayIndex, rows) {
+      for (const row of rows) {
+        if (row.cellId !== cellId || row.kind !== kind || row.dayIndex !== dayIndex) {
+          throw new RangeError('every verdict replaced must belong to the day being replaced')
+        }
+      }
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(sensorVerdicts)
+          .where(
+            and(
+              eq(sensorVerdicts.cellId, cellId),
+              eq(sensorVerdicts.kind, kind),
+              eq(sensorVerdicts.dayIndex, dayIndex),
+            ),
+          )
+        if (rows.length > 0) await tx.insert(sensorVerdicts).values([...rows])
+      })
     },
 
     async saveDay(row) {

@@ -212,6 +212,10 @@ class Store implements ReadingStore, IntervalStore {
     return Promise.resolve()
   }
 
+  replaceDayVerdicts(): Promise<void> {
+    return Promise.resolve()
+  }
+
   saveDay(row: DayRow): Promise<void> {
     this.days.set(row.dayIndex, row)
     return Promise.resolve()

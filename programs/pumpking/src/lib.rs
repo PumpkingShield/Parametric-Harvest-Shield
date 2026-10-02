@@ -6,6 +6,7 @@ pub mod errors;
 pub mod h3;
 pub mod index;
 pub mod instructions;
+pub mod outlier;
 pub mod premium;
 pub mod state;
 

@@ -2641,6 +2641,44 @@ export type Pumpking = {
   ],
   "constants": [
     {
+      "name": "outlierFloorX100",
+      "docs": [
+        "The smallest distance from the cell median that is ever an outlier —",
+        "`FR-011`, in hundredths of a millimetre: 0.20 mm, the step of a typical",
+        "tipping-bucket gauge. Applied off chain; published here so the rule the",
+        "aggregator judges by is the program's, not the aggregator's."
+      ],
+      "type": "u32",
+      "value": "20"
+    },
+    {
+      "name": "outlierMinJudged",
+      "docs": [
+        "Judged intervals the window needs before the share counts — three days of",
+        "hourly intervals. Below it one bad hour would be a hundred per cent."
+      ],
+      "type": "u16",
+      "value": "72"
+    },
+    {
+      "name": "outlierRelBps",
+      "docs": [
+        "The share of the cell median a value may be off by before it is an",
+        "outlier — `FR-011`. The distance is `max(floor, median · this)`."
+      ],
+      "type": "u16",
+      "value": "5000"
+    },
+    {
+      "name": "outlierShareBps",
+      "docs": [
+        "Above this share of outlier intervals in the window a sensor is excluded —",
+        "`FR-012`."
+      ],
+      "type": "u16",
+      "value": "2000"
+    },
+    {
       "name": "outlierWindowDays",
       "docs": [
         "Days over which a sensor's outliers are counted before it is excluded —",
