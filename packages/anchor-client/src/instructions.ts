@@ -709,3 +709,72 @@ export function stakeSensorInstruction(input: StakeSensorInput): TransactionInst
     args: { amount: new BN(input.amount.toString()) },
   })
 }
+
+/* -------------------------------------------------------------------------- */
+/* request_unstake                                                            */
+/* -------------------------------------------------------------------------- */
+
+export interface RequestUnstakeInput {
+  /** Must be the sensor's operator; the program checks it. */
+  operator: PublicKey
+  sensorKey: PublicKey
+  /** Taken from the voting stake at once; it stops voting the same slot. */
+  amount: bigint
+  programId?: PublicKey
+}
+
+/**
+ * Starts the thaw for part or all of a sensor's stake — `FR-053`. Asking again
+ * adds to what is thawing and restarts the count from today.
+ */
+export function requestUnstakeInstruction(input: RequestUnstakeInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  return buildInstruction('requestUnstake', {
+    programId,
+    accounts: {
+      operator: input.operator,
+      // Seeded by a field of the account itself, which the IDL cannot follow.
+      sensor: sensorPda(input.sensorKey, programId).address,
+    },
+    args: { amount: new BN(input.amount.toString()) },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* withdraw_stake                                                             */
+/* -------------------------------------------------------------------------- */
+
+export interface WithdrawStakeInput {
+  /** Must be the sensor's operator; the program checks it. */
+  operator: PublicKey
+  sensorKey: PublicKey
+  /** Must equal `pool.asset_mint`. */
+  assetMint: PublicKey
+  /** The operator's own token account — the only place the stake can go. */
+  operatorTokens: PublicKey
+  /** Defaults to the pool's stake vault — never the capital vault (`FR-051`). */
+  stakeVault?: PublicKey
+  tokenProgram?: PublicKey
+  programId?: PublicKey
+}
+
+/**
+ * Pays out everything whose thaw has ended — `FR-053`. Before the unlock day
+ * the program refuses with `StakeStillThawing` and logs the days left.
+ */
+export function withdrawStakeInstruction(input: WithdrawStakeInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  const pool = poolPda(programId).address
+  return buildInstruction('withdrawStake', {
+    programId,
+    accounts: {
+      operator: input.operator,
+      sensor: sensorPda(input.sensorKey, programId).address,
+      assetMint: input.assetMint,
+      stakeVault: input.stakeVault ?? stakeVaultPda(pool, programId).address,
+      operatorTokens: input.operatorTokens,
+      tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
+    },
+    args: {},
+  })
+}

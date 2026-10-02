@@ -71,7 +71,7 @@ describe('decodePolicy', () => {
       minRateBps: 100,
       minSensorsPerCell: 3,
       minStake: new BN(0),
-      unstakeDelayDays: 14,
+      unstakeDelayDays: 30,
       waitingPeriodDays: 3,
       dryDayThresholdMmX100: 100,
       secondsPerDay: 86_400,

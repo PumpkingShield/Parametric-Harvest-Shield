@@ -1,4 +1,5 @@
-//! `register_sensor` and `stake_sensor` over the built `.so` — `T031`.
+//! `register_sensor` and `stake_sensor` over the built `.so` — `T031`;
+//! `request_unstake` and `withdraw_stake` — `T033`.
 //!
 //! Open registration is the one door in this program that anyone may walk
 //! through, so the tests are about what it refuses: a key the registrant does
@@ -16,6 +17,12 @@
 //! PDA, so for the two transfers the pool signs — `settle_policy` and
 //! `claim_unclaimed_payout` — that address check is the only thing between a
 //! payout and the stake.
+//!
+//! **Leaving takes a thaw** (`FR-053`, `T033`). Stake asked out stops voting
+//! the moment it is asked for and stays in the stake vault until the unlock
+//! day — not one day sooner, and not to anybody but the operator. Asking again
+//! restarts the count, and no pool can be created whose thaw is not longer
+//! than the outlier observation window.
 
 mod harness;
 
@@ -23,7 +30,7 @@ use anchor_lang::prelude::Pubkey as AnchorPubkey;
 use harness::*;
 use pumpking::errors::PumpkingError;
 use pumpking::instructions::{DayRecordParams, PolicyParams, PoolParams};
-use pumpking::state::{CellState, Pool, Sensor, MAX_SENSORS_PER_CELL};
+use pumpking::state::{CellState, Pool, Sensor, MAX_SENSORS_PER_CELL, OUTLIER_WINDOW_DAYS};
 
 const GENESIS_TS: i64 = 1_800_000_000;
 const SECONDS_PER_DAY: u32 = 86_400;
@@ -53,6 +60,11 @@ const HISTORY_DAYS: u32 = 20;
 const WINDOW_START: u32 = 23;
 const WINDOW_END: u32 = 30;
 const SPELL_THRESHOLD: u8 = 5;
+
+/// `pool_params().unstake_delay_days`, named for the thaw tests' arithmetic.
+const THAW_DAYS: u32 = 30;
+/// The day the thaw tests ask for their stake back on.
+const ASKED_ON: u32 = 10;
 
 fn authority() -> AnchorPubkey {
     key(1)
@@ -104,7 +116,7 @@ fn pool_params() -> PoolParams {
         min_rate_bps: 100,
         min_sensors_per_cell: 3,
         min_stake: MIN_STAKE,
-        unstake_delay_days: 30,
+        unstake_delay_days: THAW_DAYS as u16,
         waiting_period_days: 3,
         dry_day_threshold_mm_x100: 100,
         seconds_per_day: SECONDS_PER_DAY,
@@ -116,6 +128,28 @@ fn world() -> World {
 }
 
 fn world_with(params: PoolParams) -> World {
+    let mut world = unpooled_world();
+    world.exec_ok(&initialize_pool(params));
+    world
+}
+
+fn initialize_pool(params: PoolParams) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::InitializePool {
+            authority: authority(),
+            pool: pool_pda(),
+            asset_mint: asset_mint(),
+            vault: vault_pda(),
+            stake_vault: stake_vault_pda(),
+            token_program: token_program_id(),
+            system_program: system_program_id(),
+        },
+        pumpking::instruction::InitializePool { params },
+    )
+}
+
+/// Every wallet and token account the tests use, and no pool yet.
+fn unpooled_world() -> World {
     let mut world = World::new(GENESIS_TS, SECONDS_PER_DAY);
     world.fund(authority(), 10 * SOL);
     world.fund(aggregator(), 10 * SOL);
@@ -138,20 +172,6 @@ fn world_with(params: PoolParams) -> World {
     );
     world.create_token_account(depositor_tokens(), asset_mint(), depositor(), CAPITAL);
     world.create_token_account(farmer_tokens(), asset_mint(), farmer(), FARMER_BALANCE);
-
-    let ix = instruction(
-        pumpking::accounts::InitializePool {
-            authority: authority(),
-            pool: pool_pda(),
-            asset_mint: asset_mint(),
-            vault: vault_pda(),
-            stake_vault: stake_vault_pda(),
-            token_program: token_program_id(),
-            system_program: system_program_id(),
-        },
-        pumpking::instruction::InitializePool { params },
-    );
-    world.exec_ok(&ix);
     world
 }
 
@@ -191,6 +211,56 @@ fn stake(
         },
         pumpking::instruction::StakeSensor { amount },
     )
+}
+
+fn request_unstake(
+    operator: AnchorPubkey,
+    sensor: AnchorPubkey,
+    amount: u64,
+) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::RequestUnstake {
+            operator,
+            pool: pool_pda(),
+            sensor: sensor_pda(sensor),
+        },
+        pumpking::instruction::RequestUnstake { amount },
+    )
+}
+
+fn withdraw(
+    operator: AnchorPubkey,
+    tokens: AnchorPubkey,
+    sensor: AnchorPubkey,
+    stake_vault: AnchorPubkey,
+) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::WithdrawStake {
+            operator,
+            pool: pool_pda(),
+            sensor: sensor_pda(sensor),
+            asset_mint: asset_mint(),
+            stake_vault,
+            operator_tokens: tokens,
+            token_program: token_program_id(),
+        },
+        pumpking::instruction::WithdrawStake {},
+    )
+}
+
+/// One sensor registered and staked three times the minimum, the clock on
+/// `ASKED_ON`.
+fn thaw_world() -> World {
+    let mut world = world();
+    world.exec_ok(&register(operator(), sensor_key(1), CELL_ID));
+    world.exec_ok(&stake(
+        operator(),
+        operator_tokens(),
+        sensor_key(1),
+        3 * MIN_STAKE,
+    ));
+    world.set_day(ASKED_ON);
+    world
 }
 
 /// The same pool, except one cell may owe all of its capital. With the cell
@@ -658,4 +728,235 @@ fn no_instruction_that_moves_money_takes_the_stake_vault_for_capital() {
     assert_eq!(pool.capital_total, pool_before.capital_total);
     assert_eq!(pool.reserved_total, pool_before.reserved_total);
     assert_stake_untouched(&world);
+}
+
+/* -------------------------------------------------------------------------- */
+/* FR-053 — request_unstake and withdraw_stake                                */
+/* -------------------------------------------------------------------------- */
+
+#[test]
+fn no_pool_is_created_whose_thaw_does_not_outlast_the_outlier_window() {
+    let mut world = unpooled_world();
+    let params = PoolParams {
+        unstake_delay_days: OUTLIER_WINDOW_DAYS,
+        ..pool_params()
+    };
+    world.exec_err(
+        &initialize_pool(params),
+        PumpkingError::UnstakeDelayTooShort,
+    );
+    assert!(!world.exists(pool_pda()));
+
+    let params = PoolParams {
+        unstake_delay_days: OUTLIER_WINDOW_DAYS + 1,
+        ..pool_params()
+    };
+    world.exec_ok(&initialize_pool(params));
+}
+
+#[test]
+fn asking_stake_out_silences_it_at_once_and_moves_no_money() {
+    let mut world = thaw_world();
+    let pool_before: Pool = world.read(pool_pda());
+
+    world.exec_ok(&request_unstake(operator(), sensor_key(1), 2 * MIN_STAKE));
+
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(1)));
+    assert_eq!(sensor.stake, MIN_STAKE);
+    assert_eq!(sensor.unstaking, 2 * MIN_STAKE);
+    assert_eq!(sensor.unlock_at_day, Some(ASKED_ON + THAW_DAYS));
+    // What is left still votes; what is thawing does not count towards it.
+    assert!(sensor.votes(MIN_STAKE));
+    assert!(!sensor.votes(MIN_STAKE + 1));
+
+    // The thaw is bookkeeping: the stake vault holds all of it until the end.
+    assert_eq!(
+        token_amount(world.account(stake_vault_pda())),
+        3 * MIN_STAKE
+    );
+    assert_eq!(
+        token_amount(world.account(operator_tokens())),
+        OPERATOR_BALANCE - 3 * MIN_STAKE
+    );
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.capital_total, pool_before.capital_total);
+}
+
+#[test]
+fn the_stake_leaves_on_the_unlock_day_and_not_the_day_before() {
+    let mut world = thaw_world();
+    world.exec_ok(&request_unstake(operator(), sensor_key(1), 2 * MIN_STAKE));
+
+    world.set_day(ASKED_ON + THAW_DAYS - 1);
+    world.exec_err(
+        &withdraw(
+            operator(),
+            operator_tokens(),
+            sensor_key(1),
+            stake_vault_pda(),
+        ),
+        PumpkingError::StakeStillThawing,
+    );
+    assert_eq!(
+        token_amount(world.account(stake_vault_pda())),
+        3 * MIN_STAKE
+    );
+
+    world.set_day(ASKED_ON + THAW_DAYS);
+    world.exec_ok(&withdraw(
+        operator(),
+        operator_tokens(),
+        sensor_key(1),
+        stake_vault_pda(),
+    ));
+
+    assert_eq!(token_amount(world.account(stake_vault_pda())), MIN_STAKE);
+    assert_eq!(
+        token_amount(world.account(operator_tokens())),
+        OPERATOR_BALANCE - MIN_STAKE
+    );
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(1)));
+    assert_eq!(sensor.stake, MIN_STAKE);
+    assert_eq!(sensor.unstaking, 0);
+    assert_eq!(sensor.unlock_at_day, None);
+
+    // Paid once: the same withdrawal again finds nothing thawing.
+    world.exec_err(
+        &withdraw(
+            operator(),
+            operator_tokens(),
+            sensor_key(1),
+            stake_vault_pda(),
+        ),
+        PumpkingError::NothingThawing,
+    );
+}
+
+#[test]
+fn asking_again_adds_to_the_thaw_and_restarts_the_count() {
+    let mut world = thaw_world();
+    world.exec_ok(&request_unstake(operator(), sensor_key(1), MIN_STAKE));
+    let again = ASKED_ON + 15;
+    world.set_day(again);
+    world.exec_ok(&request_unstake(operator(), sensor_key(1), MIN_STAKE));
+
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(1)));
+    assert_eq!(sensor.unstaking, 2 * MIN_STAKE);
+    assert_eq!(sensor.unlock_at_day, Some(again + THAW_DAYS));
+
+    // The first request's unlock day is no longer a door.
+    world.set_day(ASKED_ON + THAW_DAYS);
+    world.exec_err(
+        &withdraw(
+            operator(),
+            operator_tokens(),
+            sensor_key(1),
+            stake_vault_pda(),
+        ),
+        PumpkingError::StakeStillThawing,
+    );
+
+    world.set_day(again + THAW_DAYS);
+    world.exec_ok(&withdraw(
+        operator(),
+        operator_tokens(),
+        sensor_key(1),
+        stake_vault_pda(),
+    ));
+    assert_eq!(token_amount(world.account(stake_vault_pda())), MIN_STAKE);
+}
+
+#[test]
+fn staking_during_a_thaw_votes_and_does_not_touch_the_thaw() {
+    let mut world = thaw_world();
+    world.exec_ok(&request_unstake(operator(), sensor_key(1), 3 * MIN_STAKE));
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(1)));
+    assert!(!sensor.votes(MIN_STAKE));
+
+    world.set_day(ASKED_ON + 5);
+    world.exec_ok(&stake(
+        operator(),
+        operator_tokens(),
+        sensor_key(1),
+        MIN_STAKE,
+    ));
+
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(1)));
+    assert_eq!(sensor.stake, MIN_STAKE);
+    assert!(sensor.votes(MIN_STAKE));
+    assert_eq!(sensor.unstaking, 3 * MIN_STAKE);
+    assert_eq!(sensor.unlock_at_day, Some(ASKED_ON + THAW_DAYS));
+}
+
+#[test]
+fn no_more_can_be_asked_out_than_votes() {
+    let mut world = thaw_world();
+    world.exec_err(
+        &request_unstake(operator(), sensor_key(1), 3 * MIN_STAKE + 1),
+        PumpkingError::UnstakeExceedsStake,
+    );
+    world.exec_err(
+        &request_unstake(operator(), sensor_key(1), 0),
+        PumpkingError::StakeTooSmall,
+    );
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(1)));
+    assert_eq!(sensor.stake, 3 * MIN_STAKE);
+    assert_eq!(sensor.unlock_at_day, None);
+}
+
+#[test]
+fn only_the_operator_thaws_and_withdraws_and_only_to_their_own_account() {
+    let mut world = thaw_world();
+    world.exec_err(
+        &request_unstake(stranger(), sensor_key(1), MIN_STAKE),
+        PumpkingError::NotTheOperator,
+    );
+
+    world.exec_ok(&request_unstake(operator(), sensor_key(1), MIN_STAKE));
+    world.set_day(ASKED_ON + THAW_DAYS);
+
+    world.exec_err(
+        &withdraw(
+            stranger(),
+            stranger_tokens(),
+            sensor_key(1),
+            stake_vault_pda(),
+        ),
+        PumpkingError::NotTheOperator,
+    );
+    // The operator signing, the money aimed at somebody else's account.
+    world.exec_anchor_err(
+        &withdraw(
+            operator(),
+            stranger_tokens(),
+            sensor_key(1),
+            stake_vault_pda(),
+        ),
+        anchor_lang::error::ErrorCode::ConstraintTokenOwner,
+    );
+    assert_eq!(
+        token_amount(world.account(stake_vault_pda())),
+        3 * MIN_STAKE
+    );
+    assert_eq!(
+        token_amount(world.account(stranger_tokens())),
+        OPERATOR_BALANCE
+    );
+}
+
+#[test]
+fn a_withdrawal_aimed_at_the_capital_vault_is_refused() {
+    // `FR-051` from the way out: both vaults answer to the pool PDA, so the
+    // address is all that keeps a thawed stake from being paid out of capital.
+    let mut world = staked_world(pool_params());
+    world.exec_ok(&request_unstake(operator(), sensor_key(0), NETWORK_STAKE));
+    world.set_day(HISTORY_DAYS + THAW_DAYS);
+
+    world.exec_anchor_err(
+        &withdraw(operator(), operator_tokens(), sensor_key(0), vault_pda()),
+        anchor_lang::error::ErrorCode::ConstraintAddress,
+    );
+    assert_eq!(token_amount(world.account(vault_pda())), CAPITAL);
+    let sensor: Sensor = world.read(sensor_pda(sensor_key(0)));
+    assert_eq!(sensor.unstaking, NETWORK_STAKE);
 }

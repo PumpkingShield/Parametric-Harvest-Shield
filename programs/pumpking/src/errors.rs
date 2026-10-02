@@ -150,4 +150,19 @@ pub enum PumpkingError {
 
     #[msg("Only the sensor's operator may do this")]
     NotTheOperator,
+
+    #[msg("Unstake delay must be longer than the outlier observation window")]
+    UnstakeDelayTooShort,
+
+    #[msg("Cannot unstake more than the sensor's voting stake")]
+    UnstakeExceedsStake,
+
+    #[msg("The sensor has no stake thawing")]
+    NothingThawing,
+
+    #[msg("The stake is still thawing")]
+    StakeStillThawing,
+
+    #[msg("An excluded sensor's stake does not leave the stake vault")]
+    SensorExcluded,
 }

@@ -19,6 +19,7 @@ export type { CellMedian, MedianParams, OperatorVote, SensorReading } from './me
 export { cellMedian, medianX100 } from './median.ts'
 export type { MerkleProof } from './merkle.ts'
 export { MERKLE_HASH_BYTES, merkleProof, merkleRoot, verifyMerkleProof } from './merkle.ts'
+export { OUTLIER_WINDOW_DAYS } from './outlier.ts'
 export {
   BPS_DENOMINATOR,
   dryDayFrequencyBps,

@@ -11,9 +11,11 @@ import {
   issuePolicyInstruction,
   type PoolParams,
   registerSensorInstruction,
+  requestUnstakeInstruction,
   settlePolicyInstruction,
   stakeSensorInstruction,
   submitDayRecordInstruction,
+  withdrawStakeInstruction,
 } from './instructions.ts'
 import {
   capitalPositionPda,
@@ -49,7 +51,7 @@ const params: PoolParams = {
   minRateBps: 100,
   minSensorsPerCell: 3,
   minStake: 1_000_000n,
-  unstakeDelayDays: 14,
+  unstakeDelayDays: 30,
   waitingPeriodDays: 7,
   dryDayThresholdMmX100: 100,
   secondsPerDay: 86_400,
@@ -96,7 +98,7 @@ describe('initializePoolInstruction', () => {
     expect(encoded.minRateBps).toBe(100)
     expect(encoded.minSensorsPerCell).toBe(3)
     expect(String(encoded.minStake)).toBe('1000000')
-    expect(encoded.unstakeDelayDays).toBe(14)
+    expect(encoded.unstakeDelayDays).toBe(30)
     expect(encoded.waitingPeriodDays).toBe(7)
     expect(encoded.dryDayThresholdMmX100).toBe(100)
     expect(encoded.secondsPerDay).toBe(86_400)
@@ -691,6 +693,65 @@ describe('stakeSensorInstruction', () => {
 
   it('has only the operator sign', () => {
     const { keys } = stakeSensorInstruction(input)
+    expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+    ])
+  })
+})
+
+describe('requestUnstakeInstruction', () => {
+  const operator = key(11)
+  const sensorKey = key(12)
+  const input = { operator, sensorKey, amount: 400_000n, programId }
+
+  it('round-trips the amount and touches no token account at all', () => {
+    const instruction = requestUnstakeInstruction(input)
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('requestUnstake')
+    expect(String(data.amount)).toBe('400000')
+
+    // Nothing moves yet: the thaw is bookkeeping on the sensor.
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+      poolPda(programId).address.toBase58(),
+      sensorPda(sensorKey, programId).address.toBase58(),
+    ])
+    expect(
+      instruction.keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58()),
+    ).toEqual([operator.toBase58()])
+  })
+})
+
+describe('withdrawStakeInstruction', () => {
+  const operator = key(11)
+  const sensorKey = key(12)
+  const operatorTokens = key(13)
+  const input = { operator, sensorKey, assetMint, operatorTokens, programId }
+
+  it('takes no amount and pays from the stake vault, not the capital vault', () => {
+    const instruction = withdrawStakeInstruction(input)
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('withdrawStake')
+    // The amount is whatever thawed; a caller has nothing to choose.
+    expect(Object.keys(data)).toEqual([])
+
+    const pool = poolPda(programId).address
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+      pool.toBase58(),
+      sensorPda(sensorKey, programId).address.toBase58(),
+      assetMint.toBase58(),
+      stakeVaultPda(pool, programId).address.toBase58(),
+      operatorTokens.toBase58(),
+      TOKEN_PROGRAM_ID.toBase58(),
+    ])
+    expect(
+      instruction.keys.some((meta) => meta.pubkey.equals(vaultPda(pool, programId).address)),
+    ).toBe(false)
+  })
+
+  it('has only the operator sign; the pool signs inside the program', () => {
+    const { keys } = withdrawStakeInstruction(input)
     expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
       operator.toBase58(),
     ])

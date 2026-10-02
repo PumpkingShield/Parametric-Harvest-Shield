@@ -194,13 +194,14 @@ function sensorAccountBytes(input: {
   cellId: bigint
   slotInCell: number
   stake: bigint
+  unstaking: bigint
   unlockAtDay: number | null
   accepted: number
   outliers: number
   active: boolean
 }): Uint8Array {
   const optional = input.unlockAtDay === null ? 1 : 5
-  const bytes = new Uint8Array(8 + 32 + 32 + 8 + 1 + 8 + optional + 4 + 4 + 1 + 1)
+  const bytes = new Uint8Array(8 + 32 + 32 + 8 + 1 + 8 + 8 + optional + 4 + 4 + 1 + 1)
   const view = new DataView(bytes.buffer)
   let at = 0
   bytes.set(SENSOR_DISCRIMINATOR, at)
@@ -214,6 +215,8 @@ function sensorAccountBytes(input: {
   view.setUint8(at, input.slotInCell)
   at += 1
   view.setBigUint64(at, input.stake, true)
+  at += 8
+  view.setBigUint64(at, input.unstaking, true)
   at += 8
   if (input.unlockAtDay === null) {
     view.setUint8(at, 0)
@@ -250,6 +253,7 @@ describe('rpcRegistrySource', () => {
                 cellId: CELL_ID,
                 slotInCell: 31,
                 stake: 18_446_744_073_709_551_615n,
+                unstaking: 7n,
                 unlockAtDay: 900,
                 accepted: 12,
                 outliers: 3,
@@ -266,6 +270,7 @@ describe('rpcRegistrySource', () => {
                 cellId: CELL_ID,
                 slotInCell: 0,
                 stake: 0n,
+                unstaking: 0n,
                 unlockAtDay: null,
                 accepted: 0,
                 outliers: 0,

@@ -3,8 +3,8 @@ use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, Tran
 
 use crate::errors::PumpkingError;
 use crate::state::{
-    CapitalPosition, Pool, BPS_DENOMINATOR, CAPITAL_SEED, MAX_SENSORS_PER_CELL, POOL_SEED,
-    STAKE_VAULT_SEED, VAULT_SEED,
+    CapitalPosition, Pool, BPS_DENOMINATOR, CAPITAL_SEED, MAX_SENSORS_PER_CELL,
+    OUTLIER_WINDOW_DAYS, POOL_SEED, STAKE_VAULT_SEED, VAULT_SEED,
 };
 
 /// Bringing the pool into existence: its parameters, its two vaults, and the
@@ -89,6 +89,14 @@ impl PoolParams {
         require!(
             self.unstake_delay_days > 0,
             PumpkingError::UnstakeDelayNotSet
+        );
+        // FR-053: a thaw no longer than the window outliers are counted over
+        // lets a sensor spoil a cell's data and be gone before the count that
+        // would have excluded it is finished. Strictly longer, because the day
+        // the thaw ends is the day the stake can leave.
+        require!(
+            self.unstake_delay_days > OUTLIER_WINDOW_DAYS,
+            PumpkingError::UnstakeDelayTooShort
         );
         // Three independent powers, none overlapping — the aggregator writes
         // the day log and the authority sets parameters, and one key holding
@@ -459,6 +467,27 @@ mod tests {
             code_of(p.validate(Pubkey::new_unique()).unwrap_err()),
             u32::from(PumpkingError::UnstakeDelayNotSet)
         );
+    }
+
+    #[test]
+    fn the_thaw_outlasts_the_outlier_window() {
+        // FR-053: equal is not enough — on the day the window closes the
+        // stake would already be free to leave.
+        let mut p = params();
+        p.unstake_delay_days = OUTLIER_WINDOW_DAYS;
+        assert_eq!(
+            code_of(p.validate(Pubkey::new_unique()).unwrap_err()),
+            u32::from(PumpkingError::UnstakeDelayTooShort)
+        );
+
+        p.unstake_delay_days = 1;
+        assert_eq!(
+            code_of(p.validate(Pubkey::new_unique()).unwrap_err()),
+            u32::from(PumpkingError::UnstakeDelayTooShort)
+        );
+
+        p.unstake_delay_days = OUTLIER_WINDOW_DAYS + 1;
+        assert!(p.validate(Pubkey::new_unique()).is_ok());
     }
 
     #[test]

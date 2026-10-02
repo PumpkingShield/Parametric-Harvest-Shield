@@ -28,9 +28,11 @@ export type {
   PolicyTerms,
   PoolParams,
   RegisterSensorInput,
+  RequestUnstakeInput,
   SettlePolicyInput,
   StakeSensorInput,
   SubmitDayRecordInput,
+  WithdrawStakeInput,
 } from './instructions.ts'
 export {
   buildInstruction,
@@ -43,9 +45,11 @@ export {
   initializePoolInstruction,
   issuePolicyInstruction,
   registerSensorInstruction,
+  requestUnstakeInstruction,
   settlePolicyInstruction,
   stakeSensorInstruction,
   submitDayRecordInstruction,
+  withdrawStakeInstruction,
 } from './instructions.ts'
 export type { Pda } from './pda.ts'
 export {

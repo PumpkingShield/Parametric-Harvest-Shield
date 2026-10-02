@@ -688,6 +688,83 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "requestUnstake",
+      "docs": [
+        "Starts the thaw for part or all of a sensor's stake — `FR-053`. The",
+        "amount stops voting at once and stays in the stake vault until it is",
+        "withdrawn; asking again adds to it and restarts the count."
+      ],
+      "discriminator": [
+        44,
+        154,
+        110,
+        253,
+        160,
+        202,
+        54,
+        34
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "docs": [
+            "Only the operator: it is their stake, and a thaw someone else started",
+            "would silence a sensor that never asked to stop voting."
+          ],
+          "signer": true,
+          "relations": [
+            "sensor"
+          ]
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sensor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.sensor_key",
+                "account": "sensor"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "settlePolicy",
       "docs": [
         "Pays a policy the index has triggered — `FR-026`, `FR-027`, `FR-030`.",
@@ -988,6 +1065,93 @@ export const PUMPKING_IDL: Pumpking = {
           }
         }
       ]
+    },
+    {
+      "name": "withdrawStake",
+      "docs": [
+        "Returns thawed stake to its operator once the delay, longer than the",
+        "outlier observation window, has passed — `FR-053`."
+      ],
+      "discriminator": [
+        153,
+        8,
+        22,
+        138,
+        105,
+        176,
+        87,
+        66
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true,
+          "relations": [
+            "sensor"
+          ]
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sensor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.sensor_key",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "assetMint"
+        },
+        {
+          "name": "stakeVault",
+          "docs": [
+            "`FR-051`: stake leaves from the stake vault and never from capital."
+          ],
+          "writable": true
+        },
+        {
+          "name": "operatorTokens",
+          "docs": [
+            "The operator's own account: stake goes back to whoever put it up."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -1147,6 +1311,32 @@ export const PUMPKING_IDL: Pumpking = {
         143,
         105,
         223
+      ]
+    },
+    {
+      "name": "stakeWithdrawn",
+      "discriminator": [
+        33,
+        120,
+        159,
+        58,
+        140,
+        255,
+        174,
+        79
+      ]
+    },
+    {
+      "name": "unstakeRequested",
+      "discriminator": [
+        21,
+        253,
+        177,
+        85,
+        129,
+        206,
+        42,
+        152
       ]
     }
   ],
@@ -1395,6 +1585,31 @@ export const PUMPKING_IDL: Pumpking = {
       "code": 6048,
       "name": "notTheOperator",
       "msg": "Only the sensor's operator may do this"
+    },
+    {
+      "code": 6049,
+      "name": "unstakeDelayTooShort",
+      "msg": "Unstake delay must be longer than the outlier observation window"
+    },
+    {
+      "code": 6050,
+      "name": "unstakeExceedsStake",
+      "msg": "Cannot unstake more than the sensor's voting stake"
+    },
+    {
+      "code": 6051,
+      "name": "nothingThawing",
+      "msg": "The sensor has no stake thawing"
+    },
+    {
+      "code": 6052,
+      "name": "stakeStillThawing",
+      "msg": "The stake is still thawing"
+    },
+    {
+      "code": 6053,
+      "name": "sensorExcluded",
+      "msg": "An excluded sensor's stake does not leave the stake vault"
     }
   ],
   "types": [
@@ -2272,12 +2487,25 @@ export const PUMPKING_IDL: Pumpking = {
           },
           {
             "name": "stake",
+            "docs": [
+              "Stake that votes — `FR-050`. What the registry mirror reads as stake."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "unstaking",
+            "docs": [
+              "Stake on its way out — `FR-053`. Moved here from `stake` by",
+              "`request_unstake`, it no longer votes but stays in the stake vault and",
+              "burns with the rest if the sensor is excluded (`FR-052`): a thaw is a",
+              "promise to leave, not a way out of what the readings already did."
+            ],
             "type": "u64"
           },
           {
             "name": "unlockAtDay",
             "docs": [
-              "Day the thaw ends — `FR-053`. `None` while no withdrawal is pending."
+              "Day the thaw ends — `FR-053`. `None` while nothing is thawing."
             ],
             "type": {
               "option": "u32"
@@ -2353,6 +2581,75 @@ export const PUMPKING_IDL: Pumpking = {
           }
         ]
       }
+    },
+    {
+      "name": "stakeWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unstakeRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "stake",
+            "type": "u64"
+          },
+          {
+            "name": "unstaking",
+            "type": "u64"
+          },
+          {
+            "name": "unlockAtDay",
+            "type": "u32"
+          }
+        ]
+      }
+    }
+  ],
+  "constants": [
+    {
+      "name": "outlierWindowDays",
+      "docs": [
+        "Days over which a sensor's outliers are counted before it is excluded —",
+        "`FR-012`. A constant of the program rather than a field of the pool: the",
+        "thaw has to outlast it (`FR-053`), and a window the authority could shorten",
+        "in the middle of somebody's thaw would let that stake leave before the",
+        "count that should have burnt it was ever finished.",
+        "",
+        "Twinned in `@pumpking/shared` (`outlier.ts`); the client checks the twin",
+        "against the value this constant puts in the IDL."
+      ],
+      "type": "u16",
+      "value": "14"
     }
   ]
 }

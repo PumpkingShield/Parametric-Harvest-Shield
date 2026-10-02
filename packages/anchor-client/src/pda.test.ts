@@ -178,7 +178,7 @@ describe('agreement with the IDL', () => {
         minRateBps: 100,
         minSensorsPerCell: 3,
         minStake: 1_000_000n,
-        unstakeDelayDays: 14,
+        unstakeDelayDays: 30,
         waitingPeriodDays: 7,
         dryDayThresholdMmX100: 100,
         secondsPerDay: 86_400,

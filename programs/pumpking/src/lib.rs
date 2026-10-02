@@ -78,4 +78,17 @@ pub mod pumpking {
     pub fn stake_sensor(ctx: Context<StakeSensor>, amount: u64) -> Result<()> {
         instructions::sensor::stake_sensor(ctx, amount)
     }
+
+    /// Starts the thaw for part or all of a sensor's stake — `FR-053`. The
+    /// amount stops voting at once and stays in the stake vault until it is
+    /// withdrawn; asking again adds to it and restarts the count.
+    pub fn request_unstake(ctx: Context<RequestUnstake>, amount: u64) -> Result<()> {
+        instructions::sensor::request_unstake(ctx, amount)
+    }
+
+    /// Returns thawed stake to its operator once the delay, longer than the
+    /// outlier observation window, has passed — `FR-053`.
+    pub fn withdraw_stake(ctx: Context<WithdrawStake>) -> Result<()> {
+        instructions::sensor::withdraw_stake(ctx)
+    }
 }

@@ -45,6 +45,17 @@ pub const MAX_COVERAGE_DAYS: u32 = 90;
 /// anything already written.
 pub const GRID_RESOLUTION: u8 = 7;
 
+/// Days over which a sensor's outliers are counted before it is excluded —
+/// `FR-012`. A constant of the program rather than a field of the pool: the
+/// thaw has to outlast it (`FR-053`), and a window the authority could shorten
+/// in the middle of somebody's thaw would let that stake leave before the
+/// count that should have burnt it was ever finished.
+///
+/// Twinned in `@pumpking/shared` (`outlier.ts`); the client checks the twin
+/// against the value this constant puts in the IDL.
+#[constant]
+pub const OUTLIER_WINDOW_DAYS: u16 = 14;
+
 /* -------------------------------------------------------------------------- */
 /* Pool                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -324,8 +335,14 @@ pub struct Sensor {
     /// once and never reused: `FR-012` deactivates a sensor, it does not free
     /// the slot, and a reused bit would rewrite who voted on a past day.
     pub slot_in_cell: u8,
+    /// Stake that votes — `FR-050`. What the registry mirror reads as stake.
     pub stake: u64,
-    /// Day the thaw ends — `FR-053`. `None` while no withdrawal is pending.
+    /// Stake on its way out — `FR-053`. Moved here from `stake` by
+    /// `request_unstake`, it no longer votes but stays in the stake vault and
+    /// burns with the rest if the sensor is excluded (`FR-052`): a thaw is a
+    /// promise to leave, not a way out of what the readings already did.
+    pub unstaking: u64,
+    /// Day the thaw ends — `FR-053`. `None` while nothing is thawing.
     pub unlock_at_day: Option<u32>,
     pub accepted: u32,
     pub outliers: u32,
@@ -660,6 +677,7 @@ mod tests {
             cell_id: 0,
             slot_in_cell: 0,
             stake,
+            unstaking: 0,
             unlock_at_day: None,
             accepted: 0,
             outliers: 0,
