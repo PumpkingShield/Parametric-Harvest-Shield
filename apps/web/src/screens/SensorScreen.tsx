@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import {
   Block,
   FactRows,
@@ -10,6 +11,14 @@ import {
 } from '../components/Bits.tsx'
 import DayStrip from '../components/DayStrip.tsx'
 import { SENSOR_HOURS } from '../data/rainfall.ts'
+
+/**
+ * The real sensor (`T038`) in its own chunk. It carries the signer and the
+ * key store, and the first screen's budget (`SC-013`) is the policy screen's;
+ * the chunk is fetched when this tab opens, before anyone can tap Send, so
+ * it is not inside `SC-009`'s five seconds either.
+ */
+const ThisPhone = lazy(() => import('../sensor/ThisPhone.tsx'))
 
 /** Screen 2 — the operator's side. A neighbour with a phone is a sensor too. */
 
@@ -36,6 +45,23 @@ const PEERS: ReadonlyArray<PeerRow> = [
 
 const SensorScreen = () => (
   <div>
+    <Suspense
+      fallback={
+        <Block top={0}>
+          <Prose>Opening this phone’s sensor key…</Prose>
+        </Block>
+      }
+    >
+      <ThisPhone />
+    </Suspense>
+
+    <div style={{ margin: '36px 0 26px', paddingTop: 14, borderTop: `2px solid ${INK}` }}>
+      <Prose>
+        Below, the operator screen as it will look once the network counts this sensor — on
+        synthetic numbers.
+      </Prose>
+    </div>
+
     <Headline figure="23" caption="readings accepted today" />
 
     <FactRows

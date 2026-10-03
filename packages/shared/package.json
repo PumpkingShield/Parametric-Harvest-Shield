@@ -5,8 +5,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./cell-id": "./src/cell-id.ts",
     "./day": "./src/day.ts",
-    "./index-math": "./src/index-math.ts"
+    "./index-math": "./src/index-math.ts",
+    "./reading-bytes": "./src/reading-bytes.ts",
+    "./signature": "./src/signature.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -6,7 +6,7 @@ import {
   type Reading,
   SENSOR_KEY_BYTES,
   type SignedReading,
-} from './reading.ts'
+} from './reading-bytes.ts'
 
 /**
  * Ed25519 over the canonical reading bytes — `FR-002`.

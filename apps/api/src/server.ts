@@ -8,6 +8,7 @@ import { createFeederRoute } from './routes/feeder.ts'
 import { createPoliciesRoute, type PolicyLookup } from './routes/policies.ts'
 import { createReadingsRoute } from './routes/readings.ts'
 import { createScenarioRoute, routeReadingPublisher } from './routes/scenario.ts'
+import { createSensorsRoute } from './routes/sensors.ts'
 
 /**
  * The four routes, mounted — `T057`.
@@ -39,7 +40,8 @@ export type ApiDeps = {
   registry: RegistryStore
   /**
    * `FR-050`: `pool.min_stake`, from the chain, for the scenario and feeder
-   * routes' check that their sensors vote. Null before `initialize_pool`.
+   * routes' check that their sensors vote, and for `/v1/sensors`. Null before
+   * `initialize_pool`.
    */
   minStake: () => Promise<bigint | null>
   /** `T067`: where each sensor's counter stopped, so a second run resumes it. */
@@ -118,6 +120,7 @@ export function createApiApp(deps: ApiDeps): Hono {
   app.route('/v1/readings', readings)
   app.route('/v1/cells', createCellsRoute({ store: deps.intervals }))
   app.route('/v1/policies', createPoliciesRoute({ policies: deps.policies, store: deps.intervals }))
+  app.route('/v1/sensors', createSensorsRoute({ registry: deps.registry, minStake: deps.minStake }))
   app.route(
     '/v1/scenario',
     createScenarioRoute({

@@ -6,6 +6,9 @@ import {
   latLngToCell,
   UNITS,
 } from 'h3-js'
+import { cellIdFromH3Index, MAX_CELL_ID, MIN_CELL_ID } from './cell-id.ts'
+
+export { cellIdFromH3Index, H3_CELL_PATTERN, h3IndexFromCellId } from './cell-id.ts'
 
 /**
  * The geographic cell — `FR-006`. A sensor belongs to one, and the cell, not
@@ -21,37 +24,6 @@ import {
  * cell, so a measurement never discloses the field to the metre, and a sensor
  * cannot move itself into someone else's cell by editing a field.
  */
-
-/**
- * Every H3 **cell** index renders as exactly 15 lowercase hex digits starting
- * with `8`: bit 63 is reserved and zero, and bits 59..56 hold mode `1` (cell)
- * with three reserved zeros above it, so the value always sits in
- * `[2^59, 2^60)` and the top hex digit prints as nothing.
- *
- * The pattern is deliberately this tight. It rejects edge and vertex indexes,
- * which are H3 values but not cells, and it stays true across resolutions —
- * `FR-069` makes res 8 an expansion, and a res 8 index matches this too.
- */
-export const H3_CELL_PATTERN = /^8[0-9a-f]{14}$/
-
-const MIN_CELL_ID = 0x0800000000000000n
-const MAX_CELL_ID = 0x1000000000000000n
-
-/** Parses the hex form h3-js produces into the 64-bit id used everywhere else. */
-export function cellIdFromH3Index(index: string): bigint {
-  if (!H3_CELL_PATTERN.test(index)) {
-    throw new Error(`not an H3 cell index: ${index}`)
-  }
-  return BigInt(`0x${index}`)
-}
-
-/** Renders the 64-bit id back into the hex form h3-js accepts. */
-export function h3IndexFromCellId(cellId: bigint): string {
-  if (cellId < MIN_CELL_ID || cellId >= MAX_CELL_ID) {
-    throw new RangeError(`not an H3 cell id: ${cellId}`)
-  }
-  return cellId.toString(16)
-}
 
 /* -------------------------------------------------------------------------- */
 /* Resolution                                                                 */

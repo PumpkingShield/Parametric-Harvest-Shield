@@ -82,9 +82,10 @@ export function createReadingsRoute(options: ReadingsRouteOptions): Hono {
 
     const sensor = await store.sensorFor(reading.sensor)
     if (sensor === null) {
-      // Deliberately the same answer as a bad signature would get, and
-      // deliberately not "no such sensor": whether a key is registered is not
-      // a question an unauthenticated caller gets to enumerate.
+      // Deliberately the same answer as a bad signature would get: a forger
+      // learns nothing about which half of a forgery failed. It hides nothing
+      // else — the registry is public on chain (`FR-007`), and
+      // `GET /v1/sensors/:pubkey` reads it for anyone.
       return apiError(context, 401, 'unknown sensor or invalid signature')
     }
 
