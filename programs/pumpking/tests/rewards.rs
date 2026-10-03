@@ -1,5 +1,5 @@
-//! The reward schedule over the built `.so` — `T036`: `FR-036`, `FR-062`,
-//! `FR-063`, `FR-064`.
+//! The reward schedule over the built `.so` — `T036`, `T037`: `FR-036`,
+//! `FR-062`, `FR-063`, `FR-064`.
 //!
 //! A policy's reward share is laid out over the days of its window; each day,
 //! in the transaction that writes it, pays its budget to the slots by the
@@ -9,7 +9,8 @@
 //! excluded first. A payout part-way through the window changes none of it.
 //!
 //! The network is three sensors of one operator, registered and staked on the
-//! demo cell; the policy pays 800 000 over days 23..=30 at 2500 bps, so its
+//! demo cell (a second network of three in its neighbour, where a test asks
+//! for one); the policy pays 800 000 over days 23..=30 at 2500 bps, so its
 //! premium is 200 000, the reward share 20 000 and each day's budget 2 500.
 
 mod harness;
@@ -32,6 +33,8 @@ const OPERATOR_BALANCE: u64 = 100_000_000;
 
 /// `871e701b3ffffff`, the demo cell — a real res 7 H3 cell.
 const CELL_ID: u64 = 0x0871_e701_b3ff_ffff;
+/// A res-7 neighbour of the demo cell, in the same pool.
+const NEIGHBOUR: u64 = 0x0871_e701_b2ff_ffff;
 
 const CAPITAL: u64 = 10_000_000;
 const NETWORK: u8 = 3;
@@ -123,8 +126,12 @@ fn reputation_pda(cell_id: u64) -> AnchorPubkey {
 }
 
 fn submit_day(day_index: u32, dry: bool) -> solana_instruction::Instruction {
+    submit_cell_day(CELL_ID, day_index, dry)
+}
+
+fn submit_cell_day(cell_id: u64, day_index: u32, dry: bool) -> solana_instruction::Instruction {
     submit_record(DayRecordParams {
-        cell_id: CELL_ID,
+        cell_id,
         day_index,
         state: if dry { 1 } else { 2 },
         contributors: 0b111,
@@ -154,7 +161,7 @@ fn submit_record(params: DayRecordParams) -> solana_instruction::Instruction {
         pumpking::accounts::SubmitDayRecord {
             aggregator: aggregator(),
             pool: pool_pda(),
-            cell: cell_pda(CELL_ID),
+            cell: cell_pda(params.cell_id),
             system_program: system_program_id(),
         },
         pumpking::instruction::SubmitDayRecord { params },
@@ -167,18 +174,28 @@ fn submit_rewards(
     outliers: [u16; SLOTS],
     weights: [u32; SLOTS],
 ) -> solana_instruction::Instruction {
+    submit_cell_rewards(CELL_ID, day_index, judged, outliers, weights)
+}
+
+fn submit_cell_rewards(
+    cell_id: u64,
+    day_index: u32,
+    judged: [u16; SLOTS],
+    outliers: [u16; SLOTS],
+    weights: [u32; SLOTS],
+) -> solana_instruction::Instruction {
     instruction(
         pumpking::accounts::SubmitDayReputation {
             aggregator: aggregator(),
             pool: pool_pda(),
-            cell: cell_pda(CELL_ID),
-            reputation: reputation_pda(CELL_ID),
-            rewards: rewards_pda(CELL_ID),
+            cell: cell_pda(cell_id),
+            reputation: reputation_pda(cell_id),
+            rewards: rewards_pda(cell_id),
             system_program: system_program_id(),
         },
         pumpking::instruction::SubmitDayReputation {
             params: DayReputationParams {
-                cell_id: CELL_ID,
+                cell_id,
                 day_index,
                 judged,
                 outliers,
@@ -290,10 +307,27 @@ fn weights(units: [u32; 3]) -> [u32; SLOTS] {
 /// Writes a whole day as the aggregator does: the day, then its verdicts and
 /// weights in the same breath. The clock moves to the day after.
 fn write_day(world: &mut World, day: u32, dry: bool, lies: u16, units: [u32; 3]) {
+    write_cell_day(world, CELL_ID, day, dry, lies, units);
+}
+
+fn write_cell_day(
+    world: &mut World,
+    cell_id: u64,
+    day: u32,
+    dry: bool,
+    lies: u16,
+    units: [u32; 3],
+) {
     world.set_day(day + 1);
-    world.exec_ok(&submit_day(day, dry));
+    world.exec_ok(&submit_cell_day(cell_id, day, dry));
     let (judged, outliers) = verdicts(lies);
-    world.exec_ok(&submit_rewards(day, judged, outliers, weights(units)));
+    world.exec_ok(&submit_cell_rewards(
+        cell_id,
+        day,
+        judged,
+        outliers,
+        weights(units),
+    ));
 }
 
 /// A pool with capital and the three-sensor network registered and staked —
@@ -349,17 +383,24 @@ fn bare_network() -> World {
         pumpking::instruction::DepositCapital { amount: CAPITAL },
     ));
 
-    for n in 0..NETWORK {
+    register_network(&mut world, CELL_ID, 0);
+    world
+}
+
+/// Three sensors of the operator in `cell_id`, keys from `first` on,
+/// registered and staked.
+fn register_network(world: &mut World, cell_id: u64, first: u8) {
+    for n in first..first + NETWORK {
         world.exec_ok(&instruction(
             pumpking::accounts::RegisterSensor {
                 operator: operator(),
                 sensor_key: sensor_key(n),
                 pool: pool_pda(),
-                cell: cell_pda(CELL_ID),
+                cell: cell_pda(cell_id),
                 sensor: sensor_pda(sensor_key(n)),
                 system_program: system_program_id(),
             },
-            pumpking::instruction::RegisterSensor { cell_id: CELL_ID },
+            pumpking::instruction::RegisterSensor { cell_id },
         ));
         world.exec_ok(&instruction(
             pumpking::accounts::StakeSensor {
@@ -374,8 +415,6 @@ fn bare_network() -> World {
             pumpking::instruction::StakeSensor { amount: MIN_STAKE },
         ));
     }
-
-    world
 }
 
 /// The network with twenty days of history written whole — the liar off in
@@ -441,6 +480,75 @@ fn a_cell_without_a_policy_earns_nothing() {
     assert_eq!(rewards.accrued, [0; SLOTS]);
     let pool: Pool = world.read(pool_pda());
     assert_eq!(pool.capital_total, CAPITAL);
+}
+
+#[test]
+fn a_cell_beside_an_insured_one_earns_nothing() {
+    // FR-063 within one pool: the reserve belongs to the cell (FR-062), so a
+    // neighbour measuring the same days with the same weights earns nothing
+    // from the policy next door, and the insured cell pays as it would alone.
+    let mut world = network_world(0);
+    register_network(&mut world, NEIGHBOUR, NETWORK);
+    world.exec_ok(&issue(NONCE, WINDOW_START, WINDOW_END));
+    for day in HISTORY_DAYS..=WINDOW_END {
+        write_day(&mut world, day, false, 0, [1, 1, 1]);
+        write_cell_day(&mut world, NEIGHBOUR, day, false, 0, [1, 1, 1]);
+    }
+
+    let neighbour = world.read_rewards(NEIGHBOUR);
+    assert_eq!(neighbour.cell_id, NEIGHBOUR);
+    assert_eq!(neighbour.next_day, WINDOW_END + 1, "every day was paid");
+    assert_eq!(neighbour.reserve, 0);
+    assert_eq!(neighbour.accrued, [0; SLOTS]);
+
+    // The control: the same days earned the insured cell its whole share.
+    let insured = world.read_rewards(CELL_ID);
+    assert_eq!(
+        insured.accrued.iter().sum::<u64>(),
+        REWARD_SHARE - 8 * (DAY_BUDGET % 3)
+    );
+    assert_vault_matches_books(&world);
+}
+
+#[test]
+fn a_cell_whose_policy_has_closed_earns_nothing_after_it() {
+    // FR-063 once the last policy is over: the window passed without the
+    // event, the policy closed, and ten more covered days with weights on
+    // every slot pay nobody and return nothing — nothing is scheduled.
+    let mut world = insured_world(0);
+    for day in WINDOW_START..=WINDOW_END {
+        write_day(&mut world, day, false, 0, [1, 1, 1]);
+    }
+    world.exec_ok(&instruction(
+        pumpking::accounts::ClosePolicy {
+            caller: stranger(),
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+            policy: policy_pda(farmer(), NONCE),
+        },
+        pumpking::instruction::ClosePolicy {},
+    ));
+    let closed = world.read_rewards(CELL_ID);
+    // The control: the window did pay, so the silence after it is the rule.
+    assert_eq!(
+        closed.accrued.iter().sum::<u64>(),
+        REWARD_SHARE - 8 * (DAY_BUDGET % 3)
+    );
+    let before: Pool = world.read(pool_pda());
+
+    let after_window = WINDOW_END + 1;
+    for day in after_window..after_window + 10 {
+        write_day(&mut world, day, false, 0, [1, 1, 1]);
+    }
+
+    let rewards = world.read_rewards(CELL_ID);
+    assert_eq!(rewards.next_day, after_window + 10, "every day was paid");
+    assert_eq!(rewards.accrued, closed.accrued);
+    assert_eq!(rewards.reserve, closed.reserve);
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.capital_total, before.capital_total);
+    assert_schedule_balances(&world);
+    assert_vault_matches_books(&world);
 }
 
 #[test]
