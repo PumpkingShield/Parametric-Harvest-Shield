@@ -1,6 +1,7 @@
 export { BN } from '@coral-xyz/anchor'
 export type {
   CellReputationAccount,
+  CellRewardsAccount,
   CellStateAccount,
   PolicyAccount,
   PoolAccount,
@@ -11,6 +12,7 @@ export {
   accountDiscriminator,
   associatedTokenAddress,
   decodeCellReputation,
+  decodeCellRewards,
   decodeCellState,
   decodePolicy,
   decodePool,
@@ -24,6 +26,7 @@ export {
 export { PUMPKING_IDL } from './idl/idl.ts'
 export type { Pumpking } from './idl/pumpking.ts'
 export type {
+  ClaimRewardInput,
   ClaimUnclaimedPayoutInput,
   ClosePolicyInput,
   DayClassification,
@@ -48,6 +51,7 @@ export type {
 } from './instructions.ts'
 export {
   buildInstruction,
+  claimRewardInstruction,
   claimUnclaimedPayoutInstruction,
   closePolicyInstruction,
   DayState,
@@ -78,7 +82,9 @@ export {
   policyPda,
   poolPda,
   REPUTATION_SEED,
+  REWARDS_SEED,
   reputationPda,
+  rewardsPda,
   SENSOR_SEED,
   STAKE_VAULT_SEED,
   sensorPda,

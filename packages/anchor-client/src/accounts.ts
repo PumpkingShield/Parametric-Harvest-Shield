@@ -29,6 +29,8 @@ export type PoolAccount = IdlAccounts<Pumpking>['pool']
 export type SensorAccount = IdlAccounts<Pumpking>['sensor']
 /** The on-chain `CellReputation` — a cell's verdicts over the window. */
 export type CellReputationAccount = IdlAccounts<Pumpking>['cellReputation']
+/** The on-chain `CellRewards` — a cell's reward schedule and what slots earned. */
+export type CellRewardsAccount = IdlAccounts<Pumpking>['cellRewards']
 
 /** The eight bytes an account of this type starts with. */
 export function accountDiscriminator(name: string): Uint8Array {
@@ -75,6 +77,14 @@ export function decodeSensor(data: Uint8Array): SensorAccount {
  */
 export function decodeCellReputation(data: Uint8Array): CellReputationAccount {
   return decode<CellReputationAccount>('cellReputation', data)
+}
+
+/**
+ * `CellRewards` is zero-copy too, laid out without padding for the same
+ * reason; `u64` fields come back as `BN`.
+ */
+export function decodeCellRewards(data: Uint8Array): CellRewardsAccount {
+  return decode<CellRewardsAccount>('cellRewards', data)
 }
 
 /**

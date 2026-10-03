@@ -317,6 +317,7 @@ fn issue(nonce: u64, payout: u64, vault: AnchorPubkey) -> solana_instruction::In
             pool: pool_pda(),
             cell: cell_pda(CELL_ID),
             policy: policy_pda(farmer(), nonce),
+            rewards: rewards_pda(CELL_ID),
             asset_mint: asset_mint(),
             vault,
             owner_tokens: farmer_tokens(),
@@ -403,6 +404,15 @@ fn staked_world(params: PoolParams) -> World {
     for day in 0..HISTORY_DAYS {
         world.set_day(day + 1);
         world.exec_ok(&submit_day(day, matches!(day, 3 | 8 | 14 | 19)));
+        // The rewards half of the day, as the aggregator sends it every day:
+        // nobody judged, so nobody earns — and it opens the cell's schedule,
+        // which `issue_policy` needs.
+        world.exec_ok(&submit_reputation(
+            aggregator(),
+            day,
+            [0; SLOTS],
+            [0; SLOTS],
+        ));
     }
     world.set_day(HISTORY_DAYS);
     world
@@ -997,12 +1007,24 @@ fn submit_reputation(
     judged: [u16; SLOTS],
     outliers: [u16; SLOTS],
 ) -> solana_instruction::Instruction {
+    submit_weighted(signer, day_index, judged, outliers, [0; SLOTS])
+}
+
+/// A day's verdicts with the reward weights that travel with them — `T036`.
+fn submit_weighted(
+    signer: AnchorPubkey,
+    day_index: u32,
+    judged: [u16; SLOTS],
+    outliers: [u16; SLOTS],
+    weights: [u32; SLOTS],
+) -> solana_instruction::Instruction {
     instruction(
         pumpking::accounts::SubmitDayReputation {
             aggregator: signer,
             pool: pool_pda(),
             cell: cell_pda(CELL_ID),
             reputation: reputation_pda(CELL_ID),
+            rewards: rewards_pda(CELL_ID),
             system_program: system_program_id(),
         },
         pumpking::instruction::SubmitDayReputation {
@@ -1011,6 +1033,7 @@ fn submit_reputation(
                 day_index,
                 judged,
                 outliers,
+                weights,
             },
         },
     )
@@ -1035,6 +1058,7 @@ fn exclude(sensor: AnchorPubkey, vault: AnchorPubkey) -> solana_instruction::Ins
             pool: pool_pda(),
             sensor: sensor_pda(sensor),
             reputation: reputation_pda(CELL_ID),
+            rewards: rewards_pda(CELL_ID),
             asset_mint: asset_mint(),
             stake_vault: stake_vault_pda(),
             vault,

@@ -58,4 +58,10 @@ export {
   toReadingWire,
   toSignedReadingWire,
 } from './reading.ts'
+export {
+  dayWeights,
+  intervalWeights,
+  REWARD_SCHEDULE_DAYS,
+  REWARD_WEIGHT_UNIT,
+} from './rewards.ts'
 export { sensorPublicKey, signReading, verifyReadingSignature } from './signature.ts'

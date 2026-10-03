@@ -183,4 +183,22 @@ pub enum PumpkingError {
 
     #[msg("The sensor is not excluded")]
     SensorNotExcluded,
+
+    #[msg("The coverage window ends past the cell's reward schedule horizon")]
+    WindowTooFarAhead,
+
+    #[msg("The coverage window starts on a day the reward schedule has already paid")]
+    WindowBeforeSchedule,
+
+    #[msg("The reward schedule only pays forwards")]
+    RewardDayNotNewer,
+
+    #[msg("A reward weight is set for a slot with no accepted interval that day")]
+    WeightWithoutAcceptedInterval,
+
+    #[msg("A reward weight is larger than the slot's accepted intervals can carry")]
+    WeightTooLarge,
+
+    #[msg("The sensor has no reward to claim")]
+    NothingToClaim,
 }

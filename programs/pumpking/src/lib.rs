@@ -94,7 +94,9 @@ pub mod pumpking {
     }
 
     /// Writes a day of the cell's outlier verdicts, per sensor slot —
-    /// `FR-011`. Sent with `submit_day_record`, for the day it just wrote.
+    /// `FR-011` — and pays the day's reward budget by the weights sent with
+    /// them, or returns it to capital — `FR-062`, `FR-064`. Sent with
+    /// `submit_day_record`, for the day it just wrote, every day.
     pub fn submit_day_reputation(
         ctx: Context<SubmitDayReputation>,
         params: DayReputationParams,
@@ -113,5 +115,11 @@ pub mod pumpking {
     /// votes again once staked to the minimum anew — `FR-012`.
     pub fn reinstate_sensor(ctx: Context<ReinstateSensor>) -> Result<()> {
         instructions::sensor::reinstate_sensor(ctx)
+    }
+
+    /// Sends a sensor's earned rewards to its operator's token account —
+    /// `FR-036`. Anyone may call it; the destination is bound to the operator.
+    pub fn claim_reward(ctx: Context<ClaimReward>) -> Result<()> {
+        instructions::rewards::claim_reward(ctx)
     }
 }

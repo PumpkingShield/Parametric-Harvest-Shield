@@ -19,6 +19,119 @@ export type Pumpking = {
   },
   "instructions": [
     {
+      "name": "claimReward",
+      "docs": [
+        "Sends a sensor's earned rewards to its operator's token account —",
+        "`FR-036`. Anyone may call it; the destination is bound to the operator."
+      ],
+      "discriminator": [
+        149,
+        95,
+        181,
+        242,
+        94,
+        90,
+        158,
+        162
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Anybody: the destination is bound to the operator either way, as a",
+            "payout's is bound to its owner."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sensor",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.sensor_key",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewards",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.cell_id",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "assetMint"
+        },
+        {
+          "name": "vault",
+          "docs": [
+            "Rewards sit in the capital vault beside capital, told apart by the",
+            "books (`FR-061`)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "operatorTokens",
+          "docs": [
+            "A token account the sensor's operator holds the authority over."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claimUnclaimedPayout",
       "docs": [
         "Delivers a payout settlement could not — `FR-029`. Reachable only for",
@@ -414,6 +527,35 @@ export type Pumpking = {
           }
         },
         {
+          "name": "rewards",
+          "docs": [
+            "What the sensor earned and had not claimed is forfeited with the",
+            "stake. It already sits in the capital vault, so only the books move."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.cell_id",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
           "name": "assetMint"
         },
         {
@@ -656,6 +798,35 @@ export type Pumpking = {
               {
                 "kind": "arg",
                 "path": "params.nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewards",
+          "docs": [
+            "`FR-062`: the reward share is laid out over the window's days here.",
+            "Opened by the aggregator with the cell's days, so a cell the network",
+            "publishes for has one; the window has to end inside its horizon."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  115
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.cell_id"
               }
             ]
           }
@@ -1267,7 +1438,9 @@ export type Pumpking = {
       "name": "submitDayReputation",
       "docs": [
         "Writes a day of the cell's outlier verdicts, per sensor slot —",
-        "`FR-011`. Sent with `submit_day_record`, for the day it just wrote."
+        "`FR-011` — and pays the day's reward budget by the weights sent with",
+        "them, or returns it to capital — `FR-062`, `FR-064`. Sent with",
+        "`submit_day_record`, for the day it just wrote, every day."
       ],
       "discriminator": [
         206,
@@ -1290,6 +1463,10 @@ export type Pumpking = {
         },
         {
           "name": "pool",
+          "docs": [
+            "Mutable for the budget a day returns to capital — `FR-064`."
+          ],
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1306,6 +1483,7 @@ export type Pumpking = {
         },
         {
           "name": "cell",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1342,6 +1520,34 @@ export type Pumpking = {
                   105,
                   111,
                   110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.cell_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewards",
+          "docs": [
+            "Opened here, by the aggregator, the first day it writes for the cell",
+            "after `T036`; `issue_policy` only requires it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  115
                 ]
               },
               {
@@ -1483,6 +1689,19 @@ export type Pumpking = {
       ]
     },
     {
+      "name": "cellRewards",
+      "discriminator": [
+        20,
+        163,
+        219,
+        215,
+        200,
+        136,
+        193,
+        215
+      ]
+    },
+    {
       "name": "cellState",
       "discriminator": [
         183,
@@ -1563,6 +1782,19 @@ export type Pumpking = {
       ]
     },
     {
+      "name": "dayRewarded",
+      "discriminator": [
+        75,
+        78,
+        116,
+        195,
+        111,
+        153,
+        255,
+        248
+      ]
+    },
+    {
       "name": "payoutClaimed",
       "discriminator": [
         200,
@@ -1612,6 +1844,32 @@ export type Pumpking = {
         184,
         83,
         77
+      ]
+    },
+    {
+      "name": "rewardClaimed",
+      "discriminator": [
+        49,
+        28,
+        87,
+        84,
+        158,
+        48,
+        229,
+        175
+      ]
+    },
+    {
+      "name": "rewardsOpened",
+      "discriminator": [
+        160,
+        2,
+        64,
+        59,
+        88,
+        206,
+        218,
+        38
       ]
     },
     {
@@ -1993,6 +2251,36 @@ export type Pumpking = {
       "code": 6059,
       "name": "sensorNotExcluded",
       "msg": "The sensor is not excluded"
+    },
+    {
+      "code": 6060,
+      "name": "windowTooFarAhead",
+      "msg": "The coverage window ends past the cell's reward schedule horizon"
+    },
+    {
+      "code": 6061,
+      "name": "windowBeforeSchedule",
+      "msg": "The coverage window starts on a day the reward schedule has already paid"
+    },
+    {
+      "code": 6062,
+      "name": "rewardDayNotNewer",
+      "msg": "The reward schedule only pays forwards"
+    },
+    {
+      "code": 6063,
+      "name": "weightWithoutAcceptedInterval",
+      "msg": "A reward weight is set for a slot with no accepted interval that day"
+    },
+    {
+      "code": 6064,
+      "name": "weightTooLarge",
+      "msg": "A reward weight is larger than the slot's accepted intervals can carry"
+    },
+    {
+      "code": 6065,
+      "name": "nothingToClaim",
+      "msg": "The sensor has no reward to claim"
     }
   ],
   "types": [
@@ -2094,6 +2382,94 @@ export type Pumpking = {
       }
     },
     {
+      "name": "cellRewards",
+      "docs": [
+        "PDA `[\"rewards\", cell_id]` — where the reward share of a cell's premiums",
+        "waits for the days that earn it, and where what they earned waits to be",
+        "claimed — `FR-036`, `FR-062`, `FR-064`.",
+        "",
+        "**A schedule, not a pot.** `issue_policy` lays a policy's reward share out",
+        "evenly over the days of its window; each day, in the transaction that",
+        "writes it, hands its budget to the slots that earned it or, without",
+        "coverage, back to capital. So a sensor is paid for the day it worked",
+        "(`FR-061`), a cell with no policy earns nothing because its schedule is",
+        "zero (`FR-063`), and nothing waits for a policy to close.",
+        "",
+        "`next_day` is the cursor: every day before it is settled one way or the",
+        "other. A day the aggregator never wrote is a day without coverage, as in",
+        "the day log, so paying any later day returns the skipped days' budget too.",
+        "",
+        "Zero-copy for the reason `CellReputation` is: four kilobytes of schedule",
+        "do not fit in the `try_accounts` frame. No padding, so the bytes are Borsh."
+      ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "reserve",
+            "docs": [
+              "Reward money of this cell in the capital vault: scheduled plus earned",
+              "and not yet claimed. Never part of `capital_total` (`FR-061`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "nextDay",
+            "docs": [
+              "The first day not yet paid or returned."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "padding",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "accrued",
+            "docs": [
+              "Earned and not yet claimed, per sensor slot."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                32
+              ]
+            }
+          },
+          {
+            "name": "schedule",
+            "docs": [
+              "Budget of each day in `[next_day, next_day + REWARD_SCHEDULE_DAYS)`,",
+              "indexed by `day % REWARD_SCHEDULE_DAYS`."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                512
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "cellState",
       "docs": [
         "PDA `[\"cell\", cell_id]`. Everything the settlement of a policy reads."
@@ -2136,8 +2512,11 @@ export type Pumpking = {
           {
             "name": "rewardsReserve",
             "docs": [
-              "`FR-062`: the reward reserve belongs to the cell, fed by the premiums",
-              "of its own policies and split between the sensors that voted."
+              "Reward share of premiums taken before the cell had a schedule. Since",
+              "`T036` the reserve lives in `CellRewards::reserve`, and opening that",
+              "account returns what is here to capital — it was never laid out over",
+              "any day, so no day could pay it. Zero from then on; the field stays",
+              "because the deployed cells carry it."
             ],
             "type": "u64"
           },
@@ -2356,7 +2735,12 @@ export type Pumpking = {
         "What the program checks is shape, not truth: a slot the cell has, and no",
         "more outliers than judgements. Which intervals were outliers is the",
         "aggregator's arithmetic over readings the chain never sees, made public as",
-        "`sensor_verdicts` and reproducible from the readings by anyone."
+        "`sensor_verdicts` and reproducible from the readings by anyone.",
+        "",
+        "The same instruction pays the day's reward budget (`FR-062`) by `weights`,",
+        "or returns it to capital when nobody earned it (`FR-064`). It is sent for",
+        "every day the cell writes, a day without coverage included, so that every",
+        "day's budget is settled the day it ends."
       ],
       "type": {
         "kind": "struct",
@@ -2389,6 +2773,20 @@ export type Pumpking = {
             "type": {
               "array": [
                 "u16",
+                32
+              ]
+            }
+          },
+          {
+            "name": "weights",
+            "docs": [
+              "Each slot's share of the day's rewards, in `REWARD_WEIGHT_UNIT` per",
+              "interval — see `instructions::rewards`. All zero on a day nobody",
+              "earned."
+            ],
+            "type": {
+              "array": [
+                "u32",
                 32
               ]
             }
@@ -2426,6 +2824,45 @@ export type Pumpking = {
                 32
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "dayRewarded",
+      "docs": [
+        "One day of a cell's rewards, settled."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "dayIndex",
+            "type": "u32"
+          },
+          {
+            "name": "earned",
+            "docs": [
+              "Per slot, what this day added to the slot's unclaimed balance."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                32
+              ]
+            }
+          },
+          {
+            "name": "returned",
+            "docs": [
+              "Back to capital: this day's budget if nobody earned it, the budget of",
+              "any day never written before it, and the dust of the division."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3033,6 +3470,57 @@ export type Pumpking = {
       }
     },
     {
+      "name": "rewardClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rewardsOpened",
+      "docs": [
+        "A cell's schedule opened — and the reserve it had before there was one,",
+        "returned to capital."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "firstDay",
+            "type": "u32"
+          },
+          {
+            "name": "legacyToCapital",
+            "docs": [
+              "`CellState::rewards_reserve` from before `T036`, now capital."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "sensor",
       "docs": [
         "PDA `[\"sensor\", sensor_key]`, where the seed is the ed25519 key the sensor",
@@ -3163,6 +3651,13 @@ export type Pumpking = {
             "name": "burnt",
             "docs": [
               "Voting and thawing stake together, now capital."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "forfeitedRewards",
+            "docs": [
+              "Rewards earned and not claimed, now capital as well."
             ],
             "type": "u64"
           }
@@ -3339,6 +3834,33 @@ export type Pumpking = {
       ],
       "type": "u16",
       "value": "14"
+    },
+    {
+      "name": "rewardScheduleDays",
+      "docs": [
+        "Days a cell's reward schedule reaches ahead of the first day it has not",
+        "paid — `FR-062`. A policy's reward share is laid out over the days of its",
+        "window, so the window has to end inside this horizon: a 90-day cover can be",
+        "bought up to about 420 days before it starts, which is a season ahead with",
+        "room to spare. Past it `issue_policy` refuses with `WindowTooFarAhead`",
+        "rather than letting a far day land on the slot of a near one."
+      ],
+      "type": "u16",
+      "value": "512"
+    },
+    {
+      "name": "rewardWeightUnit",
+      "docs": [
+        "What one judged interval is worth in the weights the aggregator sends with",
+        "a day — `FR-062`. Each interval hands this out between its votes, a vote's",
+        "part equally between the vote's accepted sensors, and a slot's weight is the",
+        "sum over the day. The program divides the day's budget in proportion to the",
+        "weights, so the unit sets the precision of the split and nothing else.",
+        "",
+        "Twinned in `@pumpking/shared` (`rewards.ts`)."
+      ],
+      "type": "u32",
+      "value": "1000000"
     }
   ]
 };

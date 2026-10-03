@@ -14,6 +14,7 @@ import {
   cellMedian,
   classifyDay,
   DayState,
+  dayWeights,
   encodeBase58,
   judgeInterval,
   merkleRoot,
@@ -403,34 +404,62 @@ export function closeDay(
   }
 }
 
+/** Where a judged sensor sits on chain, and whose vote it is. */
+export type JudgedSensor = { slot: number; operator: string }
+
 /**
- * A day's verdicts as the chain keeps them: per sensor slot, how many
- * intervals it was judged in and how many it was an outlier in — `FR-011`.
+ * A day's verdicts as the chain keeps them — per sensor slot, how many
+ * intervals it was judged in and how many it was an outlier in (`FR-011`) —
+ * and its share of the day's rewards (`FR-062`): one vote per operator in each
+ * interval, a vote's part equally between its accepted sensors
+ * (`dayWeights`).
  *
- * Null when nobody was judged: a day without a single interval with a value
- * adds nothing to anybody's record, and the transaction is smaller without it.
+ * Sent for **every** day, nobody judged included: the same instruction pays
+ * the day's reward budget or returns it to capital, and a day it was not sent
+ * for is returned only when a later day is. `contributors` is the day's own
+ * mask — zero on a day without coverage — and a weight outside it is dropped,
+ * because the program refuses one: a day that is not a measurement pays
+ * nobody, whatever its intervals were.
  */
 export function dayReputation(
   intervals: readonly ClosedInterval[],
-  slotOf: ReadonlyMap<string, number>,
-): DayReputation | null {
+  sensors: ReadonlyMap<string, JudgedSensor>,
+  contributors: number,
+): DayReputation {
   const first = intervals[0]
-  if (first === undefined) return null
+  if (first === undefined) throw new RangeError('a day has at least one interval')
   const judged = new Array<number>(SENSOR_SLOTS).fill(0)
   const outliers = new Array<number>(SENSOR_SLOTS).fill(0)
-  let any = false
+  const slotOf = (sensor: string): number => {
+    const slot = sensors.get(sensor)?.slot
+    if (slot === undefined) throw new RangeError(`sensor ${sensor} was judged without a slot`)
+    return slot
+  }
   for (const interval of intervals) {
     for (const verdict of interval.verdicts) {
-      const slot = slotOf.get(verdict.sensor)
-      if (slot === undefined) {
-        throw new RangeError(`sensor ${verdict.sensor} was judged without a slot`)
-      }
+      const slot = slotOf(verdict.sensor)
       judged[slot] = (judged[slot] ?? 0) + 1
       if (verdict.outlier) outliers[slot] = (outliers[slot] ?? 0) + 1
-      any = true
     }
   }
-  return any ? { cellId: first.cellId, dayIndex: first.dayIndex, judged, outliers } : null
+
+  const weights = new Array<number>(SENSOR_SLOTS).fill(0)
+  const earned = dayWeights(
+    intervals.map((interval) => interval.verdicts),
+    (sensor) => sensors.get(sensor)?.operator,
+  )
+  for (const [sensor, weight] of earned) {
+    const slot = slotOf(sensor)
+    if ((contributors & (1 << slot)) === 0) continue
+    const total = (weights[slot] ?? 0) + weight
+    if (total > 0xffff_ffff) {
+      // 4294 whole intervals in a day: a clock no pool here runs.
+      throw new RangeError(`slot ${slot} earned a weight of ${total}, past a u32`)
+    }
+    weights[slot] = total
+  }
+
+  return { cellId: first.cellId, dayIndex: first.dayIndex, judged, outliers, weights }
 }
 
 /** The `cell_days` row of a record, keeping a signature it already carries. */
@@ -559,18 +588,21 @@ export async function closeCellDay(
 
   const programId = deps.programId === undefined ? {} : { programId: deps.programId }
   const instruction = submitDayRecordInstruction({ aggregator: deps.aggregator, record, ...programId })
-  // The day's verdicts ride in the same transaction, after the day: the
-  // program takes them only for the day the cell recorded last, so the two
-  // land together or not at all (`T035`).
-  const slotOf = new Map(readings.map((reading) => [reading.sensorPubkey, reading.slotInCell]))
-  const reputation = dayReputation(intervals, slotOf)
-  const txSignature =
-    reputation === null
-      ? await deps.submitter.submit(instruction)
-      : await deps.submitter.submit(
-          instruction,
-          submitDayReputationInstruction({ aggregator: deps.aggregator, reputation, ...programId }),
-        )
+  // The day's verdicts and rewards ride in the same transaction, after the
+  // day: the program takes them only for the day the cell recorded last, so
+  // the two land together or not at all (`T035`). Every day, so that every
+  // day's reward budget is paid or returned the day it ends (`T036`).
+  const sensors = new Map(
+    readings.map((reading) => [
+      reading.sensorPubkey,
+      { slot: reading.slotInCell, operator: reading.operator },
+    ]),
+  )
+  const reputation = dayReputation(intervals, sensors, record.contributors)
+  const txSignature = await deps.submitter.submit(
+    instruction,
+    submitDayReputationInstruction({ aggregator: deps.aggregator, reputation, ...programId }),
+  )
   await deps.store.markDaySubmitted(cellId, dayIndex, txSignature)
 
   return { cellId, dayIndex, status: 'submitted', txSignature }

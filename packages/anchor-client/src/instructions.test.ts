@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { PUMPKING_IDL } from './idl/idl.ts'
 import {
   buildInstruction,
+  claimRewardInstruction,
   claimUnclaimedPayoutInstruction,
   closePolicyInstruction,
   DayState,
@@ -27,6 +28,7 @@ import {
   policyPda,
   poolPda,
   reputationPda,
+  rewardsPda,
   sensorPda,
   stakeVaultPda,
   vaultPda,
@@ -767,38 +769,77 @@ describe('submitDayReputationInstruction', () => {
   const cellId = 0x0871e701b3ffffffn
   const judged = Array.from({ length: SENSOR_SLOTS }, (_, slot) => (slot < 3 ? 24 : 0))
   const outliers = Array.from({ length: SENSOR_SLOTS }, (_, slot) => (slot === 2 ? 9 : 0))
+  // Weights past 2^31: a u32 that a signed 32-bit write would turn negative.
+  const weights = Array.from({ length: SENSOR_SLOTS }, (_, slot) =>
+    slot === 0 ? 4_000_000_000 : slot < 3 ? 12_000_000 : 0,
+  )
 
-  it('round-trips both arrays and derives the cell and its reputation from the IDL', () => {
+  it('round-trips the three arrays and derives every account from the IDL', () => {
     const instruction = submitDayReputationInstruction({
       aggregator,
-      reputation: { cellId, dayIndex: 41, judged, outliers },
+      reputation: { cellId, dayIndex: 41, judged, outliers, weights },
       programId,
     })
     const { name, data } = decode(instruction.data)
     expect(name).toBe('submitDayReputation')
-    const params = data.params as { dayIndex: number; judged: number[]; outliers: number[] }
+    const params = data.params as {
+      dayIndex: number
+      judged: number[]
+      outliers: number[]
+      weights: number[]
+    }
     expect(params.dayIndex).toBe(41)
     expect(params.judged).toEqual(judged)
     expect(params.outliers).toEqual(outliers)
+    expect(params.weights).toEqual(weights)
 
-    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+    const keys = instruction.keys
+    expect(keys.map((meta) => meta.pubkey.toBase58())).toEqual([
       aggregator.toBase58(),
       poolPda(programId).address.toBase58(),
       cellPda(cellId, programId).address.toBase58(),
-      // The IDL's own seeds agree with the hand-written `reputationPda`.
+      // The IDL's own seeds agree with the hand-written PDAs.
       reputationPda(cellId, programId).address.toBase58(),
+      rewardsPda(cellId, programId).address.toBase58(),
       SYSTEM_PROGRAM_ID.toBase58(),
+    ])
+    // The pool takes back what a day without coverage returns.
+    expect(keys.filter((meta) => meta.isWritable).map((meta) => meta.pubkey.toBase58())).toEqual([
+      aggregator.toBase58(),
+      poolPda(programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      reputationPda(cellId, programId).address.toBase58(),
+      rewardsPda(cellId, programId).address.toBase58(),
     ])
   })
 
   it('refuses arrays the program could not take', () => {
-    const input = (j: number[], o: number[]) => ({
+    const input = (j: number[], o: number[], w: number[] = weights) => ({
       aggregator,
-      reputation: { cellId, dayIndex: 1, judged: j, outliers: o },
+      reputation: { cellId, dayIndex: 1, judged: j, outliers: o, weights: w },
     })
-    expect(() => submitDayReputationInstruction(input(judged.slice(1), outliers))).toThrow(RangeError)
+    expect(() => submitDayReputationInstruction(input(judged.slice(1), outliers))).toThrow(
+      RangeError,
+    )
     expect(() =>
-      submitDayReputationInstruction(input(judged.map(() => 65_536), outliers)),
+      submitDayReputationInstruction(
+        input(
+          judged.map(() => 65_536),
+          outliers,
+        ),
+      ),
+    ).toThrow(RangeError)
+    expect(() => submitDayReputationInstruction(input(judged, outliers, weights.slice(1)))).toThrow(
+      RangeError,
+    )
+    expect(() =>
+      submitDayReputationInstruction(
+        input(
+          judged,
+          outliers,
+          weights.map(() => 2 ** 32),
+        ),
+      ),
     ).toThrow(RangeError)
   })
 })
@@ -817,6 +858,7 @@ describe('excludeSensorInstruction', () => {
       pool.toBase58(),
       sensorPda(sensorKey, programId).address.toBase58(),
       reputationPda(cellId, programId).address.toBase58(),
+      rewardsPda(cellId, programId).address.toBase58(),
       assetMint.toBase58(),
       stakeVaultPda(pool, programId).address.toBase58(),
       vaultPda(pool, programId).address.toBase58(),
@@ -840,5 +882,37 @@ describe('reinstateSensorInstruction', () => {
       sensorPda(sensorKey, programId).address.toBase58(),
       reputationPda(cellId, programId).address.toBase58(),
     ])
+  })
+})
+
+describe('claimRewardInstruction', () => {
+  it('pays from the capital vault to the operator, signed by anyone', () => {
+    const cellId = 0x0871e701b3ffffffn
+    const caller = key(14)
+    const sensorKey = key(12)
+    const operatorTokens = key(15)
+    const instruction = claimRewardInstruction({
+      caller,
+      sensorKey,
+      cellId,
+      assetMint,
+      operatorTokens,
+      programId,
+    })
+    expect(decode(instruction.data).name).toBe('claimReward')
+    const pool = poolPda(programId).address
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      caller.toBase58(),
+      pool.toBase58(),
+      sensorPda(sensorKey, programId).address.toBase58(),
+      rewardsPda(cellId, programId).address.toBase58(),
+      assetMint.toBase58(),
+      vaultPda(pool, programId).address.toBase58(),
+      operatorTokens.toBase58(),
+      TOKEN_PROGRAM_ID.toBase58(),
+    ])
+    expect(
+      instruction.keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58()),
+    ).toEqual([caller.toBase58()])
   })
 })

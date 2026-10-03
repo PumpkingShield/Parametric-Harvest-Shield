@@ -4,10 +4,11 @@ use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, Tran
 
 use crate::errors::PumpkingError;
 use crate::index::spell_in_window;
+use crate::instructions::rewards::rewards_error;
 use crate::premium::{dry_day_frequency_bps, premium_for, premium_rate_bps};
 use crate::state::{
-    CellState, Policy, PolicyState, Pool, BPS_DENOMINATOR, CELL_SEED, MAX_COVERAGE_DAYS,
-    POLICY_SEED, POOL_SEED,
+    CellRewards, CellState, Policy, PolicyState, Pool, BPS_DENOMINATOR, CELL_SEED,
+    MAX_COVERAGE_DAYS, POLICY_SEED, POOL_SEED, REWARDS_SEED,
 };
 
 /// Selling cover — the point where the pool takes on risk it cannot refuse
@@ -181,6 +182,16 @@ pub struct IssuePolicy<'info> {
     )]
     pub policy: Account<'info, Policy>,
 
+    /// `FR-062`: the reward share is laid out over the window's days here.
+    /// Opened by the aggregator with the cell's days, so a cell the network
+    /// publishes for has one; the window has to end inside its horizon.
+    #[account(
+        mut,
+        seeds = [REWARDS_SEED, params.cell_id.to_le_bytes().as_ref()],
+        bump = rewards.load()?.bump,
+    )]
+    pub rewards: AccountLoader<'info, CellRewards>,
+
     #[account(address = pool.asset_mint)]
     pub asset_mint: InterfaceAccount<'info, Mint>,
 
@@ -317,12 +328,15 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
         .reserved
         .checked_add(params.payout)
         .ok_or(PumpkingError::MathOverflow)?;
-    // FR-062: the reserve belongs to the cell whose policy paid for it, and
-    // waits there for the interval that earns it.
-    cell.rewards_reserve = cell
-        .rewards_reserve
-        .checked_add(to_rewards)
-        .ok_or(PumpkingError::MathOverflow)?;
+    // FR-062: the reserve belongs to the cell whose policy paid for it, laid
+    // out evenly over the days of the window, each of which pays its own part
+    // to the sensors that measured it. A window past the schedule's horizon is
+    // refused here (`WindowTooFarAhead`) — the transfer above reverts with it.
+    ctx.accounts
+        .rewards
+        .load_mut()?
+        .schedule_window(to_rewards, params.window_start_day, params.window_end_day)
+        .map_err(rewards_error)?;
 
     ctx.accounts.policy.set_inner(Policy {
         owner: ctx.accounts.owner.key(),
@@ -645,10 +659,9 @@ pub fn close_policy(ctx: Context<ClosePolicy>) -> Result<()> {
         .reserved
         .checked_sub(payout)
         .ok_or(PumpkingError::MathOverflow)?;
-    // `FR-064` returns a cell's unspent reward reserve to capital when its
-    // last policy ends; `cell.reserved == 0` is that moment. The sweep lands
-    // with the reward lifecycle in `T036`, which is what knows how much of
-    // the reserve the intervals actually spent.
+    // `FR-064` has nothing left to do here: every day of the window has
+    // already paid its reward budget or returned it to capital, the day it
+    // was written — and `check_closure` has just required all of them.
 
     let policy = &mut ctx.accounts.policy;
     policy.state = PolicyState::ClosedNoEvent;

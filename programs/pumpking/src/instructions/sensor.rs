@@ -39,10 +39,11 @@ use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, Tran
 
 use crate::errors::PumpkingError;
 use crate::h3;
+use crate::instructions::rewards::rewards_error;
 use crate::outlier::breaches_outlier_share;
 use crate::state::{
-    outlier_window, CellReputation, CellState, Pool, Sensor, CELL_SEED, GRID_RESOLUTION,
-    MAX_SENSORS_PER_CELL, POOL_SEED, REPUTATION_SEED, SENSOR_SEED,
+    outlier_window, CellReputation, CellRewards, CellState, Pool, Sensor, CELL_SEED,
+    GRID_RESOLUTION, MAX_SENSORS_PER_CELL, POOL_SEED, REPUTATION_SEED, REWARDS_SEED, SENSOR_SEED,
 };
 
 #[event]
@@ -74,6 +75,8 @@ pub struct SensorExcludedForOutliers {
     pub outliers: u32,
     /// Voting and thawing stake together, now capital.
     pub burnt: u64,
+    /// Rewards earned and not claimed, now capital as well.
+    pub forfeited_rewards: u64,
 }
 
 #[event]
@@ -464,6 +467,15 @@ pub struct ExcludeSensor<'info> {
     )]
     pub reputation: AccountLoader<'info, CellReputation>,
 
+    /// What the sensor earned and had not claimed is forfeited with the
+    /// stake. It already sits in the capital vault, so only the books move.
+    #[account(
+        mut,
+        seeds = [REWARDS_SEED, sensor.cell_id.to_le_bytes().as_ref()],
+        bump = rewards.load()?.bump,
+    )]
+    pub rewards: AccountLoader<'info, CellRewards>,
+
     #[account(address = pool.asset_mint)]
     pub asset_mint: InterfaceAccount<'info, Mint>,
 
@@ -518,12 +530,22 @@ pub fn exclude_sensor(ctx: Context<ExcludeSensor>) -> Result<()> {
         )?;
     }
 
+    // Unclaimed rewards go the same way. They are in the capital vault
+    // already, set apart only by `CellRewards::reserve`.
+    let forfeited = ctx
+        .accounts
+        .rewards
+        .load_mut()?
+        .take_accrued(ctx.accounts.sensor.slot_in_cell)
+        .map_err(rewards_error)?;
+
     // Capital grows and the shares do not: the burn is the depositors' to
     // keep, which is what makes collusion cost the colluders.
     let pool = &mut ctx.accounts.pool;
     pool.capital_total = pool
         .capital_total
         .checked_add(burnt)
+        .and_then(|total| total.checked_add(forfeited))
         .ok_or(PumpkingError::MathOverflow)?;
 
     let sensor = &mut ctx.accounts.sensor;
@@ -544,6 +566,7 @@ pub fn exclude_sensor(ctx: Context<ExcludeSensor>) -> Result<()> {
         judged,
         outliers,
         burnt,
+        forfeited_rewards: forfeited,
     });
     Ok(())
 }

@@ -1,9 +1,10 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::PumpkingError;
+use crate::instructions::rewards::{check_day_weights, pay_cell_day};
 use crate::state::{
-    CellReputation, CellState, Pool, ReputationError, CELL_SEED, MAX_SENSORS_PER_CELL, POOL_SEED,
-    REPUTATION_SEED,
+    CellReputation, CellRewards, CellState, Pool, ReputationError, CELL_SEED, MAX_SENSORS_PER_CELL,
+    POOL_SEED, REPUTATION_SEED, REWARDS_SEED,
 };
 
 /// One day of a cell's verdicts, written by the aggregator — `FR-011`.
@@ -19,6 +20,11 @@ use crate::state::{
 /// more outliers than judgements. Which intervals were outliers is the
 /// aggregator's arithmetic over readings the chain never sees, made public as
 /// `sensor_verdicts` and reproducible from the readings by anyone.
+///
+/// The same instruction pays the day's reward budget (`FR-062`) by `weights`,
+/// or returns it to capital when nobody earned it (`FR-064`). It is sent for
+/// every day the cell writes, a day without coverage included, so that every
+/// day's budget is settled the day it ends.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct DayReputationParams {
     pub cell_id: u64,
@@ -27,6 +33,10 @@ pub struct DayReputationParams {
     pub judged: [u16; MAX_SENSORS_PER_CELL as usize],
     /// Of those, the ones the slot was an outlier in.
     pub outliers: [u16; MAX_SENSORS_PER_CELL as usize],
+    /// Each slot's share of the day's rewards, in `REWARD_WEIGHT_UNIT` per
+    /// interval — see `instructions::rewards`. All zero on a day nobody
+    /// earned.
+    pub weights: [u32; MAX_SENSORS_PER_CELL as usize],
 }
 
 #[event]
@@ -61,12 +71,15 @@ pub struct SubmitDayReputation<'info> {
     #[account(mut, address = pool.aggregator @ PumpkingError::NotTheAggregator)]
     pub aggregator: Signer<'info>,
 
-    #[account(seeds = [POOL_SEED], bump = pool.bump)]
+    /// Mutable for the budget a day returns to capital — `FR-064`.
+    #[account(mut, seeds = [POOL_SEED], bump = pool.bump)]
     pub pool: Account<'info, Pool>,
 
     // Boxed: the day log and the ring together overrun the 4 KiB frame
     // `try_accounts` is given, as the cell alone does beside a policy.
+    // Mutable only for the day the schedule opens and takes the legacy reserve.
     #[account(
+        mut,
         seeds = [CELL_SEED, params.cell_id.to_le_bytes().as_ref()],
         bump = cell.bump,
     )]
@@ -81,6 +94,17 @@ pub struct SubmitDayReputation<'info> {
     )]
     pub reputation: AccountLoader<'info, CellReputation>,
 
+    /// Opened here, by the aggregator, the first day it writes for the cell
+    /// after `T036`; `issue_policy` only requires it.
+    #[account(
+        init_if_needed,
+        payer = aggregator,
+        space = 8 + CellRewards::SPACE,
+        seeds = [REWARDS_SEED, params.cell_id.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub rewards: AccountLoader<'info, CellRewards>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -90,6 +114,18 @@ pub fn submit_day_reputation(
     params: DayReputationParams,
 ) -> Result<()> {
     check_day_reputation(&params, &ctx.accounts.cell)?;
+    // `check_day_reputation` has pinned the day to the cell's last one.
+    let contributors = ctx
+        .accounts
+        .cell
+        .contributors_of(params.day_index)
+        .unwrap_or(0);
+    let weights = check_day_weights(
+        &params.weights,
+        &params.judged,
+        &params.outliers,
+        contributors,
+    )?;
 
     // A loader opened by `init_if_needed` this instruction has no
     // discriminator yet and only `load_init` takes it; one that existed only
@@ -115,7 +151,22 @@ pub fn submit_day_reputation(
         judged: params.judged,
         outliers: params.outliers,
     });
-    Ok(())
+    drop(reputation);
+
+    let loader = &ctx.accounts.rewards;
+    let (mut rewards, fresh) = match loader.load_mut() {
+        Ok(existing) => (existing, false),
+        Err(_) => (loader.load_init()?, true),
+    };
+    pay_cell_day(
+        &mut ctx.accounts.pool,
+        &mut ctx.accounts.cell,
+        &mut rewards,
+        fresh,
+        ctx.bumps.rewards,
+        params.day_index,
+        &weights,
+    )
 }
 
 #[cfg(test)]
@@ -165,6 +216,7 @@ mod tests {
             day_index,
             judged,
             outliers,
+            weights: [0; MAX_SENSORS_PER_CELL as usize],
         }
     }
 

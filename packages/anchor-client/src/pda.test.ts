@@ -17,6 +17,8 @@ import {
   policyPda,
   poolPda,
   REPUTATION_SEED,
+  REWARDS_SEED,
+  rewardsPda,
   SENSOR_SEED,
   STAKE_VAULT_SEED,
   sensorPda,
@@ -132,6 +134,7 @@ describe('agreement with the IDL', () => {
     POLICY_SEED,
     CAPITAL_SEED,
     REPUTATION_SEED,
+    REWARDS_SEED,
   ]
 
   it('declares every literal seed the program uses', () => {
@@ -219,7 +222,7 @@ describe('agreement with the IDL', () => {
    * seeded by a `u64` out of the terms and `policy` by the owner and a `u64`
    * nonce. Until this instruction existed both were only frozen vectors.
    */
-  it('derives the cell and the policy the way issue_policy declares them', () => {
+  it('derives the cell, the policy and the reward schedule the way issue_policy declares them', () => {
     const nonce = 7n
     const { keys } = issuePolicyInstruction({
       owner,
@@ -241,6 +244,9 @@ describe('agreement with the IDL', () => {
     )
     expect(
       addressAt('issuePolicy', 'policy', keys).equals(policyPda(owner, nonce, programId).address),
+    ).toBe(true)
+    expect(
+      addressAt('issuePolicy', 'rewards', keys).equals(rewardsPda(cellId, programId).address),
     ).toBe(true)
   })
 

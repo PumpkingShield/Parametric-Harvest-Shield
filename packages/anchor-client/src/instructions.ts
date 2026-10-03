@@ -5,6 +5,7 @@ import {
   policyPda,
   poolPda,
   reputationPda,
+  rewardsPda,
   sensorPda,
   stakeVaultPda,
   vaultPda,
@@ -801,6 +802,12 @@ export interface DayReputation {
   judged: readonly number[]
   /** Of those, the ones the slot was an outlier in. */
   outliers: readonly number[]
+  /**
+   * Each slot's share of the day's reward budget — `FR-062`, in
+   * `REWARD_WEIGHT_UNIT` per interval (`dayWeights` in `@pumpking/shared`).
+   * All zero on a day nobody earned, which returns the budget to capital.
+   */
+  weights: readonly number[]
 }
 
 export interface SubmitDayReputationInput {
@@ -811,9 +818,11 @@ export interface SubmitDayReputationInput {
 }
 
 /**
- * Writes a day of the cell's verdicts — `FR-011`. Goes in the same
- * transaction as `submitDayRecordInstruction`, after it: the program accepts
- * it only for the day the cell recorded last.
+ * Writes a day of the cell's verdicts — `FR-011` — and pays the day's reward
+ * budget by its weights — `FR-062`, `FR-064`. Goes in the same transaction as
+ * `submitDayRecordInstruction`, after it, for every day: the program accepts
+ * it only for the day the cell recorded last, and the first one opens the
+ * cell's reward schedule.
  */
 export function submitDayReputationInstruction(
   input: SubmitDayReputationInput,
@@ -832,6 +841,16 @@ export function submitDayReputationInstruction(
       }
     }
   }
+  if (reputation.weights.length !== SENSOR_SLOTS) {
+    throw new RangeError(
+      `weights must have ${SENSOR_SLOTS} slots, got ${reputation.weights.length}`,
+    )
+  }
+  for (const weight of reputation.weights) {
+    if (!Number.isInteger(weight) || weight < 0 || weight > 0xffff_ffff) {
+      throw new RangeError(`weights holds ${weight}, which is not a u32`)
+    }
+  }
   return buildInstruction('submitDayReputation', {
     programId: input.programId ?? PROGRAM_ID,
     accounts: { aggregator: input.aggregator },
@@ -841,6 +860,7 @@ export function submitDayReputationInstruction(
         dayIndex: reputation.dayIndex,
         judged: [...reputation.judged],
         outliers: [...reputation.outliers],
+        weights: [...reputation.weights],
       },
     },
   })
@@ -879,6 +899,8 @@ export function excludeSensorInstruction(input: ExcludeSensorInput): Transaction
       // Both seeded by fields of the sensor account, which the IDL cannot follow.
       sensor: sensorPda(input.sensorKey, programId).address,
       reputation: reputationPda(input.cellId, programId).address,
+      // Unclaimed rewards are forfeited with the stake.
+      rewards: rewardsPda(input.cellId, programId).address,
       assetMint: input.assetMint,
       stakeVault: input.stakeVault ?? stakeVaultPda(pool, programId).address,
       vault: input.vault ?? vaultPda(pool, programId).address,
@@ -912,6 +934,50 @@ export function reinstateSensorInstruction(input: ReinstateSensorInput): Transac
       operator: input.operator,
       sensor: sensorPda(input.sensorKey, programId).address,
       reputation: reputationPda(input.cellId, programId).address,
+    },
+    args: {},
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* claim_reward                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface ClaimRewardInput {
+  /** Anybody: the destination is bound to the operator either way. */
+  caller: PublicKey
+  sensorKey: PublicKey
+  /** The sensor's cell — the reward schedule is seeded by it. */
+  cellId: bigint
+  /** Must equal `pool.asset_mint`. */
+  assetMint: PublicKey
+  /** A token account the sensor's operator holds the authority over. */
+  operatorTokens: PublicKey
+  /** Defaults to the pool's capital vault, where rewards wait (`FR-061`). */
+  vault?: PublicKey
+  tokenProgram?: PublicKey
+  programId?: PublicKey
+}
+
+/**
+ * Sends everything a sensor has earned to its operator — `FR-036`. An excluded
+ * sensor is refused with `SensorExcluded`; one with nothing earned with
+ * `NothingToClaim`.
+ */
+export function claimRewardInstruction(input: ClaimRewardInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  const pool = poolPda(programId).address
+  return buildInstruction('claimReward', {
+    programId,
+    accounts: {
+      caller: input.caller,
+      // Both seeded by fields of the sensor account, which the IDL cannot follow.
+      sensor: sensorPda(input.sensorKey, programId).address,
+      rewards: rewardsPda(input.cellId, programId).address,
+      assetMint: input.assetMint,
+      vault: input.vault ?? vaultPda(pool, programId).address,
+      operatorTokens: input.operatorTokens,
+      tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
     },
     args: {},
   })

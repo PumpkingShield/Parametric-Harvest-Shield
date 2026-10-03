@@ -84,6 +84,31 @@ pub const OUTLIER_MIN_JUDGED: u16 = 72;
 /// older than it is a day no exclusion may count.
 pub const REPUTATION_DAYS: usize = OUTLIER_WINDOW_DAYS as usize;
 
+/// Days a cell's reward schedule reaches ahead of the first day it has not
+/// paid — `FR-062`. A policy's reward share is laid out over the days of its
+/// window, so the window has to end inside this horizon: a 90-day cover can be
+/// bought up to about 420 days before it starts, which is a season ahead with
+/// room to spare. Past it `issue_policy` refuses with `WindowTooFarAhead`
+/// rather than letting a far day land on the slot of a near one.
+#[constant]
+pub const REWARD_SCHEDULE_DAYS: u16 = 512;
+
+/// What one judged interval is worth in the weights the aggregator sends with
+/// a day — `FR-062`. Each interval hands this out between its votes, a vote's
+/// part equally between the vote's accepted sensors, and a slot's weight is the
+/// sum over the day. The program divides the day's budget in proportion to the
+/// weights, so the unit sets the precision of the split and nothing else.
+///
+/// Twinned in `@pumpking/shared` (`rewards.ts`).
+#[constant]
+pub const REWARD_WEIGHT_UNIT: u32 = 1000000;
+
+/// `REWARD_SCHEDULE_DAYS` as an index width.
+pub const SCHEDULE_LEN: usize = REWARD_SCHEDULE_DAYS as usize;
+
+/// A cell's reward schedule — `FR-062`.
+pub const REWARDS_SEED: &[u8] = b"rewards";
+
 /* -------------------------------------------------------------------------- */
 /* Pool                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -203,8 +228,11 @@ pub struct CellState {
     /// Payout committed to policies on this cell — checked against
     /// `Pool::cell_exposure_limit`.
     pub reserved: u64,
-    /// `FR-062`: the reward reserve belongs to the cell, fed by the premiums
-    /// of its own policies and split between the sensors that voted.
+    /// Reward share of premiums taken before the cell had a schedule. Since
+    /// `T036` the reserve lives in `CellRewards::reserve`, and opening that
+    /// account returns what is here to capital — it was never laid out over
+    /// any day, so no day could pay it. Zero from then on; the field stays
+    /// because the deployed cells carry it.
     pub rewards_reserve: u64,
     /// Oldest day the ring buffer still holds.
     pub first_day_index: u32,
@@ -529,6 +557,199 @@ impl CellReputation {
 pub fn outlier_window(today: u32) -> Option<(u32, u32)> {
     let to = today.checked_sub(1)?;
     Some((today.saturating_sub(u32::from(OUTLIER_WINDOW_DAYS)), to))
+}
+
+/* -------------------------------------------------------------------------- */
+/* CellRewards                                                                */
+/* -------------------------------------------------------------------------- */
+
+/// Why the reward schedule refuses a change.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RewardsError {
+    /// A day at or before one already paid or returned.
+    NotNewer,
+    /// A window that starts before the first unpaid day — its early days
+    /// would never be paid.
+    BeforeSchedule,
+    /// A window that ends past the schedule's horizon — its late days would
+    /// land on the slots of near ones.
+    TooFarAhead,
+    Overflow,
+}
+
+/// What paying one day did to the money.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DayPayout {
+    /// Handed to the slots, now theirs to claim.
+    pub distributed: u64,
+    /// Back to capital: the budget of days without coverage — the ones
+    /// skipped as well as the one paid, if nobody earned it — and the dust of
+    /// the division — `FR-064`.
+    pub returned: u64,
+}
+
+/// PDA `["rewards", cell_id]` — where the reward share of a cell's premiums
+/// waits for the days that earn it, and where what they earned waits to be
+/// claimed — `FR-036`, `FR-062`, `FR-064`.
+///
+/// **A schedule, not a pot.** `issue_policy` lays a policy's reward share out
+/// evenly over the days of its window; each day, in the transaction that
+/// writes it, hands its budget to the slots that earned it or, without
+/// coverage, back to capital. So a sensor is paid for the day it worked
+/// (`FR-061`), a cell with no policy earns nothing because its schedule is
+/// zero (`FR-063`), and nothing waits for a policy to close.
+///
+/// `next_day` is the cursor: every day before it is settled one way or the
+/// other. A day the aggregator never wrote is a day without coverage, as in
+/// the day log, so paying any later day returns the skipped days' budget too.
+///
+/// Zero-copy for the reason `CellReputation` is: four kilobytes of schedule
+/// do not fit in the `try_accounts` frame. No padding, so the bytes are Borsh.
+#[account(zero_copy)]
+pub struct CellRewards {
+    pub cell_id: u64,
+    /// Reward money of this cell in the capital vault: scheduled plus earned
+    /// and not yet claimed. Never part of `capital_total` (`FR-061`).
+    pub reserve: u64,
+    /// The first day not yet paid or returned.
+    pub next_day: u32,
+    pub bump: u8,
+    pub padding: [u8; 3],
+    /// Earned and not yet claimed, per sensor slot.
+    pub accrued: [u64; MAX_SENSORS_PER_CELL as usize],
+    /// Budget of each day in `[next_day, next_day + REWARD_SCHEDULE_DAYS)`,
+    /// indexed by `day % REWARD_SCHEDULE_DAYS`.
+    pub schedule: [u64; SCHEDULE_LEN],
+}
+
+impl CellRewards {
+    /// Bytes after the discriminator.
+    pub const SPACE: usize = std::mem::size_of::<Self>();
+
+    fn slot(day: u32) -> usize {
+        day as usize % SCHEDULE_LEN
+    }
+
+    /// The budget of one day, or zero for a day outside the schedule.
+    pub fn budget_of(&self, day: u32) -> u64 {
+        let ahead = day.checked_sub(self.next_day);
+        match ahead {
+            Some(ahead) if (ahead as usize) < SCHEDULE_LEN => self.schedule[Self::slot(day)],
+            _ => 0,
+        }
+    }
+
+    /// Lays `amount` out evenly over `[start, end]` — `FR-062`.
+    ///
+    /// The remainder of the division goes one unit each to the first days, so
+    /// the schedule holds exactly what the premium put aside.
+    pub fn schedule_window(
+        &mut self,
+        amount: u64,
+        start: u32,
+        end: u32,
+    ) -> std::result::Result<(), RewardsError> {
+        if start < self.next_day {
+            return Err(RewardsError::BeforeSchedule);
+        }
+        let horizon = u64::from(self.next_day) + SCHEDULE_LEN as u64;
+        if end < start || u64::from(end) >= horizon {
+            return Err(RewardsError::TooFarAhead);
+        }
+        let days = u64::from(end - start) + 1;
+        let base = amount / days;
+        let extra = amount % days;
+        for (i, day) in (start..=end).enumerate() {
+            let share = base + u64::from((i as u64) < extra);
+            let slot = &mut self.schedule[Self::slot(day)];
+            *slot = slot.checked_add(share).ok_or(RewardsError::Overflow)?;
+        }
+        self.reserve = self
+            .reserve
+            .checked_add(amount)
+            .ok_or(RewardsError::Overflow)?;
+        Ok(())
+    }
+
+    /// Pays day `day` in proportion to `weights` and returns every skipped
+    /// day's budget — `FR-062`, `FR-064`.
+    ///
+    /// All-zero weights are a day nobody earned: its budget goes back to
+    /// capital with the skipped ones. The division rounds each slot down, and
+    /// the dust goes to capital, the direction every rounding here takes.
+    pub fn pay_day(
+        &mut self,
+        day: u32,
+        weights: &[u64; MAX_SENSORS_PER_CELL as usize],
+    ) -> std::result::Result<DayPayout, RewardsError> {
+        if day < self.next_day {
+            return Err(RewardsError::NotNewer);
+        }
+
+        let mut returned = 0u64;
+        let skipped = day - self.next_day;
+        if skipped as usize >= SCHEDULE_LEN {
+            // Every scheduled day is behind `day`: the whole schedule goes.
+            for budget in &mut self.schedule {
+                returned = returned
+                    .checked_add(*budget)
+                    .ok_or(RewardsError::Overflow)?;
+                *budget = 0;
+            }
+        } else {
+            for past in self.next_day..day {
+                let budget = &mut self.schedule[Self::slot(past)];
+                returned = returned
+                    .checked_add(*budget)
+                    .ok_or(RewardsError::Overflow)?;
+                *budget = 0;
+            }
+        }
+
+        // Zero after a sweep of the whole schedule, which is right: a day that
+        // far past the cursor was never inside the horizon to be scheduled.
+        let budget = std::mem::take(&mut self.schedule[Self::slot(day)]);
+
+        let total: u128 = weights.iter().map(|w| u128::from(*w)).sum();
+        let mut distributed = 0u64;
+        if total > 0 {
+            for (accrued, weight) in self.accrued.iter_mut().zip(weights) {
+                // At most `budget`, so the narrowing cannot fail.
+                let share = (u128::from(budget) * u128::from(*weight) / total) as u64;
+                *accrued = accrued.checked_add(share).ok_or(RewardsError::Overflow)?;
+                distributed += share;
+            }
+        }
+        returned = returned
+            .checked_add(budget - distributed)
+            .ok_or(RewardsError::Overflow)?;
+
+        self.reserve = self
+            .reserve
+            .checked_sub(returned)
+            .ok_or(RewardsError::Overflow)?;
+        self.next_day = day + 1;
+        Ok(DayPayout {
+            distributed,
+            returned,
+        })
+    }
+
+    /// Takes everything a slot has earned, leaving it at zero.
+    pub fn take_accrued(&mut self, slot: u8) -> std::result::Result<u64, RewardsError> {
+        let slot = usize::from(slot);
+        if slot >= MAX_SENSORS_PER_CELL as usize {
+            return Ok(0);
+        }
+        let amount = std::mem::take(&mut self.accrued[slot]);
+        // `reserve` holds every slot's accrual, so a shortfall is a bug in the
+        // books, and it fails the transaction rather than hiding.
+        self.reserve = self
+            .reserve
+            .checked_sub(amount)
+            .ok_or(RewardsError::Overflow)?;
+        Ok(amount)
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -922,6 +1143,175 @@ mod tests {
         assert_eq!(rep.window(1, 0, 13), (24, 3));
     }
 
+    /* ------------------------------------------------------------ Rewards */
+
+    fn rewards(next_day: u32) -> CellRewards {
+        let mut rewards = <CellRewards as bytemuck::Zeroable>::zeroed();
+        rewards.next_day = next_day;
+        rewards
+    }
+
+    fn weights(pairs: &[(usize, u64)]) -> [u64; MAX_SENSORS_PER_CELL as usize] {
+        let mut out = [0u64; MAX_SENSORS_PER_CELL as usize];
+        for &(slot, w) in pairs {
+            out[slot] = w;
+        }
+        out
+    }
+
+    /// The books balance: the reserve is exactly the schedule plus what the
+    /// slots have earned.
+    fn assert_reserve_holds(rewards: &CellRewards) {
+        let scheduled: u64 = rewards.schedule.iter().sum();
+        let accrued: u64 = rewards.accrued.iter().sum();
+        assert_eq!(rewards.reserve, scheduled + accrued);
+    }
+
+    #[test]
+    fn a_window_holds_exactly_the_reward_share_with_the_remainder_up_front() {
+        let mut r = rewards(10);
+        r.schedule_window(1_003, 20, 29).unwrap();
+        assert_eq!(r.budget_of(20), 101);
+        assert_eq!(r.budget_of(22), 101);
+        assert_eq!(r.budget_of(23), 100);
+        assert_eq!(r.budget_of(29), 100);
+        assert_eq!(r.budget_of(30), 0);
+        assert_eq!(r.reserve, 1_003);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn overlapping_windows_add_up_day_by_day() {
+        let mut r = rewards(0);
+        r.schedule_window(100, 5, 9).unwrap();
+        r.schedule_window(30, 8, 10).unwrap();
+        assert_eq!(r.budget_of(7), 20);
+        assert_eq!(r.budget_of(8), 30);
+        assert_eq!(r.budget_of(10), 10);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn a_window_has_to_end_inside_the_horizon() {
+        let mut r = rewards(100);
+        let last = 100 + u32::from(REWARD_SCHEDULE_DAYS) - 1;
+        assert!(r.schedule_window(90, last - 89, last).is_ok());
+        assert_eq!(
+            r.schedule_window(90, last - 88, last + 1),
+            Err(RewardsError::TooFarAhead)
+        );
+        // Nothing was written by the refusal.
+        assert_eq!(r.reserve, 90);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn a_window_cannot_start_on_a_day_already_paid() {
+        let mut r = rewards(100);
+        assert_eq!(
+            r.schedule_window(10, 99, 105),
+            Err(RewardsError::BeforeSchedule)
+        );
+    }
+
+    #[test]
+    fn a_day_divides_its_budget_by_weight_and_dust_goes_to_capital() {
+        let mut r = rewards(0);
+        r.schedule_window(100, 0, 0).unwrap();
+        let paid = r.pay_day(0, &weights(&[(0, 1), (1, 1), (2, 1)])).unwrap();
+        assert_eq!(r.accrued[..3], [33, 33, 33]);
+        assert_eq!(
+            paid,
+            DayPayout {
+                distributed: 99,
+                returned: 1
+            }
+        );
+        assert_eq!(r.next_day, 1);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn a_day_nobody_earned_returns_its_budget() {
+        let mut r = rewards(0);
+        r.schedule_window(70, 0, 6).unwrap();
+        let paid = r.pay_day(0, &weights(&[])).unwrap();
+        assert_eq!(
+            paid,
+            DayPayout {
+                distributed: 0,
+                returned: 10
+            }
+        );
+        assert_eq!(r.reserve, 60);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn days_never_written_go_back_with_the_next_day_paid() {
+        let mut r = rewards(0);
+        r.schedule_window(70, 0, 6).unwrap();
+        r.pay_day(0, &weights(&[(0, 1)])).unwrap();
+        // Days 1..=3 never reached the chain.
+        let paid = r.pay_day(4, &weights(&[(0, 1)])).unwrap();
+        assert_eq!(
+            paid,
+            DayPayout {
+                distributed: 10,
+                returned: 30
+            }
+        );
+        assert_eq!(r.accrued[0], 20);
+        assert_eq!(r.budget_of(5), 10);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn a_gap_longer_than_the_schedule_returns_all_of_it() {
+        let mut r = rewards(0);
+        r.schedule_window(900, 400, 489).unwrap();
+        r.schedule_window(10, 1, 1).unwrap();
+        let paid = r.pay_day(5_000, &weights(&[(0, 1)])).unwrap();
+        assert_eq!(
+            paid,
+            DayPayout {
+                distributed: 0,
+                returned: 910
+            }
+        );
+        assert_eq!(r.reserve, 0);
+        assert_eq!(r.next_day, 5_001);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn a_day_is_paid_once() {
+        let mut r = rewards(0);
+        r.pay_day(3, &weights(&[])).unwrap();
+        assert_eq!(r.pay_day(3, &weights(&[])), Err(RewardsError::NotNewer));
+        assert_eq!(r.pay_day(2, &weights(&[])), Err(RewardsError::NotNewer));
+    }
+
+    #[test]
+    fn a_claim_takes_the_slot_to_zero() {
+        let mut r = rewards(0);
+        r.schedule_window(50, 0, 0).unwrap();
+        r.pay_day(0, &weights(&[(4, 3), (5, 2)])).unwrap();
+        assert_eq!(r.take_accrued(4), Ok(30));
+        assert_eq!(r.take_accrued(4), Ok(0));
+        assert_eq!(r.take_accrued(MAX_SENSORS_PER_CELL), Ok(0));
+        assert_eq!(r.reserve, 20);
+        assert_reserve_holds(&r);
+    }
+
+    #[test]
+    fn the_reward_schedule_has_no_padding() {
+        assert_eq!(
+            CellRewards::SPACE,
+            8 + 8 + 4 + 1 + 3 + 8 * MAX_SENSORS_PER_CELL as usize + 8 * SCHEDULE_LEN
+        );
+    }
+
     #[test]
     fn the_outlier_window_is_the_closed_days_before_today() {
         assert_eq!(outlier_window(0), None);
@@ -981,6 +1371,7 @@ mod tests {
             8 + Policy::INIT_SPACE,
             8 + CapitalPosition::INIT_SPACE,
             8 + CellReputation::SPACE,
+            8 + CellRewards::SPACE,
         ] {
             assert!(space <= MAX_INIT, "account of {space} bytes is too large");
         }

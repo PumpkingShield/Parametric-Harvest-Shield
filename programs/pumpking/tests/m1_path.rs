@@ -18,15 +18,23 @@
 //! діб — єдине місце, де `advance_window` чистить слоти, і воно не
 //! виконувалося жодного разу за весь шлях M1, бо той закінчується на
 //! тридцятій добі.
+//!
+//! **`T036`.** `issue_policy` вимагає графік винагород комірки, а його
+//! відкриває половина доби з винагородами (`submit_day_reputation`), тож
+//! історія пише обидві половини, як воркер. Доби вікна — лише журнал: на
+//! ланцюгу друга половина необов'язкова, і так грошові рядки шляху M1
+//! лишаються рядками M1. Розклад винагород живе в `tests/rewards.rs`.
 
 mod harness;
 
 use anchor_lang::prelude::Pubkey as AnchorPubkey;
 use harness::*;
 use pumpking::errors::PumpkingError;
-use pumpking::instructions::{DayRecordParams, PolicyParams, PoolParams};
+use pumpking::instructions::{DayRecordParams, DayReputationParams, PolicyParams, PoolParams};
 use pumpking::index::DayState;
-use pumpking::state::{CapitalPosition, CellState, Policy, PolicyState, Pool, DAY_LOG_LEN};
+use pumpking::state::{
+    CapitalPosition, CellState, Policy, PolicyState, Pool, DAY_LOG_LEN, MAX_SENSORS_PER_CELL,
+};
 
 /* -------------------------------------------------------------------------- */
 /* Сценарій                                                                   */
@@ -235,6 +243,40 @@ fn submit_day(params: DayRecordParams) -> solana_instruction::Instruction {
     )
 }
 
+/// Половина доби з винагородами, як її шле воркер щодоби: у комірці без
+/// зареєстрованих сенсорів ніхто не суджений і ніхто не заробляє. Перша така
+/// половина відкриває графік комірки.
+fn submit_rewards_half(cell_id: u64, day_index: u32) -> solana_instruction::Instruction {
+    const SLOTS: usize = MAX_SENSORS_PER_CELL as usize;
+    instruction(
+        pumpking::accounts::SubmitDayReputation {
+            aggregator: aggregator(),
+            pool: pool_pda(),
+            cell: cell_pda(cell_id),
+            reputation: reputation_pda(cell_id),
+            rewards: rewards_pda(cell_id),
+            system_program: system_program_id(),
+        },
+        pumpking::instruction::SubmitDayReputation {
+            params: DayReputationParams {
+                cell_id,
+                day_index,
+                judged: [0; SLOTS],
+                outliers: [0; SLOTS],
+                weights: [0; SLOTS],
+            },
+        },
+    )
+}
+
+fn reputation_pda(cell_id: u64) -> AnchorPubkey {
+    AnchorPubkey::find_program_address(
+        &[b"reputation", cell_id.to_le_bytes().as_ref()],
+        &pumpking::ID,
+    )
+    .0
+}
+
 fn issue_policy(params: PolicyParams) -> solana_instruction::Instruction {
     instruction(
         pumpking::accounts::IssuePolicy {
@@ -242,6 +284,7 @@ fn issue_policy(params: PolicyParams) -> solana_instruction::Instruction {
             pool: pool_pda(),
             cell: cell_pda(params.cell_id),
             policy: policy_pda(farmer(), params.nonce),
+            rewards: rewards_pda(params.cell_id),
             asset_mint: asset_mint(),
             vault: vault_pda(),
             owner_tokens: farmer_tokens(),
@@ -302,13 +345,15 @@ fn claim_payout(caller: AnchorPubkey, owner_tokens: AnchorPubkey) -> solana_inst
 /// Скільки лежить у сховищі, має завжди дорівнювати обліку: капіталу плюс
 /// резервам винагород усіх комірок. Це один акаунт із двома половинами, які
 /// розрізняє тільки книга (`FR-061`), і розбіжність тут — рівно та помилка,
-/// якої ніхто не побачив би на балансі.
+/// якої ніхто не побачив би на балансі. Резерв комірки з `T036` — у її
+/// графіку; поле `CellState::rewards_reserve` лишається спадком і має бути 0.
 fn assert_vault_matches_books(world: &World) {
     let pool: Pool = world.read(pool_pda());
     let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.rewards_reserve, 0, "спадковий резерв не повернувся");
     assert_eq!(
         token_amount(world.account(vault_pda())),
-        pool.capital_total + cell.rewards_reserve,
+        pool.capital_total + world.read_rewards(CELL_ID).reserve,
         "баланс сховища розійшовся з обліком"
     );
 }
@@ -338,6 +383,7 @@ fn record_history(world: &mut World, cell_id: u64) {
         world.set_day(day + 1);
         let ix = submit_day(day_params_for(cell_id, day, history_is_dry(day)));
         world.exec_ok(&ix);
+        world.exec_ok(&submit_rewards_half(cell_id, day));
     }
     world.set_day(HISTORY_DAYS);
 }
@@ -674,7 +720,7 @@ fn a_policy_is_sold_at_the_price_the_cell_s_own_history_names() {
     // резерв винагород комірки, решта — капітал, і жодна частка не карбується.
     let pool: Pool = world.read(pool_pda());
     let cell: CellState = world.read(cell_pda(CELL_ID));
-    assert_eq!(cell.rewards_reserve, PREMIUM / 10);
+    assert_eq!(world.read_rewards(CELL_ID).reserve, PREMIUM / 10);
     assert_eq!(pool.capital_total, CAPITAL + PREMIUM - PREMIUM / 10);
     assert_eq!(pool.shares_total, CAPITAL);
     assert_eq!(pool.reserved_total, PAYOUT);
@@ -765,6 +811,7 @@ fn a_policy_lives_at_the_address_its_own_terms_derive() {
             pool: pool_pda(),
             cell: cell_pda(CELL_ID),
             policy: policy_pda(farmer(), NONCE + 1),
+            rewards: rewards_pda(CELL_ID),
             asset_mint: asset_mint(),
             vault: vault_pda(),
             owner_tokens: farmer_tokens(),
@@ -790,6 +837,7 @@ fn the_premium_a_buyer_pays_comes_out_of_the_buyer_s_own_account() {
             pool: pool_pda(),
             cell: cell_pda(CELL_ID),
             policy: policy_pda(farmer(), NONCE),
+            rewards: rewards_pda(CELL_ID),
             asset_mint: asset_mint(),
             vault: vault_pda(),
             owner_tokens: stranger_tokens(),
@@ -842,8 +890,9 @@ fn the_spell_pays_the_farmer_and_nobody_had_to_ask() {
     assert_eq!(pool.reserved_total, 0);
     assert_eq!(cell.reserved, 0);
     // `FR-061`: резерв винагород комірки виплата не чіпає — він ніколи не був
-    // у `capital_total`, щоб вона могла до нього дотягтися.
-    assert_eq!(cell.rewards_reserve, PREMIUM / 10);
+    // у `capital_total`, щоб вона могла до нього дотягтися. І решту розкладу
+    // теж: доби після виплати платять сенсорам далі (рішення 2026-10-03).
+    assert_eq!(world.read_rewards(CELL_ID).reserve, PREMIUM / 10);
     assert_vault_matches_books(&world);
 }
 
@@ -988,7 +1037,7 @@ fn a_window_that_ended_without_the_event_frees_the_capacity_and_moves_no_money()
     assert_eq!(token_amount(world.account(vault_pda())), vault_before);
     assert_eq!(token_amount(world.account(farmer_tokens())), farmer_before);
     assert_eq!(pool.capital_total, CAPITAL + PREMIUM - PREMIUM / 10);
-    assert_eq!(cell.rewards_reserve, PREMIUM / 10);
+    assert_eq!(world.read_rewards(CELL_ID).reserve, PREMIUM / 10);
     assert_vault_matches_books(&world);
 }
 
@@ -1163,11 +1212,13 @@ fn the_unit_of_concentration_is_the_cell_and_not_the_pool() {
 
     // Резерв винагород ділиться по комірках так само, як експозиція: кожна
     // тримає премію власного поліса (`FR-061`, `FR-062`).
-    assert_eq!(cell.rewards_reserve, PREMIUM / 10);
-    assert_eq!(other.rewards_reserve, PREMIUM / 10);
+    let rewards = world.read_rewards(CELL_ID).reserve;
+    let other_rewards = world.read_rewards(OTHER_CELL).reserve;
+    assert_eq!(rewards, PREMIUM / 10);
+    assert_eq!(other_rewards, PREMIUM / 10);
     assert_eq!(
         token_amount(world.account(vault_pda())),
-        pool.capital_total + cell.rewards_reserve + other.rewards_reserve,
+        pool.capital_total + rewards + other_rewards,
         "баланс сховища розійшовся з обліком двох комірок"
     );
 }

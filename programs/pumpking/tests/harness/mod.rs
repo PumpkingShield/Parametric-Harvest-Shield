@@ -32,7 +32,8 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use pumpking::state::{
-    CAPITAL_SEED, CELL_SEED, POLICY_SEED, POOL_SEED, SENSOR_SEED, STAKE_VAULT_SEED, VAULT_SEED,
+    CellRewards, CAPITAL_SEED, CELL_SEED, POLICY_SEED, POOL_SEED, REWARDS_SEED, SENSOR_SEED,
+    STAKE_VAULT_SEED, VAULT_SEED,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -166,6 +167,16 @@ pub fn stake_vault_pda() -> AnchorPubkey {
 pub fn cell_pda(cell_id: u64) -> AnchorPubkey {
     AnchorPubkey::find_program_address(&[CELL_SEED, cell_id.to_le_bytes().as_ref()], &pumpking::ID)
         .0
+}
+
+/// Графік винагород комірки — `T036`. Zero-copy, тож читається не
+/// `World::read`, а [`World::read_rewards`].
+pub fn rewards_pda(cell_id: u64) -> AnchorPubkey {
+    AnchorPubkey::find_program_address(
+        &[REWARDS_SEED, cell_id.to_le_bytes().as_ref()],
+        &pumpking::ID,
+    )
+    .0
 }
 
 pub fn sensor_pda(sensor_key: AnchorPubkey) -> AnchorPubkey {
@@ -332,6 +343,13 @@ impl World {
     }
 
     /// Стан акаунта програми, розібраний її ж декодером.
+    /// Графік винагород комірки: байти після дискримінатора, як їх лишила
+    /// програма.
+    pub fn read_rewards(&self, cell_id: u64) -> CellRewards {
+        let data = &self.account(rewards_pda(cell_id)).data;
+        bytemuck::pod_read_unaligned(&data[8..8 + CellRewards::SPACE])
+    }
+
     pub fn read<T: AccountDeserialize>(&self, address: AnchorPubkey) -> T {
         let account = self.account(address);
         assert_eq!(

@@ -13,6 +13,7 @@ import {
   DayState,
   encodeBase58,
   merkleRoot,
+  REWARD_WEIGHT_UNIT,
   ReadingKind,
 } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -467,9 +468,13 @@ describe('closeCellDay', () => {
   })
 
   it('sends the day and its verdicts in one transaction, the day first — T035', async () => {
+    // A covered day — a day below the coverage floor pays nobody (T036) — whose
+    // first hour has a liar and whose second has an honest spread.
+    const hour = (index: number) => new Date(GENESIS.getTime() + index * 3_600_000 + 60_000)
     store.readings = [
-      ...quorum([300, 300, 0], new Date(GENESIS.getTime() + 60_000)),
-      ...quorum([300, 300, 290], new Date(GENESIS.getTime() + 3_600_000 + 60_000)),
+      ...quorum([300, 300, 0], hour(0)),
+      ...quorum([300, 300, 290], hour(1)),
+      ...Array.from({ length: 22 }, (_, index) => quorum([300, 300, 300], hour(index + 2))).flat(),
     ]
     await closeCellDay(deps, CELL_ID, 0)
 
@@ -480,15 +485,32 @@ describe('closeCellDay', () => {
     expect(decodeInstruction(day?.data ?? new Uint8Array())?.name).toBe('submitDayRecord')
     const decoded = decodeInstruction(reputation?.data ?? new Uint8Array())
     expect(decoded?.name).toBe('submitDayReputation')
-    const data = decoded?.data as { params: { judged: number[]; outliers: number[] } } | undefined
-    const params = data?.params ?? { judged: [], outliers: [] }
-    expect(params.judged.slice(0, 4)).toEqual([2, 2, 2, 0])
+    const data = decoded?.data as
+      | { params: { judged: number[]; outliers: number[]; weights: number[] } }
+      | undefined
+    const params = data?.params ?? { judged: [], outliers: [], weights: [] }
+    expect(params.judged.slice(0, 4)).toEqual([24, 24, 24, 0])
     expect(params.outliers.slice(0, 4)).toEqual([0, 0, 1, 0])
+    // T036: the weights travel too. Each sensor is its own operator here, so
+    // every accepted interval is split three ways, or two where one lied.
+    const third = Math.floor(REWARD_WEIGHT_UNIT / 3)
+    expect(params.weights.slice(0, 4)).toEqual([
+      REWARD_WEIGHT_UNIT / 2 + 23 * third,
+      REWARD_WEIGHT_UNIT / 2 + 23 * third,
+      23 * third,
+      0,
+    ])
   })
 
-  it('sends the day alone when nobody was judged', async () => {
+  it('sends the rewards half even when nobody was judged — T036', async () => {
+    // The day's budget has to be returned on the day, and only this
+    // instruction returns it.
     await closeCellDay(deps, CELL_ID, 0)
-    expect(submitter.transactions.map((tx) => tx.length)).toEqual([1])
+    expect(submitter.transactions.map((tx) => tx.length)).toEqual([2])
+    const decoded = decodeInstruction(submitter.transactions[0]?.[1]?.data ?? new Uint8Array())
+    expect(decoded?.name).toBe('submitDayReputation')
+    const data = decoded?.data as { params: { weights: number[] } } | undefined
+    expect(data?.params.weights.every((weight) => weight === 0)).toBe(true)
   })
 
   it('buckets readings by the interval they were measured in', async () => {
@@ -658,6 +680,10 @@ describe('closeDueDays', () => {
 })
 
 describe('dayReputation', () => {
+  /** `quorum` gives sensor n slot n − 1 and an operator of its own. */
+  const sensors = new Map(
+    [1, 2, 3].map((seed, slot) => [sensorKey(seed), { slot, operator: `operator-${seed}` }]),
+  )
   const position = (intervalIndex: number) => ({
     cellId: CELL_ID,
     dayIndex: 3,
@@ -672,20 +698,46 @@ describe('dayReputation', () => {
       // No value: nobody judged.
       closeInterval(quorum([300, 0], GENESIS), position(2), PARAMS),
     ]
-    const slotOf = new Map([1, 2, 3].map((seed, slot) => [sensorKey(seed), slot]))
-    const reputation = dayReputation(intervals, slotOf)
-    expect(reputation?.dayIndex).toBe(3)
-    expect(reputation?.judged.slice(0, 4)).toEqual([2, 2, 2, 0])
-    expect(reputation?.outliers.slice(0, 4)).toEqual([0, 0, 2, 0])
-    expect(reputation?.judged).toHaveLength(32)
+    const reputation = dayReputation(intervals, sensors, 0b111)
+    expect(reputation.dayIndex).toBe(3)
+    expect(reputation.judged.slice(0, 4)).toEqual([2, 2, 2, 0])
+    expect(reputation.outliers.slice(0, 4)).toEqual([0, 0, 2, 0])
+    expect(reputation.judged).toHaveLength(32)
+    // The liar earned nothing; the two others split each interval.
+    expect(reputation.weights.slice(0, 4)).toEqual([REWARD_WEIGHT_UNIT, REWARD_WEIGHT_UNIT, 0, 0])
+    expect(reputation.weights).toHaveLength(32)
   })
 
-  it('is nothing for a day nobody was judged in', () => {
-    expect(dayReputation([closeInterval([], position(0), PARAMS)], new Map())).toBeNull()
+  it('splits by operator before sensor — FR-009', () => {
+    const shared = new Map([
+      [sensorKey(1), { slot: 0, operator: 'roof' }],
+      [sensorKey(2), { slot: 1, operator: 'roof' }],
+      [sensorKey(3), { slot: 2, operator: 'field' }],
+    ])
+    const intervals = [closeInterval(quorum([300, 300, 300], GENESIS), position(0), PARAMS)]
+    const reputation = dayReputation(intervals, shared, 0b111)
+    expect(reputation.weights.slice(0, 3)).toEqual([
+      REWARD_WEIGHT_UNIT / 4,
+      REWARD_WEIGHT_UNIT / 4,
+      REWARD_WEIGHT_UNIT / 2,
+    ])
+  })
+
+  it('pays nobody on a day whose mask is empty, and still counts the verdicts', () => {
+    const intervals = [closeInterval(quorum([300, 300, 0], GENESIS), position(0), PARAMS)]
+    const reputation = dayReputation(intervals, sensors, 0)
+    expect(reputation.judged.slice(0, 3)).toEqual([1, 1, 1])
+    expect(reputation.weights.every((weight) => weight === 0)).toBe(true)
+  })
+
+  it('is all zeroes for a day nobody was judged in, and still a reputation', () => {
+    const reputation = dayReputation([closeInterval([], position(0), PARAMS)], new Map(), 0)
+    expect(reputation.judged.every((n) => n === 0)).toBe(true)
+    expect(reputation.weights.every((n) => n === 0)).toBe(true)
   })
 
   it('refuses a verdict whose sensor it cannot place', () => {
     const intervals = [closeInterval(quorum([300, 300, 0], GENESIS), position(0), PARAMS)]
-    expect(() => dayReputation(intervals, new Map())).toThrow(RangeError)
+    expect(() => dayReputation(intervals, new Map(), 0b111)).toThrow(RangeError)
   })
 })

@@ -4,6 +4,7 @@ import {
   accountDiscriminator,
   associatedTokenAddress,
   decodeCellReputation,
+  decodeCellRewards,
   decodeCellState,
   decodePolicy,
   decodePool,
@@ -194,5 +195,41 @@ describe('decodeCellReputation', () => {
     expect(reputationWindow(decoded, 2, 6, 19)).toEqual({ judged: 48, outliers: 16 })
     expect(reputationWindow(decoded, 0, 19, 19)).toEqual({ judged: 24, outliers: 1 })
     expect(reputationWindow(decoded, 2, 0, 17)).toEqual({ judged: 0, outliers: 0 })
+  })
+})
+
+describe('decodeCellRewards', () => {
+  /**
+   * Laid out by hand, as for the reputation ring: `CellRewards` is zero-copy,
+   * and this is what proves the Borsh coder reads its bytes.
+   */
+  it('reads the zero-copy layout field for field', () => {
+    const SLOTS = 32
+    const DAYS = 512
+    const bytes = new Uint8Array(8 + 8 + 8 + 4 + 1 + 3 + 8 * SLOTS + 8 * DAYS)
+    const view = new DataView(bytes.buffer)
+    bytes.set(accountDiscriminator('cellRewards'), 0)
+    view.setBigUint64(8, 613196570331971583n, true)
+    view.setBigUint64(16, 20_000n + 2n ** 53n, true)
+    view.setUint32(24, 23, true)
+    view.setUint8(28, 253)
+    const accrued = 32
+    view.setBigUint64(accrued + 2 * 8, 2n ** 53n, true)
+    view.setBigUint64(accrued + 31 * 8, 625n, true)
+    const schedule = accrued + 8 * SLOTS
+    view.setBigUint64(schedule + 23 * 8, 2_500n, true)
+    view.setBigUint64(schedule + 511 * 8, 7n, true)
+
+    const decoded = decodeCellRewards(bytes)
+    expect(decoded.cellId.toString()).toBe('613196570331971583')
+    expect(decoded.reserve.toString()).toBe((20_000n + 2n ** 53n).toString())
+    expect(decoded.nextDay).toBe(23)
+    expect(decoded.bump).toBe(253)
+    expect(decoded.accrued).toHaveLength(SLOTS)
+    expect(decoded.accrued[2]?.toString()).toBe((2n ** 53n).toString())
+    expect(decoded.accrued[31]?.toString()).toBe('625')
+    expect(decoded.schedule).toHaveLength(DAYS)
+    expect(decoded.schedule[23]?.toString()).toBe('2500')
+    expect(decoded.schedule[511]?.toString()).toBe('7')
   })
 })

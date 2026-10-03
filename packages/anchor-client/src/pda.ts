@@ -36,6 +36,8 @@ export const POLICY_SEED = utf8.encode('policy')
 export const CAPITAL_SEED = utf8.encode('lp')
 /** A cell's outlier record — `FR-011`, `FR-012`. */
 export const REPUTATION_SEED = utf8.encode('reputation')
+/** `["rewards", cell_id]` — a cell's reward schedule (`FR-062`). */
+export const REWARDS_SEED = utf8.encode('rewards')
 
 /** A derived address and the bump that produced it. */
 export interface Pda {
@@ -80,6 +82,10 @@ export function cellPda(cellId: bigint, programId: PublicKey = PROGRAM_ID): Pda 
 
 export function reputationPda(cellId: bigint, programId: PublicKey = PROGRAM_ID): Pda {
   return derive([REPUTATION_SEED, u64Seed(cellId)], programId)
+}
+
+export function rewardsPda(cellId: bigint, programId: PublicKey = PROGRAM_ID): Pda {
+  return derive([REWARDS_SEED, u64Seed(cellId)], programId)
 }
 
 export function sensorPda(sensorKey: PublicKey, programId: PublicKey = PROGRAM_ID): Pda {

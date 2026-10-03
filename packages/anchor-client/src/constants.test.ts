@@ -5,6 +5,8 @@ import {
   OUTLIER_REL_BPS,
   OUTLIER_SHARE_BPS,
   OUTLIER_WINDOW_DAYS,
+  REWARD_SCHEDULE_DAYS,
+  REWARD_WEIGHT_UNIT,
 } from '@pumpking/shared'
 import { describe, expect, it } from 'vitest'
 import { PUMPKING_IDL } from './idl/idl.ts'
@@ -29,6 +31,8 @@ describe('constants twinned with @pumpking/shared', () => {
     ['outlierRelBps', OUTLIER_REL_BPS],
     ['outlierShareBps', OUTLIER_SHARE_BPS],
     ['outlierMinJudged', OUTLIER_MIN_JUDGED],
+    ['rewardScheduleDays', REWARD_SCHEDULE_DAYS],
+    ['rewardWeightUnit', REWARD_WEIGHT_UNIT],
   ])('agrees with the program on %s', (name, value) => {
     expect(programConstant(name)).toBe(String(value))
   })
