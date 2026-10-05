@@ -1,5 +1,5 @@
 import type { DayClassification, ReadingKindName } from '@pumpking/shared'
-import { and, asc, eq, gte, isNotNull, lt, lte, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, gte, isNotNull, lt, lte, or, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cellDays, cellHours, cells, operators, readings, sensorVerdicts, sensors } from './schema.ts'
 
@@ -26,13 +26,25 @@ export type AcceptedReading = {
   sensorPubkey: string
   /** Wallet of the operator. Many sensors of one are one vote — `FR-009`. */
   operator: string
-  /** Position in the on-chain `contributors` bitmask, 0..31. */
+  /**
+   * Position in this cell's `contributors` bitmask, 0..31 — the sensor's own
+   * slot, or the one it left here on its last move (`FR-059`).
+   */
   slotInCell: number
   valueX100: number
   measuredAt: Date
   counter: bigint
   /** Base58 ed25519 signature — part of the leaf the interval commits to. */
   signature: string
+  /**
+   * Where a sensor that moved votes in this cell — `FR-059`, `Sensor.moved_at`.
+   * In the cell it moved into, only intervals that start at or after
+   * `votesFrom`; in the cell it left, only those that end by `votesUntil`. The
+   * interval the move falls inside counts in neither. Absent for a sensor that
+   * never moved.
+   */
+  votesFrom?: Date
+  votesUntil?: Date
 }
 
 /** A closed interval, as `cell_hours` holds it — `FR-008`. */
@@ -201,11 +213,16 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
     },
 
     async acceptedReadings(cellId, kind, from, to, minStake) {
+      // FR-059: a reading counts under the slot the sensor holds in this
+      // cell — its own, or the one it left here when it moved away.
+      const here = eq(sensors.cellId, cellId)
       const rows = await db
         .select({
           sensorPubkey: readings.sensorPubkey,
           operator: operators.wallet,
-          slotInCell: sensors.slotInCell,
+          slotInCell: sql<number>`case when ${here} then ${sensors.slotInCell} else ${sensors.previousSlot} end`,
+          here: sql<boolean>`${here}`,
+          movedAt: sensors.movedAt,
           valueX100: readings.valueX100,
           measuredAt: readings.measuredAt,
           counter: readings.counter,
@@ -224,10 +241,14 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
             // when the sensor's reputation said so — FR-004, FR-011.
             eq(readings.status, 'accepted'),
             votingSensor(minStake),
+            or(here, eq(sensors.previousCellId, cellId)),
           ),
         )
         .orderBy(asc(readings.sensorPubkey), asc(readings.counter))
-      return rows
+      return rows.map(({ here, movedAt, ...row }) => ({
+        ...row,
+        ...(movedAt === null ? {} : here ? { votesFrom: movedAt } : { votesUntil: movedAt }),
+      }))
     },
 
     async dayRecord(cellId, dayIndex) {

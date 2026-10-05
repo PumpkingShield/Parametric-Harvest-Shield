@@ -513,6 +513,36 @@ describe('closeCellDay', () => {
     expect(data?.params.weights.every((weight) => weight === 0)).toBe(true)
   })
 
+  it('counts a sensor that moved in the cell it left up to the move, and not in its interval — FR-059', async () => {
+    const hour = (index: number) => new Date(GENESIS.getTime() + index * 3_600_000 + 60_000)
+    const movedAt = new Date(GENESIS.getTime() + 2.5 * 3_600_000)
+    // Sensor 3 left at 02:30 and, until the mirror caught up, kept naming
+    // this cell: its readings are stored, and stop counting at the move.
+    store.readings = [0, 1, 2, 3].flatMap((index) =>
+      quorum([10, 10, 10], hour(index)).map((one) =>
+        one.slotInCell === 2 ? { ...one, votesUntil: movedAt } : one,
+      ),
+    )
+    await closeCellDay(deps, CELL_ID, 0)
+
+    expect(store.intervals.slice(0, 4).map((row) => row.voteCount)).toEqual([3, 3, 2, 2])
+    // Two votes are short of the minimum: the interval of the move has no value.
+    expect(store.intervals[2]?.medianX100).toBeNull()
+  })
+
+  it('counts a sensor that moved in from the first whole interval after the move — FR-059', async () => {
+    const hour = (index: number) => new Date(GENESIS.getTime() + index * 3_600_000 + 60_000)
+    const movedAt = new Date(GENESIS.getTime() + 2.5 * 3_600_000)
+    store.readings = [2, 3].flatMap((index) =>
+      quorum([10, 10, 10], hour(index)).map((one) =>
+        one.slotInCell === 2 ? { ...one, votesFrom: movedAt } : one,
+      ),
+    )
+    await closeCellDay(deps, CELL_ID, 0)
+
+    expect(store.intervals.slice(2, 4).map((row) => row.voteCount)).toEqual([2, 3])
+  })
+
   it('buckets readings by the interval they were measured in', async () => {
     store.readings = [
       ...quorum([10, 10, 10], new Date(GENESIS.getTime() + 60_000)),

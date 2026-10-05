@@ -260,7 +260,7 @@ fn claim_reward(sensor: AnchorPubkey, to: AnchorPubkey) -> solana_instruction::I
             operator_tokens: to,
             token_program: token_program_id(),
         },
-        pumpking::instruction::ClaimReward {},
+        pumpking::instruction::ClaimReward { cell_id: CELL_ID },
     )
 }
 
@@ -271,7 +271,9 @@ fn exclude(sensor: AnchorPubkey) -> solana_instruction::Instruction {
             pool: pool_pda(),
             sensor: sensor_pda(sensor),
             reputation: reputation_pda(CELL_ID),
+            previous_reputation: reputation_pda(CELL_ID),
             rewards: rewards_pda(CELL_ID),
+            previous_rewards: rewards_pda(CELL_ID),
             asset_mint: asset_mint(),
             stake_vault: stake_vault_pda(),
             vault: vault_pda(),

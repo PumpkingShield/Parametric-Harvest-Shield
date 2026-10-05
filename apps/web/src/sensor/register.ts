@@ -3,17 +3,22 @@ import {
   associatedTokenAddress,
   Connection,
   cellPda,
+  claimRewardInstruction,
   createAssociatedTokenAccountIdempotentInstruction,
+  decodeCellRewards,
   decodeCellState,
   decodeMintDecimals,
   decodePool,
   decodeSensor,
   decodeTokenAmount,
   Keypair,
+  moveSensorInstruction,
   PROGRAM_ID,
+  PUMPKING_IDL,
   PublicKey,
   poolPda,
   registerSensorInstruction,
+  rewardsPda,
   SENSOR_SLOTS,
   sensorPda,
   stakeSensorInstruction,
@@ -37,8 +42,13 @@ import { cellIdFromH3Index, h3IndexFromCellId } from '@pumpking/shared/cell-id'
  * worker and the devnet scripts use, over the IDL the program emitted. A second
  * encoder here would be a second place for a discriminator to go stale.
  *
+ * Moving the sensor to another cell (`T039`, `FR-059`) is here too: the same
+ * two keys sign it, against the same chain, and it is the registration's
+ * explicit act — a reading never moves a sensor by naming another cell.
+ *
  * This module, Anchor, web3.js and `h3-js` load only when somebody opens
- * registration: a lazy chunk the policy screen (`SC-013`) never asks for.
+ * registration or a move: lazy chunks the policy screen (`SC-013`) never asks
+ * for.
  */
 
 /** What reading the chain needs — `Connection` has it all; a test fakes it. */
@@ -305,6 +315,183 @@ export function explorerUrl(signature: string, rpcUrl: string): string {
   if (rpcUrl.includes('testnet')) return `${base}?cluster=testnet`
   if (rpcUrl.includes('mainnet')) return base
   return `${base}?cluster=custom&customUrl=${encodeURIComponent(rpcUrl)}`
+}
+
+/* -------------------------------------------------------------------------- */
+/* Moving — `T039`, `FR-059`                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Days between two moves: the old slot's record has to leave every window an
+ * exclusion reads before the pointer may drop it. The program's constant, read
+ * out of the IDL it emitted rather than copied.
+ */
+export const MOVE_SPACING_DAYS =
+  Number(
+    (PUMPKING_IDL as { constants?: { name: string; value: string }[] }).constants?.find(
+      (constant) => constant.name === 'outlierWindowDays',
+    )?.value ?? Number.NaN,
+  ) + 1
+
+/** Rent for a cell nobody has opened (~0.006 SOL) and the fee, with room. */
+export const LAMPORTS_TO_MOVE = 8_000_000n
+
+/** What the chain says about a move this phone is about to ask for. */
+export type MoveStanding = {
+  lamports: bigint
+  sensor: {
+    operator: PublicKey
+    cellId: bigint
+    /** The cell left on the last move; null when there is none to answer for. */
+    previousCellId: bigint | null
+    active: boolean
+    /** Pool day of the last move, or null for a sensor that never moved. */
+    lastMoveDay: number | null
+  } | null
+  /** What the slot before the last move still holds, in that cell's schedule. */
+  unclaimed: bigint
+  /** Sensors already in the new cell; null when the cell has none yet. */
+  cellSensors: number | null
+  /** The pool's day now. */
+  today: number
+}
+
+/** The pool's day at `unixSeconds` — `Pool::day_index`. */
+function poolDay(pool: { genesisTs: bigint; secondsPerDay: number }, unixSeconds: bigint): number {
+  return Number((unixSeconds - pool.genesisTs) / BigInt(pool.secondsPerDay))
+}
+
+export async function readMoveStanding(
+  chain: Chain,
+  operator: PublicKey,
+  sensorKey: PublicKey,
+  cellId: bigint,
+  now: Date,
+  programId: PublicKey = PROGRAM_ID,
+): Promise<MoveStanding | null> {
+  const [poolInfo, lamports, sensorInfo, cellInfo] = await Promise.all([
+    chain.getAccountInfo(poolPda(programId).address),
+    chain.getBalance(operator),
+    chain.getAccountInfo(sensorPda(sensorKey, programId).address),
+    chain.getAccountInfo(cellPda(cellId, programId).address),
+  ])
+  if (poolInfo === null) return null
+  const decodedPool = decodePool(Uint8Array.from(poolInfo.data))
+  const pool = {
+    genesisTs: BigInt(decodedPool.genesisTs.toString()),
+    secondsPerDay: decodedPool.secondsPerDay,
+  }
+  const today = poolDay(pool, BigInt(Math.floor(now.getTime() / 1000)))
+  const cellSensors =
+    cellInfo === null ? null : decodeCellState(Uint8Array.from(cellInfo.data)).sensorCount
+  if (sensorInfo === null) {
+    return { lamports: BigInt(lamports), sensor: null, unclaimed: 0n, cellSensors, today }
+  }
+
+  const sensor = decodeSensor(Uint8Array.from(sensorInfo.data))
+  const current = BigInt(sensor.cellId.toString())
+  const previous = BigInt(sensor.previousCellId.toString())
+  // "No previous slot" is the current one on chain.
+  const moved = previous !== current || sensor.previousSlot !== sensor.slotInCell
+  let unclaimed = 0n
+  if (moved) {
+    const rewardsInfo = await chain.getAccountInfo(rewardsPda(previous, programId).address)
+    if (rewardsInfo !== null) {
+      const rewards = decodeCellRewards(Uint8Array.from(rewardsInfo.data))
+      unclaimed = BigInt((rewards.accrued[sensor.previousSlot] ?? 0).toString())
+    }
+  }
+  return {
+    lamports: BigInt(lamports),
+    sensor: {
+      operator: sensor.operator,
+      cellId: current,
+      previousCellId: moved ? previous : null,
+      active: sensor.active,
+      lastMoveDay:
+        sensor.movedAt === null ? null : poolDay(pool, BigInt(sensor.movedAt.toString())),
+    },
+    unclaimed,
+    cellSensors,
+    today,
+  }
+}
+
+/** What moving to the chosen cell comes to, decided from the chain. */
+export type MovePlan =
+  /** `claim` is what the slot left behind earned: claimed in the same transaction, first. */
+  | { kind: 'move'; previousCellId: bigint; claim: bigint }
+  | { kind: 'unregistered' }
+  | { kind: 'foreign' }
+  | { kind: 'excluded' }
+  | { kind: 'same-cell' }
+  | { kind: 'cell-full' }
+  /** The last move was too recent; the pool day it may move again on. */
+  | { kind: 'too-soon'; day: number }
+  | { kind: 'no-sol' }
+
+export function movePlanFor(standing: MoveStanding, cellId: bigint, operator: PublicKey): MovePlan {
+  const { sensor } = standing
+  if (sensor === null) return { kind: 'unregistered' }
+  if (!sensor.operator.equals(operator)) return { kind: 'foreign' }
+  if (!sensor.active) return { kind: 'excluded' }
+  if (sensor.cellId === cellId) return { kind: 'same-cell' }
+  if (sensor.lastMoveDay !== null && standing.today < sensor.lastMoveDay + MOVE_SPACING_DAYS) {
+    return { kind: 'too-soon', day: sensor.lastMoveDay + MOVE_SPACING_DAYS }
+  }
+  if (standing.cellSensors !== null && standing.cellSensors >= SENSOR_SLOTS) {
+    return { kind: 'cell-full' }
+  }
+  if (standing.lamports < LAMPORTS_TO_MOVE) return { kind: 'no-sol' }
+  return {
+    kind: 'move',
+    // The program seeds the schedule it checks by the pointer as it stands:
+    // the cell left last time, or the sensor's own cell if it never moved.
+    previousCellId: sensor.previousCellId ?? sensor.cellId,
+    claim: standing.unclaimed,
+  }
+}
+
+/**
+ * The move, unsigned: what the slot left last time earned, claimed to the
+ * operator's token account when there is any — the program will not let the
+ * pointer move past a slot with earnings on it — then `move_sensor`.
+ */
+export function moveTransaction(input: {
+  operator: PublicKey
+  sensorKey: PublicKey
+  cellId: bigint
+  network: Network
+  plan: { kind: 'move'; previousCellId: bigint; claim: bigint }
+  programId?: PublicKey
+}): Transaction {
+  const { operator, sensorKey, network, plan } = input
+  const programId = input.programId ?? PROGRAM_ID
+  const tx = new Transaction()
+  tx.feePayer = operator
+  if (plan.claim > 0n) {
+    tx.add(
+      claimRewardInstruction({
+        caller: operator,
+        sensorKey,
+        cellId: plan.previousCellId,
+        assetMint: network.assetMint,
+        operatorTokens: associatedTokenAddress(operator, network.assetMint, network.tokenProgram),
+        tokenProgram: network.tokenProgram,
+        programId,
+      }),
+    )
+  }
+  tx.add(
+    moveSensorInstruction({
+      operator,
+      sensorKey,
+      cellId: input.cellId,
+      previousCellId: plan.previousCellId,
+      programId,
+    }),
+  )
+  return tx
 }
 
 /* -------------------------------------------------------------------------- */

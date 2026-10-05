@@ -34,6 +34,16 @@ export type SensorWire = {
   pubkey: string
   /** H3 index in hex — the cell every reading of this key has to name. */
   cellId: string
+  /**
+   * The cell left on the last move (`FR-059`), in the same hex, or null.
+   * What its slot there earned is still claimed from that cell.
+   */
+  previousCellId: string | null
+  /**
+   * ISO time of the last move, or null for a key that never moved. Votes in
+   * `cellId` count from the first whole interval after it.
+   */
+  movedAt: string | null
   /** Decimal strings: `u64` does not survive a JSON number. */
   stake: string
   /** Null before `initialize_pool`. */
@@ -95,6 +105,8 @@ export function createSensorsRoute(options: SensorsRouteOptions): Hono {
     const wire: SensorWire = {
       pubkey,
       cellId: h3IndexFromCellId(row.cellId),
+      previousCellId: row.previousCellId === null ? null : h3IndexFromCellId(row.previousCellId),
+      movedAt: row.movedAt === null ? null : row.movedAt.toISOString(),
       stake: row.stake.toString(),
       minStake: minStake === null ? null : minStake.toString(),
       voting: problem === null,

@@ -116,6 +116,8 @@ describe('lookUpSensor', () => {
   const registration = {
     pubkey: 'key',
     cellId: CELL,
+    previousCellId: null,
+    movedAt: null,
     stake: '1000000',
     minStake: '1000000',
     voting: true,
@@ -129,6 +131,22 @@ describe('lookUpSensor', () => {
       registration,
     })
     expect(calls[0]?.url).toBe(`${API}/v1/sensors/key`)
+  })
+
+  it('reads a move, and an answer from an API that does not know about moves yet — FR-059', async () => {
+    const moved = { ...registration, previousCellId: '871e701b2ffffff', movedAt: '2026-10-05T12:30:00.000Z' }
+    expect(await lookUpSensor(API, 'key', answering(200, moved))).toEqual({
+      kind: 'registered',
+      registration: moved,
+    })
+    const { previousCellId: _p, movedAt: _m, ...older } = registration
+    expect(await lookUpSensor(API, 'key', answering(200, older))).toEqual({
+      kind: 'registered',
+      registration,
+    })
+    expect(
+      (await lookUpSensor(API, 'key', answering(200, { ...registration, movedAt: 7 }))).kind,
+    ).toBe('unreachable')
   })
 
   it('tells an unregistered key from a service that did not answer', async () => {

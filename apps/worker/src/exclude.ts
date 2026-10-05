@@ -94,12 +94,30 @@ export async function excludeBreaching(
   const window = today === null ? null : outlierWindow(today)
   if (window === null) return []
 
-  const reputation = await deps.chain.reputation(cellId)
-  if (reputation === null) return []
+  // A ring is read once a pass, however many moved sensors name it.
+  const rings = new Map<bigint, Promise<CellReputationAccount | null>>()
+  const ringOf = (id: bigint): Promise<CellReputationAccount | null> => {
+    let ring = rings.get(id)
+    if (ring === undefined) {
+      ring = deps.chain.reputation(id)
+      rings.set(id, ring)
+    }
+    return ring
+  }
+  if ((await ringOf(cellId)) === null) return []
 
   const outcomes: ExcludeOutcome[] = []
-  for (const { pubkey, slotInCell } of await deps.slots.slotsOf(cellId)) {
-    const counts = reputationWindow(reputation, slotInCell, window.from, window.to)
+  for (const { pubkey, slots } of await deps.slots.slotsOf(cellId)) {
+    // FR-059: a sensor that moved answers for the slot it left as well as the
+    // one it holds, and the program sums the two the same way.
+    const counts = { judged: 0, outliers: 0 }
+    for (const slot of slots) {
+      const ring = await ringOf(slot.cellId)
+      if (ring === null) continue
+      const part = reputationWindow(ring, slot.slotInCell, window.from, window.to)
+      counts.judged += part.judged
+      counts.outliers += part.outliers
+    }
     if (!breachesOutlierShare(counts)) continue
 
     const sensorKey = new PublicKey(pubkey)
@@ -114,7 +132,10 @@ export async function excludeBreaching(
         excludeSensorInstruction({
           caller: deps.caller,
           sensorKey,
-          cellId,
+          // The chain's cells, not the mirror's: the program seeds both
+          // rings and schedules by the account as it is now.
+          cellId: BigInt(sensor.cellId.toString()),
+          previousCellId: BigInt(sensor.previousCellId.toString()),
           assetMint: deps.assetMint,
           ...(deps.programId === undefined ? {} : { programId: deps.programId }),
         }),

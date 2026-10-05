@@ -519,6 +519,29 @@ export type DayOutcome =
   | { cellId: bigint; dayIndex: number; status: 'failed'; error: Error }
 
 /**
+ * Whether a reading of a sensor that moved counts in the interval `[start,
+ * end)` of this cell — `FR-059`. In the cell it moved into, from the first
+ * interval that starts at or after the move; in the cell it left, up to the
+ * last one that ended by then. The interval the move falls inside counts in
+ * neither: where the sensor stood for that part of it is not something a
+ * reading can be trusted to say, and a vote in two cells at once is worse
+ * than a vote in none.
+ */
+export function votesInInterval(
+  reading: Pick<AcceptedReading, 'votesFrom' | 'votesUntil'>,
+  start: Date,
+  end: Date,
+): boolean {
+  if (reading.votesFrom !== undefined && start.getTime() < reading.votesFrom.getTime()) {
+    return false
+  }
+  if (reading.votesUntil !== undefined && end.getTime() > reading.votesUntil.getTime()) {
+    return false
+  }
+  return true
+}
+
+/**
  * Closes one day of one cell and writes it to the chain — `FR-015`.
  *
  * The order is: intervals, then the day row, then the transaction, then the
@@ -566,7 +589,7 @@ export async function closeCellDay(
     }
     const bucket = readings.filter((reading) => {
       const at = reading.measuredAt.getTime()
-      return at >= start.getTime() && at < end.getTime()
+      return at >= start.getTime() && at < end.getTime() && votesInInterval(reading, start, end)
     })
     intervals.push(
       closeInterval(bucket, { cellId, dayIndex, intervalIndex: index, start }, deps.params),

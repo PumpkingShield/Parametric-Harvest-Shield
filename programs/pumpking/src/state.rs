@@ -391,6 +391,20 @@ pub struct Sensor {
     /// once and never reused: `FR-012` deactivates a sensor, it does not free
     /// the slot, and a reused bit would rewrite who voted on a past day.
     pub slot_in_cell: u8,
+    /// The cell and slot the sensor held before its last move — `FR-059`.
+    /// Equal to `cell_id` and `slot_in_cell` when there is none: before the
+    /// first move, and after `reinstate_sensor` wipes the record. A move
+    /// always takes a fresh slot, so the two can only be equal on purpose.
+    /// The old slot stays the sensor's: its record counts towards an
+    /// exclusion while the window reaches back to it, and what it earned is
+    /// still the operator's to claim.
+    pub previous_cell_id: u64,
+    pub previous_slot: u8,
+    /// Unix time of the last move, `None` for a sensor that never moved. The
+    /// aggregator reads the interval boundary off it: the old cell counts the
+    /// intervals that ended before it, the new one those that start after.
+    /// It also spaces moves a window apart, and a reinstatement keeps it.
+    pub moved_at: Option<i64>,
     /// Stake that votes — `FR-050`. What the registry mirror reads as stake.
     pub stake: u64,
     /// Stake on its way out — `FR-053`. Moved here from `stake` by
@@ -414,6 +428,32 @@ impl Sensor {
     /// and earns nothing: that is the price of collusion.
     pub fn votes(&self, min_stake: u64) -> bool {
         self.active && self.stake >= min_stake
+    }
+
+    /// The cell and slot held before the last move, or `None` when there is
+    /// no such slot to answer for — `FR-059`.
+    pub fn previous(&self) -> Option<(u64, u8)> {
+        let previous = (self.previous_cell_id, self.previous_slot);
+        (previous != (self.cell_id, self.slot_in_cell)).then_some(previous)
+    }
+
+    /// Forgets the slot before the last move.
+    pub fn drop_previous(&mut self) {
+        self.previous_cell_id = self.cell_id;
+        self.previous_slot = self.slot_in_cell;
+    }
+
+    /// The slot this sensor holds in `cell_id` — the current one, or the one
+    /// before the last move — or `None`. A move always changes the cell, so
+    /// the two are never in the same one: a sensor that moves back into a
+    /// cell it left takes a fresh slot there, and the pointer names the cell
+    /// it has just come from.
+    pub fn slot_in(&self, cell_id: u64) -> Option<u8> {
+        if self.cell_id == cell_id {
+            return Some(self.slot_in_cell);
+        }
+        self.previous()
+            .and_then(|(cell, slot)| (cell == cell_id).then_some(slot))
     }
 }
 
@@ -1067,6 +1107,9 @@ mod tests {
             operator: Pubkey::default(),
             cell_id: 0,
             slot_in_cell: 0,
+            previous_cell_id: 0,
+            previous_slot: 0,
+            moved_at: None,
             stake,
             unstaking: 0,
             unlock_at_day: None,

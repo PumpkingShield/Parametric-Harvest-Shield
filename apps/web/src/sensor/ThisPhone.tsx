@@ -39,6 +39,7 @@ import {
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
 
 const Register = lazy(() => import('./Register.tsx'))
+const Move = lazy(() => import('./Move.tsx'))
 
 /** After registering, how often and how long to ask whether the mirror has caught up. */
 const MIRROR_POLL_MS = 15_000
@@ -70,7 +71,17 @@ export function registrationText(lookUp: LookUp): string {
       return lookUp.message
     case 'registered': {
       const { registration } = lookUp
-      const where = `Registered in cell ${registration.cellId}.`
+      const where =
+        registration.previousCellId === null || registration.movedAt === null
+          ? `Registered in cell ${registration.cellId}.`
+          : `Registered in cell ${registration.cellId}, moved here from ${registration.previousCellId} at ${new Date(
+              registration.movedAt,
+            ).toLocaleString([], {
+              day: 'numeric',
+              month: 'short',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}; it counts here from the first whole interval after that.`
       return registration.problem === null
         ? `${where} A reading that arrives within 90 minutes of its hour counts toward the median.`
         : `${where} ${PROBLEM_TEXT[registration.problem]}`
@@ -108,7 +119,21 @@ export type ThisPhoneViewProps = {
   onLookUp: () => void
   /** `T038a`: the registration, shown under the registry's answer when it has one to give. */
   registration?: ReactNode
+  /** `T039`: the move, for a registered phone that has been carried elsewhere. */
+  move?: ReactNode
 }
+
+const quiet = {
+  marginTop: 12,
+  padding: '8px 0',
+  width: '100%',
+  fontSize: 15,
+  color: INK,
+  background: 'transparent',
+  border: `1px solid ${RULE}`,
+  borderRadius: 0,
+  cursor: 'pointer',
+} as const
 
 const button = (enabled: boolean) =>
   ({
@@ -174,6 +199,7 @@ export function ThisPhoneView(props: ThisPhoneViewProps) {
           </button>
         ) : null}
         {props.registration ?? null}
+        {props.move ?? null}
       </div>
 
       <label style={{ display: 'block', marginTop: 20, fontSize: 17, color: INK }}>
@@ -269,8 +295,14 @@ const ThisPhone = (props: ThisPhoneProps) => {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
-  /** Set once this phone has registered on chain and the mirror has yet to show it. */
-  const [awaitingMirror, setAwaitingMirror] = useState(false)
+  /**
+   * What the chain has and the mirror has yet to show: this phone registered,
+   * or moved to a cell.
+   */
+  const [awaiting, setAwaiting] = useState<
+    { kind: 'registered' } | { kind: 'moved'; cell: string } | null
+  >(null)
+  const [moving, setMoving] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -313,20 +345,28 @@ const ThisPhone = (props: ThisPhoneProps) => {
 
   // The chain has the sensor; the API's mirror picks it up on the worker's next
   // pass. Asked quietly, without the "asking…" line flickering each time.
+  // A move the same way: until the mirror names the new cell, the page keeps
+  // signing for the old one, and the service keeps accepting those readings.
   useEffect(() => {
-    if (!awaitingMirror || pubkey === null) return
+    if (awaiting === null || pubkey === null) return
     let tries = 0
     const timer = setInterval(() => {
       tries += 1
       void lookUpSensor(apiUrl, pubkey, fetchFn).then((answer) => {
-        if (answer.kind === 'registered' || tries >= MIRROR_POLL_TRIES) {
-          setAwaitingMirror(false)
-          if (answer.kind === 'registered') setLookUp(answer)
+        const caughtUp =
+          answer.kind === 'registered' &&
+          (awaiting.kind === 'registered' || answer.registration.cellId === awaiting.cell)
+        if (caughtUp || tries >= MIRROR_POLL_TRIES) {
+          setAwaiting(null)
+          if (caughtUp) {
+            setLookUp(answer)
+            setMoving(false)
+          }
         }
       })
     }, MIRROR_POLL_MS)
     return () => clearInterval(timer)
-  }, [awaitingMirror, pubkey, apiUrl, fetchFn])
+  }, [awaiting, pubkey, apiUrl, fetchFn])
 
   const create = async () => {
     const fresh = newRecord()
@@ -425,10 +465,25 @@ const ThisPhone = (props: ThisPhoneProps) => {
               sensorSecret={record.secretKey}
               apiUrl={apiUrl}
               fetchFn={fetchFn}
-              onRegistered={() => setAwaitingMirror(true)}
+              onRegistered={() => setAwaiting({ kind: 'registered' })}
             />
           </Suspense>
         ) : null
+      }
+      move={
+        lookUp?.kind !== 'registered' || record === null ? null : moving ? (
+          <Suspense fallback={<Prose>Loading…</Prose>}>
+            <Move
+              sensorSecret={record.secretKey}
+              from={lookUp.registration.cellId}
+              onMoved={(cell) => setAwaiting({ kind: 'moved', cell })}
+            />
+          </Suspense>
+        ) : (
+          <button type="button" style={quiet} onClick={() => setMoving(true)}>
+            This phone has moved to another field
+          </button>
+        )
       }
     />
   )

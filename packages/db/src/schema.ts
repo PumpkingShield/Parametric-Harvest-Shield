@@ -98,6 +98,22 @@ export const sensors = pgTable(
     kind: readingKind().notNull(),
     /** Position in the on-chain `contributors` bitmask, 0..31. */
     slotInCell: smallint().notNull(),
+    /**
+     * The cell and slot held before the last move — FR-059, `T039`. Null for a
+     * sensor that never moved, and once a reinstatement drops the pointer (the
+     * chain says so by making it equal to the current cell and slot). The old
+     * cell still counts this slot for the intervals that ended before
+     * `movedAt`; nothing after.
+     */
+    previousCellId: cellId().references(() => cells.id),
+    previousSlot: smallint(),
+    /**
+     * `Sensor.moved_at`: the boundary between the cells. The new cell counts
+     * the sensor from the first interval that starts at or after it, so the
+     * interval it falls inside counts in neither. Kept through a
+     * reinstatement, as the chain keeps it.
+     */
+    movedAt: timestamp({ withTimezone: true }),
     /** `sql`0`` and not `0n`: drizzle-kit 0.31.10 cannot serialise a BigInt
      * literal into its snapshot and dies with "Do not know how to serialize
      * a BigInt" on generate. */

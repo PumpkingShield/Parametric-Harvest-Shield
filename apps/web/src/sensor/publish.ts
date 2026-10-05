@@ -25,6 +25,10 @@ import type { SensorRecord } from './vault.ts'
 export type Registration = {
   pubkey: string
   cellId: string
+  /** The cell left on the last move (`FR-059`), or null. */
+  previousCellId: string | null
+  /** ISO time of the last move, or null. */
+  movedAt: string | null
   stake: string
   minStake: string | null
   voting: boolean
@@ -54,6 +58,9 @@ function asRegistration(value: unknown): Registration | null {
     v === null ||
     typeof v.pubkey !== 'string' ||
     typeof v.cellId !== 'string' ||
+    // Absent from an API one deploy behind the page: read as "never moved".
+    !(v.previousCellId == null || typeof v.previousCellId === 'string') ||
+    !(v.movedAt == null || typeof v.movedAt === 'string') ||
     typeof v.stake !== 'string' ||
     !(v.minStake === null || typeof v.minStake === 'string') ||
     typeof v.voting !== 'boolean' ||
@@ -64,6 +71,8 @@ function asRegistration(value: unknown): Registration | null {
   return {
     pubkey: v.pubkey,
     cellId: v.cellId,
+    previousCellId: v.previousCellId ?? null,
+    movedAt: v.movedAt ?? null,
     stake: v.stake,
     minStake: v.minStake,
     voting: v.voting,

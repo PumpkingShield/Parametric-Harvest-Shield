@@ -2,6 +2,7 @@ import {
   BN,
   type CellReputationAccount,
   PublicKey,
+  reputationPda,
   type SensorAccount,
   SENSOR_SLOTS,
   type TransactionInstruction,
@@ -46,24 +47,37 @@ function ring(lies: Map<number, number>): CellReputationAccount {
   } as unknown as CellReputationAccount
 }
 
+/** The cell next door, where a sensor of the demo cell moves in one test. */
+const NEIGHBOUR = cellIdFromH3Index('871e701b2ffffff')
+
 const SLOTS: CellSlot[] = [
-  { pubkey: key(1).toBase58(), slotInCell: 0 },
-  { pubkey: key(2).toBase58(), slotInCell: 1 },
-  { pubkey: key(3).toBase58(), slotInCell: 2 },
+  { pubkey: key(1).toBase58(), slots: [{ cellId: CELL_ID, slotInCell: 0 }] },
+  { pubkey: key(2).toBase58(), slots: [{ cellId: CELL_ID, slotInCell: 1 }] },
+  { pubkey: key(3).toBase58(), slots: [{ cellId: CELL_ID, slotInCell: 2 }] },
 ]
 
 class Chain implements ExclusionSource {
   constructor(
     readonly ring: CellReputationAccount | null,
     readonly excluded = new Set<string>(),
+    /** Other cells' rings, by cell. */
+    readonly others = new Map<bigint, CellReputationAccount>(),
+    /** Sensors that moved: the cell they are in now, from the one in `CELL_ID`. */
+    readonly moved = new Map<string, bigint>(),
   ) {}
   read: string[] = []
-  reputation(): Promise<CellReputationAccount | null> {
-    return Promise.resolve(this.ring)
+  reputation(cellId: bigint): Promise<CellReputationAccount | null> {
+    return Promise.resolve(cellId === CELL_ID ? this.ring : (this.others.get(cellId) ?? null))
   }
   sensor(sensorKey: PublicKey): Promise<SensorAccount | null> {
-    this.read.push(sensorKey.toBase58())
-    return Promise.resolve({ active: !this.excluded.has(sensorKey.toBase58()) } as SensorAccount)
+    const pubkey = sensorKey.toBase58()
+    this.read.push(pubkey)
+    const now = this.moved.get(pubkey)
+    return Promise.resolve({
+      active: !this.excluded.has(pubkey),
+      cellId: new BN((now ?? CELL_ID).toString()),
+      previousCellId: new BN(CELL_ID.toString()),
+    } as SensorAccount)
   }
 }
 
@@ -119,6 +133,52 @@ describe('excludeBreaching', () => {
     const chain = new Chain(ring(new Map()))
     expect(await excludeBreaching(deps(chain), CELL_ID, NOW)).toEqual([])
     expect(chain.read).toEqual([])
+  })
+
+  it('judges a moved sensor on both slots, as the program will', async () => {
+    // Key 3 left slot 2 of the demo cell for slot 0 next door — FR-059.
+    const moved = new Map([[key(3).toBase58(), NEIGHBOUR]])
+    const bothSlots = {
+      slotsOf: () =>
+        Promise.resolve([
+          {
+            pubkey: key(3).toBase58(),
+            slots: [
+              { cellId: NEIGHBOUR, slotInCell: 0 },
+              { cellId: CELL_ID, slotInCell: 2 },
+            ],
+          },
+        ]),
+    }
+
+    // It lied 5 of 24 a day here and none next door: 70 of 672 is inside
+    // the line, and the program would refuse the exclusion — so none is sent.
+    const diluted = deps(
+      new Chain(ring(new Map([[2, 5]])), new Set(), new Map([[NEIGHBOUR, ring(new Map())]]), moved),
+    )
+    diluted.slots = bothSlots
+    expect(await excludeBreaching(diluted, CELL_ID, NOW)).toEqual([])
+    // Control: on this cell's ring alone, the same sensor is over the line.
+    diluted.slots = {
+      slotsOf: () =>
+        Promise.resolve([
+          { pubkey: key(3).toBase58(), slots: [{ cellId: CELL_ID, slotInCell: 2 }] },
+        ]),
+    }
+    expect(await excludeBreaching(diluted, CELL_ID, NOW)).toHaveLength(1)
+
+    // It lied in every interval here: 336 of 672 is over, wherever it went.
+    const liar = deps(
+      new Chain(ring(new Map([[2, 24]])), new Set(), new Map([[NEIGHBOUR, ring(new Map())]]), moved),
+    )
+    liar.slots = bothSlots
+    expect(await excludeBreaching(liar, CELL_ID, NOW)).toEqual([
+      { sensor: key(3).toBase58(), status: 'excluded', judged: 672, outliers: 336, txSignature: 'tx-1' },
+    ])
+    // The rings of both cells, seeded by the chain's account.
+    const keys = liar.submitter.sent[0]?.keys.map((meta) => meta.pubkey.toBase58()) ?? []
+    expect(keys[3]).toBe(reputationPda(NEIGHBOUR).address.toBase58())
+    expect(keys[4]).toBe(reputationPda(CELL_ID).address.toBase58())
   })
 
   it('does nothing for a cell with no ring yet', async () => {

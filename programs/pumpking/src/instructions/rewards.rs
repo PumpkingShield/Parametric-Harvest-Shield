@@ -25,7 +25,9 @@
 //!
 //! **Where it goes.** Earned rewards wait per slot until `claim_reward` sends
 //! them to the operator. An excluded sensor forfeits what it has not claimed:
-//! `exclude_sensor` returns it to capital with the stake (`FR-052`).
+//! `exclude_sensor` returns it to capital with the stake (`FR-052`). A sensor
+//! that moved (`FR-059`) claims what its old slot earned from the old cell's
+//! schedule: the reserve is the cell's, and it does not travel.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
@@ -162,6 +164,7 @@ pub fn pay_cell_day(
 /* -------------------------------------------------------------------------- */
 
 #[derive(Accounts)]
+#[instruction(cell_id: u64)]
 pub struct ClaimReward<'info> {
     /// Anybody: the destination is bound to the operator either way, as a
     /// payout's is bound to its owner.
@@ -176,9 +179,11 @@ pub struct ClaimReward<'info> {
     )]
     pub sensor: Account<'info, Sensor>,
 
+    /// The schedule of `cell_id` — the sensor's cell, or the one it left on
+    /// its last move.
     #[account(
         mut,
-        seeds = [REWARDS_SEED, sensor.cell_id.to_le_bytes().as_ref()],
+        seeds = [REWARDS_SEED, cell_id.to_le_bytes().as_ref()],
         bump = rewards.load()?.bump,
     )]
     pub rewards: AccountLoader<'info, CellRewards>,
@@ -202,14 +207,17 @@ pub struct ClaimReward<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
-/// Sends a sensor's earned rewards to its operator — `FR-036`.
+/// Sends what a sensor earned in `cell_id` to its operator — `FR-036`: in
+/// its own cell, or in the one it left on its last move (`FR-059`).
 ///
 /// An excluded sensor claims nothing: what it had not claimed went to capital
 /// with its stake, and until it is reinstated nothing new can be earned.
-pub fn claim_reward(ctx: Context<ClaimReward>) -> Result<()> {
+pub fn claim_reward(ctx: Context<ClaimReward>, cell_id: u64) -> Result<()> {
     let sensor = &ctx.accounts.sensor;
     require!(sensor.active, PumpkingError::SensorExcluded);
-    let slot = sensor.slot_in_cell;
+    let slot = sensor
+        .slot_in(cell_id)
+        .ok_or(PumpkingError::NotTheSensorsCell)?;
     let amount = ctx
         .accounts
         .rewards
@@ -247,7 +255,7 @@ pub fn claim_reward(ctx: Context<ClaimReward>) -> Result<()> {
     emit!(RewardClaimed {
         sensor_key: sensor.sensor_key,
         operator: sensor.operator,
-        cell_id: sensor.cell_id,
+        cell_id,
         amount,
     });
     Ok(())

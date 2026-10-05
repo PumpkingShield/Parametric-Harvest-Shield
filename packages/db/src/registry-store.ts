@@ -1,5 +1,5 @@
 import { cellResolution, ReadingKind } from '@pumpking/shared'
-import { and, asc, eq, inArray, isNotNull, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, or, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cells, operators, sensors } from './schema.ts'
 
@@ -87,6 +87,9 @@ async function selectRows(
       operatorWallet: operators.wallet,
       cellId: sensors.cellId,
       slotInCell: sensors.slotInCell,
+      previousCellId: sensors.previousCellId,
+      previousSlot: sensors.previousSlot,
+      movedAt: sensors.movedAt,
       stake: sensors.stake,
       accepted: sensors.accepted,
       outliers: sensors.outliers,
@@ -99,12 +102,20 @@ async function selectRows(
   return rows.map(({ mirroredAt, ...row }) => ({ ...row, mirrored: mirroredAt !== null }))
 }
 
-/** A mirrored sensor of a cell, by the slot the chain gave it. */
-export type CellSlot = { pubkey: string; slotInCell: number }
+/** One slot a sensor holds: the cell's ring and schedule index it by. */
+export type HeldSlot = { cellId: bigint; slotInCell: number }
 
 /**
- * The slots of a cell, as the mirror last read them — what turns a slot of
- * the cell's reputation ring back into the sensor it belongs to (`T035`).
+ * A mirrored sensor that holds a slot in a cell, with every slot it holds —
+ * its own, and the one it left on its last move (`FR-059`), current first.
+ */
+export type CellSlot = { pubkey: string; slots: HeldSlot[] }
+
+/**
+ * The sensors holding a slot of a cell, as the mirror last read them — what
+ * turns a slot of the cell's reputation ring back into the sensor it belongs
+ * to (`T035`). A sensor that moved holds one here and one in the other cell,
+ * and its record is the two together (`T039`).
  */
 export interface CellSlotStore {
   slotsOf(cellId: bigint): Promise<CellSlot[]>
@@ -115,11 +126,31 @@ export function pgCellSlotStore(db: PostgresJsDatabase<Record<string, never>>): 
     async slotsOf(cellId) {
       // Mirrored rows only: the slot is the chain's, and a row the chain has
       // never confirmed holds an old fixture's claim on a bit, not a bit.
-      return await db
-        .select({ pubkey: sensors.pubkey, slotInCell: sensors.slotInCell })
+      const rows = await db
+        .select({
+          pubkey: sensors.pubkey,
+          cellId: sensors.cellId,
+          slotInCell: sensors.slotInCell,
+          previousCellId: sensors.previousCellId,
+          previousSlot: sensors.previousSlot,
+        })
         .from(sensors)
-        .where(and(eq(sensors.cellId, cellId), isNotNull(sensors.mirroredAt)))
-        .orderBy(asc(sensors.slotInCell))
+        .where(
+          and(
+            or(eq(sensors.cellId, cellId), eq(sensors.previousCellId, cellId)),
+            isNotNull(sensors.mirroredAt),
+          ),
+        )
+        .orderBy(asc(sensors.pubkey))
+      return rows.map((row) => ({
+        pubkey: row.pubkey,
+        slots: [
+          { cellId: row.cellId, slotInCell: row.slotInCell },
+          ...(row.previousCellId === null || row.previousSlot === null
+            ? []
+            : [{ cellId: row.previousCellId, slotInCell: row.previousSlot }]),
+        ],
+      }))
     },
   }
 }
@@ -154,6 +185,15 @@ export type ChainSensor = {
   cellId: bigint
   /** The bit the program handed out — `Sensor.slot_in_cell`. */
   slotInCell: number
+  /**
+   * The cell and slot before the last move — `Sensor.previous_cell_id` and
+   * `previous_slot` — or null when the chain has none (it writes "none" as
+   * the current cell and slot). Both null or neither.
+   */
+  previousCellId: bigint | null
+  previousSlot: number | null
+  /** `Sensor.moved_at`; null for a sensor that never moved. */
+  movedAt: Date | null
   stake: bigint
   accepted: number
   outliers: number
@@ -201,7 +241,14 @@ export function pgRegistryMirrorStore(
       if (rows.length === 0) return
 
       await db.transaction(async (tx) => {
-        const cellIds = [...new Set(rows.map((row) => row.cellId))]
+        // The cell a sensor left is referenced too, and was a cell before.
+        const cellIds = [
+          ...new Set(
+            rows.flatMap((row) =>
+              row.previousCellId === null ? [row.cellId] : [row.cellId, row.previousCellId],
+            ),
+          ),
+        ]
         await tx
           .insert(cells)
           // The program admits only cells at `GRID_RESOLUTION`, but the level
@@ -234,6 +281,9 @@ export function pgRegistryMirrorStore(
             // on `Sensor` before it needs one here.
             kind: ReadingKind.PrecipitationMm,
             slotInCell: row.slotInCell,
+            previousCellId: row.previousCellId,
+            previousSlot: row.previousSlot,
+            movedAt: row.movedAt,
             stake: row.stake,
             accepted: row.accepted,
             outliers: row.outliers,
@@ -251,6 +301,9 @@ export function pgRegistryMirrorStore(
               operatorId: excluded('operator_id'),
               cellId: excluded('cell_id'),
               slotInCell: excluded('slot_in_cell'),
+              previousCellId: excluded('previous_cell_id'),
+              previousSlot: excluded('previous_slot'),
+              movedAt: excluded('moved_at'),
               stake: excluded('stake'),
               accepted: excluded('accepted'),
               outliers: excluded('outliers'),

@@ -33,8 +33,21 @@
 //! rule, and burns the whole stake, thawing part included, into capital.
 //! Coming back is the operator's own act (`reinstate_sensor`) and costs a new
 //! stake: the slate is clean, the old stake is gone.
+//!
+//! **Moving is registration again, not a new key** (`FR-059`). `move_sensor`
+//! takes a fresh slot in the new cell and leaves the old one where it is: a
+//! slot is never handed back, because its bit in past days says who voted.
+//! The sensor keeps a pointer to the slot it left, and the pointer is what
+//! keeps reputation and earnings with it — an exclusion sums the window over
+//! both slots, and what the old slot earned stays claimable from the old
+//! cell's schedule. One pointer is enough because a sensor moves at most once
+//! a window: by the time it may move again, nothing the old slot did is
+//! inside any window an exclusion can look at.
+
+use std::cell::{Ref, RefMut};
 
 use anchor_lang::prelude::*;
+use anchor_lang::{Discriminator, ZeroCopy};
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::errors::PumpkingError;
@@ -43,7 +56,8 @@ use crate::instructions::rewards::rewards_error;
 use crate::outlier::breaches_outlier_share;
 use crate::state::{
     outlier_window, CellReputation, CellRewards, CellState, Pool, Sensor, CELL_SEED,
-    GRID_RESOLUTION, MAX_SENSORS_PER_CELL, POOL_SEED, REPUTATION_SEED, REWARDS_SEED, SENSOR_SEED,
+    GRID_RESOLUTION, MAX_SENSORS_PER_CELL, OUTLIER_WINDOW_DAYS, POOL_SEED, REPUTATION_SEED,
+    REWARDS_SEED, SENSOR_SEED,
 };
 
 #[event]
@@ -94,6 +108,19 @@ pub struct SensorRegistered {
 }
 
 #[event]
+pub struct SensorMoved {
+    pub sensor_key: Pubkey,
+    pub operator: Pubkey,
+    pub from_cell_id: u64,
+    pub from_slot: u8,
+    pub cell_id: u64,
+    pub slot_in_cell: u8,
+    /// Unix time the move landed. The old cell counts the intervals that
+    /// ended before it; the new one starts with the next whole interval.
+    pub moved_at: i64,
+}
+
+#[event]
 pub struct SensorStaked {
     pub sensor_key: Pubkey,
     pub operator: Pubkey,
@@ -121,6 +148,56 @@ pub fn next_slot(sensor_count: u8) -> Result<u8> {
         PumpkingError::CellIsFull
     );
     Ok(sensor_count)
+}
+
+/// A zero-copy account whose address the seeds have already fixed, read in
+/// place — or `None` while nobody has opened it.
+///
+/// A cell a sensor has just moved into has no ring and no schedule until the
+/// aggregator writes its first day there. Requiring them would make a sensor
+/// that moved impossible to judge on the record it brought along, which is
+/// the one escape `FR-059` closes. The address is the seeds', so "not opened"
+/// can only mean "nothing written", never "somebody passed something else".
+pub fn read_opened<'a, T: ZeroCopy + Owner>(
+    info: &'a AccountInfo<'_>,
+) -> Result<Option<Ref<'a, T>>> {
+    if info.owner != &T::owner() {
+        return Ok(None);
+    }
+    let data = info.try_borrow_data()?;
+    require!(
+        data.len() >= T::DISCRIMINATOR.len() + std::mem::size_of::<T>(),
+        ErrorCode::AccountDidNotDeserialize
+    );
+    require!(
+        data[..T::DISCRIMINATOR.len()] == *T::DISCRIMINATOR,
+        ErrorCode::AccountDiscriminatorMismatch
+    );
+    Ok(Some(Ref::map(data, |data| {
+        bytemuck::from_bytes(&data[T::DISCRIMINATOR.len()..][..std::mem::size_of::<T>()])
+    })))
+}
+
+/// `read_opened`, for writing.
+pub fn write_opened<'a, T: ZeroCopy + Owner>(
+    info: &'a AccountInfo<'_>,
+) -> Result<Option<RefMut<'a, T>>> {
+    if info.owner != &T::owner() {
+        return Ok(None);
+    }
+    require!(info.is_writable, ErrorCode::AccountNotMutable);
+    let data = info.try_borrow_mut_data()?;
+    require!(
+        data.len() >= T::DISCRIMINATOR.len() + std::mem::size_of::<T>(),
+        ErrorCode::AccountDidNotDeserialize
+    );
+    require!(
+        data[..T::DISCRIMINATOR.len()] == *T::DISCRIMINATOR,
+        ErrorCode::AccountDiscriminatorMismatch
+    );
+    Ok(Some(RefMut::map(data, |data| {
+        bytemuck::from_bytes_mut(&mut data[T::DISCRIMINATOR.len()..][..std::mem::size_of::<T>()])
+    })))
 }
 
 #[derive(Accounts)]
@@ -183,6 +260,10 @@ pub fn register_sensor(ctx: Context<RegisterSensor>, cell_id: u64) -> Result<()>
     sensor.operator = ctx.accounts.operator.key();
     sensor.cell_id = cell_id;
     sensor.slot_in_cell = slot;
+    // No previous slot: the pointer equals the current one until a move.
+    sensor.previous_cell_id = cell_id;
+    sensor.previous_slot = slot;
+    sensor.moved_at = None;
     sensor.stake = 0;
     sensor.unstaking = 0;
     sensor.unlock_at_day = None;
@@ -196,6 +277,142 @@ pub fn register_sensor(ctx: Context<RegisterSensor>, cell_id: u64) -> Result<()>
         operator: sensor.operator,
         cell_id,
         slot_in_cell: slot,
+    });
+    Ok(())
+}
+
+/// Whether a sensor may move to `cell_id` today — `FR-059`.
+///
+/// `last_move_day` is the day of the previous move; `unclaimed` is what the
+/// slot before it still holds. A second move drops that slot from the
+/// pointer, so it waits until the slot can matter to nothing: its record has
+/// left every window an exclusion reads, and its earnings have been claimed.
+pub fn check_move(
+    sensor: &Sensor,
+    cell_id: u64,
+    today: u32,
+    last_move_day: Option<u32>,
+    unclaimed: u64,
+) -> Result<()> {
+    // An excluded sensor answers for its record where it is; moving would
+    // carry nothing it may use, and `reinstate_sensor` comes first.
+    require!(sensor.active, PumpkingError::SensorExcluded);
+    require!(
+        sensor.cell_id != cell_id,
+        PumpkingError::SensorAlreadyInCell
+    );
+    if let Some(day) = last_move_day {
+        // The old slot voted on `day` itself, and the window on day T reads
+        // back to T − OUTLIER_WINDOW_DAYS.
+        let free_on = day.saturating_add(u32::from(OUTLIER_WINDOW_DAYS) + 1);
+        if today < free_on {
+            msg!("The sensor may move again on day {}", free_on);
+            return err!(PumpkingError::MovedTooRecently);
+        }
+    }
+    require!(unclaimed == 0, PumpkingError::PreviousSlotUnclaimed);
+    Ok(())
+}
+
+#[derive(Accounts)]
+#[instruction(cell_id: u64)]
+pub struct MoveSensor<'info> {
+    /// Pays for the new cell's account if the sensor is its first, as in
+    /// `register_sensor`. Only the operator: the sensor's votes and stake are
+    /// theirs, and so is the choice of where they count.
+    #[account(mut)]
+    pub operator: Signer<'info>,
+
+    /// The device consents too: it is what names the cell in every reading it
+    /// signs, and a move it never heard of would leave it naming the old one.
+    pub sensor_key: Signer<'info>,
+
+    #[account(seeds = [POOL_SEED], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [SENSOR_SEED, sensor_key.key().as_ref()],
+        bump = sensor.bump,
+        has_one = operator @ PumpkingError::NotTheOperator,
+    )]
+    pub sensor: Account<'info, Sensor>,
+
+    // Boxed, as in `RegisterSensor`: the day log overruns the 4 KiB frame
+    // `try_accounts` is given beside the other accounts.
+    #[account(
+        init_if_needed,
+        payer = operator,
+        space = 8 + CellState::INIT_SPACE,
+        seeds = [CELL_SEED, cell_id.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub cell: Box<Account<'info, CellState>>,
+
+    /// CHECK: the schedule of the cell the sensor left on its last move,
+    /// fixed by the seeds and read only if it has been opened — a slot
+    /// cannot drop out of the pointer with earnings on it.
+    #[account(
+        seeds = [REWARDS_SEED, sensor.previous_cell_id.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub previous_rewards: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Moves a sensor to another cell — `FR-059`.
+///
+/// Stake, thaw and operator stay as they are; what changes is the cell its
+/// readings name and the slot that counts them there.
+pub fn move_sensor(ctx: Context<MoveSensor>, cell_id: u64) -> Result<()> {
+    check_cell_id(cell_id)?;
+
+    let now = Clock::get()?.unix_timestamp;
+    let pool = &ctx.accounts.pool;
+    let today = pool
+        .day_index(now)
+        .ok_or(PumpkingError::DayIndexUnavailable)?;
+    let sensor = &ctx.accounts.sensor;
+    let last_move_day = match sensor.moved_at {
+        Some(at) => Some(
+            pool.day_index(at)
+                .ok_or(PumpkingError::DayIndexUnavailable)?,
+        ),
+        None => None,
+    };
+    let unclaimed = match sensor.previous() {
+        Some((_, slot)) => read_opened::<CellRewards>(&ctx.accounts.previous_rewards)?
+            .and_then(|rewards| rewards.accrued.get(usize::from(slot)).copied())
+            .unwrap_or(0),
+        None => 0,
+    };
+    check_move(sensor, cell_id, today, last_move_day, unclaimed)?;
+
+    let cell = &mut ctx.accounts.cell;
+    let slot = next_slot(cell.sensor_count)?;
+    // Written every time, as in `register_sensor`.
+    cell.cell_id = cell_id;
+    cell.bump = ctx.bumps.cell;
+    cell.sensor_count = slot + 1;
+
+    let sensor = &mut ctx.accounts.sensor;
+    let from_cell_id = sensor.cell_id;
+    let from_slot = sensor.slot_in_cell;
+    sensor.previous_cell_id = from_cell_id;
+    sensor.previous_slot = from_slot;
+    sensor.cell_id = cell_id;
+    sensor.slot_in_cell = slot;
+    sensor.moved_at = Some(now);
+
+    emit!(SensorMoved {
+        sensor_key: sensor.sensor_key,
+        operator: sensor.operator,
+        from_cell_id,
+        from_slot,
+        cell_id,
+        slot_in_cell: slot,
+        moved_at: now,
     });
     Ok(())
 }
@@ -428,15 +645,22 @@ pub fn withdraw_stake(ctx: Context<WithdrawStake>) -> Result<()> {
 }
 
 /// The record an exclusion on `today` stands on, or why there is none —
-/// `FR-012`. Returns the window and the slot's judged and outlier counts.
+/// `FR-012`. Returns the window and the judged and outlier counts summed over
+/// `records`: each a ring and the slot this sensor held in it (`FR-059` — a
+/// sensor that moved inside the window answers for both slots).
 pub fn exclusion_record(
     sensor: &Sensor,
-    reputation: &CellReputation,
+    records: &[(&CellReputation, u8)],
     today: u32,
 ) -> Result<(u32, u32, u32, u32)> {
     require!(sensor.active, PumpkingError::SensorExcluded);
     let (from, to) = outlier_window(today).ok_or(PumpkingError::OutlierShareNotBreached)?;
-    let (judged, outliers) = reputation.window(sensor.slot_in_cell, from, to);
+    let (mut judged, mut outliers) = (0u32, 0u32);
+    for (ring, slot) in records {
+        let (j, o) = ring.window(*slot, from, to);
+        judged += j;
+        outliers += o;
+    }
     require!(
         breaches_outlier_share(judged, outliers),
         PumpkingError::OutlierShareNotBreached
@@ -460,21 +684,43 @@ pub struct ExcludeSensor<'info> {
     )]
     pub sensor: Account<'info, Sensor>,
 
-    // Zero-copy: the ring is read in place, never copied onto the stack.
+    /// CHECK: the reputation ring of the sensor's cell, fixed by the seeds
+    /// and read in place if it has been opened. Zero-copy: the ring is never
+    /// copied onto the stack.
     #[account(
         seeds = [REPUTATION_SEED, sensor.cell_id.to_le_bytes().as_ref()],
-        bump = reputation.load()?.bump,
+        bump,
     )]
-    pub reputation: AccountLoader<'info, CellReputation>,
+    pub reputation: UncheckedAccount<'info>,
 
-    /// What the sensor earned and had not claimed is forfeited with the
-    /// stake. It already sits in the capital vault, so only the books move.
+    /// CHECK: the ring of the cell the sensor left on its last move, fixed by
+    /// the seeds — the caller cannot leave out a record that would raise or
+    /// dilute the share. The same account as `reputation` when the sensor
+    /// never moved, and then not read.
+    #[account(
+        seeds = [REPUTATION_SEED, sensor.previous_cell_id.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub previous_reputation: UncheckedAccount<'info>,
+
+    /// CHECK: the schedule of the sensor's cell, fixed by the seeds. What the
+    /// sensor earned and had not claimed is forfeited with the stake; it
+    /// already sits in the capital vault, so only the books move.
     #[account(
         mut,
         seeds = [REWARDS_SEED, sensor.cell_id.to_le_bytes().as_ref()],
-        bump = rewards.load()?.bump,
+        bump,
     )]
-    pub rewards: AccountLoader<'info, CellRewards>,
+    pub rewards: UncheckedAccount<'info>,
+
+    /// CHECK: the schedule of the cell the sensor left, fixed by the seeds —
+    /// earnings parked there are forfeited as well.
+    #[account(
+        mut,
+        seeds = [REWARDS_SEED, sensor.previous_cell_id.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub previous_rewards: UncheckedAccount<'info>,
 
     #[account(address = pool.asset_mint)]
     pub asset_mint: InterfaceAccount<'info, Mint>,
@@ -489,6 +735,14 @@ pub struct ExcludeSensor<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+/// Takes what `slot` earned in one cell's schedule, if the cell has one.
+fn forfeit(info: &AccountInfo, slot: u8) -> Result<u64> {
+    match write_opened::<CellRewards>(info)? {
+        Some(mut rewards) => rewards.take_accrued(slot).map_err(rewards_error),
+        None => Ok(0),
+    }
+}
+
 /// Excludes a sensor whose record over the window breaches the outlier share,
 /// and burns its stake into capital — `FR-012`, `FR-052`.
 pub fn exclude_sensor(ctx: Context<ExcludeSensor>) -> Result<()> {
@@ -497,17 +751,30 @@ pub fn exclude_sensor(ctx: Context<ExcludeSensor>) -> Result<()> {
         .pool
         .day_index(Clock::get()?.unix_timestamp)
         .ok_or(PumpkingError::DayIndexUnavailable)?;
-    let (from, to, judged, outliers) = exclusion_record(
-        &ctx.accounts.sensor,
-        &*ctx.accounts.reputation.load()?,
-        today,
-    )?;
 
-    let burnt = ctx
-        .accounts
-        .sensor
+    let sensor = &ctx.accounts.sensor;
+    let previous = sensor.previous();
+    let (from, to, judged, outliers) = {
+        let current = read_opened::<CellReputation>(&ctx.accounts.reputation)?;
+        // A sensor that never moved names its own ring twice; it is read once.
+        let before = match previous {
+            Some(_) => read_opened::<CellReputation>(&ctx.accounts.previous_reputation)?,
+            None => None,
+        };
+        let mut records: [Option<(&CellReputation, u8)>; 2] = [None, None];
+        if let Some(ring) = current.as_deref() {
+            records[0] = Some((ring, sensor.slot_in_cell));
+        }
+        if let (Some(ring), Some((_, slot))) = (before.as_deref(), previous) {
+            records[1] = Some((ring, slot));
+        }
+        let records: Vec<(&CellReputation, u8)> = records.into_iter().flatten().collect();
+        exclusion_record(sensor, &records, today)?
+    };
+
+    let burnt = sensor
         .stake
-        .checked_add(ctx.accounts.sensor.unstaking)
+        .checked_add(sensor.unstaking)
         .ok_or(PumpkingError::MathOverflow)?;
 
     if burnt > 0 {
@@ -530,14 +797,15 @@ pub fn exclude_sensor(ctx: Context<ExcludeSensor>) -> Result<()> {
         )?;
     }
 
-    // Unclaimed rewards go the same way. They are in the capital vault
-    // already, set apart only by `CellRewards::reserve`.
-    let forfeited = ctx
-        .accounts
-        .rewards
-        .load_mut()?
-        .take_accrued(ctx.accounts.sensor.slot_in_cell)
-        .map_err(rewards_error)?;
+    // Unclaimed rewards go the same way, from both cells. They are in the
+    // capital vault already, set apart only by `CellRewards::reserve`.
+    let mut forfeited = forfeit(&ctx.accounts.rewards, ctx.accounts.sensor.slot_in_cell)?;
+    if let Some((_, slot)) = previous {
+        let parked = forfeit(&ctx.accounts.previous_rewards, slot)?;
+        forfeited = forfeited
+            .checked_add(parked)
+            .ok_or(PumpkingError::MathOverflow)?;
+    }
 
     // Capital grows and the shares do not: the burn is the depositors' to
     // keep, which is what makes collusion cost the colluders.
@@ -583,12 +851,15 @@ pub struct ReinstateSensor<'info> {
     )]
     pub sensor: Account<'info, Sensor>,
 
+    /// CHECK: the reputation ring of the sensor's cell, fixed by the seeds
+    /// and cleared if it has been opened — a sensor excluded on the record it
+    /// brought from another cell may have none here yet.
     #[account(
         mut,
         seeds = [REPUTATION_SEED, sensor.cell_id.to_le_bytes().as_ref()],
-        bump = reputation.load()?.bump,
+        bump,
     )]
-    pub reputation: AccountLoader<'info, CellReputation>,
+    pub reputation: UncheckedAccount<'info>,
 }
 
 /// Brings an excluded sensor back with a clean slate — `FR-012`.
@@ -598,17 +869,19 @@ pub struct ReinstateSensor<'info> {
 /// the exclusion is gone, and the sensor counts again only once it is staked
 /// to the minimum anew. Its slot's history is cleared — otherwise the very
 /// record that excluded it would let anyone exclude it again the moment it
-/// came back, for nothing it did since.
+/// came back, for nothing it did since. The slot it left on a move drops out
+/// of the pointer for the same reason; what it had earned went with the
+/// exclusion, so nothing is left there to claim.
 pub fn reinstate_sensor(ctx: Context<ReinstateSensor>) -> Result<()> {
     let sensor = &mut ctx.accounts.sensor;
     require!(!sensor.active, PumpkingError::SensorNotExcluded);
     sensor.active = true;
     sensor.accepted = 0;
     sensor.outliers = 0;
-    ctx.accounts
-        .reputation
-        .load_mut()?
-        .clear_slot(sensor.slot_in_cell);
+    sensor.drop_previous();
+    if let Some(mut ring) = write_opened::<CellReputation>(&ctx.accounts.reputation)? {
+        ring.clear_slot(sensor.slot_in_cell);
+    }
 
     emit!(SensorReinstated {
         sensor_key: sensor.sensor_key,
@@ -671,6 +944,9 @@ mod tests {
             operator: Pubkey::default(),
             cell_id: DEMO_CELL,
             slot_in_cell: 0,
+            previous_cell_id: DEMO_CELL,
+            previous_slot: 0,
+            moved_at: None,
             stake,
             unstaking: 0,
             unlock_at_day: None,
@@ -798,7 +1074,7 @@ mod tests {
         // Days 6..=19, 24 judged a day, 5 outliers a day: 70 of 336 > 20 %.
         let rep = record(0, 6..20, 24, 5);
         assert_eq!(
-            exclusion_record(&staked(1_000), &rep, 20).unwrap(),
+            exclusion_record(&staked(1_000), &[(&rep, 0)], 20).unwrap(),
             (6, 19, 336, 70)
         );
     }
@@ -808,7 +1084,7 @@ mod tests {
         // 4 of 24 a day is 16.7 %: a sensor that is often off, not one that lies.
         let rep = record(0, 6..20, 24, 4);
         assert_eq!(
-            code_of(exclusion_record(&staked(1_000), &rep, 20).unwrap_err()),
+            code_of(exclusion_record(&staked(1_000), &[(&rep, 0)], 20).unwrap_err()),
             code(PumpkingError::OutlierShareNotBreached)
         );
     }
@@ -824,7 +1100,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            code_of(exclusion_record(&staked(1_000), &rep, 30).unwrap_err()),
+            code_of(exclusion_record(&staked(1_000), &[(&rep, 0)], 30).unwrap_err()),
             code(PumpkingError::OutlierShareNotBreached)
         );
     }
@@ -833,7 +1109,7 @@ mod tests {
     fn another_slot_s_record_is_not_this_sensor_s() {
         let rep = record(5, 6..20, 24, 24);
         assert_eq!(
-            code_of(exclusion_record(&staked(1_000), &rep, 20).unwrap_err()),
+            code_of(exclusion_record(&staked(1_000), &[(&rep, 0)], 20).unwrap_err()),
             code(PumpkingError::OutlierShareNotBreached)
         );
     }
@@ -844,11 +1120,11 @@ mod tests {
         let mut sensor = staked(1_000);
         sensor.active = false;
         assert_eq!(
-            code_of(exclusion_record(&sensor, &rep, 20).unwrap_err()),
+            code_of(exclusion_record(&sensor, &[(&rep, 0)], 20).unwrap_err()),
             code(PumpkingError::SensorExcluded)
         );
         assert_eq!(
-            code_of(exclusion_record(&staked(1_000), &rep, 0).unwrap_err()),
+            code_of(exclusion_record(&staked(1_000), &[(&rep, 0)], 0).unwrap_err()),
             code(PumpkingError::OutlierShareNotBreached)
         );
     }
@@ -861,6 +1137,116 @@ mod tests {
         assert_eq!(
             code_of(next_slot(MAX_SENSORS_PER_CELL).unwrap_err()),
             code(PumpkingError::CellIsFull)
+        );
+    }
+
+    /// The cell next door, as in `tests/rewards.rs`.
+    const NEIGHBOUR: u64 = 0x0871_e701_b2ff_ffff;
+
+    /// A sensor that moved from slot 3 of the demo cell to slot 0 next door
+    /// on day `day`.
+    fn moved(day: u32) -> Sensor {
+        let mut sensor = staked(1_000);
+        sensor.previous_cell_id = DEMO_CELL;
+        sensor.previous_slot = 3;
+        sensor.cell_id = NEIGHBOUR;
+        sensor.slot_in_cell = 0;
+        sensor.moved_at = Some(i64::from(day) * 86_400);
+        sensor
+    }
+
+    #[test]
+    fn a_sensor_that_never_moved_has_no_previous_slot() {
+        let sensor = staked(1_000);
+        assert_eq!(sensor.previous(), None);
+        assert_eq!(sensor.slot_in(DEMO_CELL), Some(0));
+        assert_eq!(sensor.slot_in(NEIGHBOUR), None);
+    }
+
+    #[test]
+    fn a_moved_sensor_holds_a_slot_in_each_cell() {
+        let sensor = moved(10);
+        assert_eq!(sensor.previous(), Some((DEMO_CELL, 3)));
+        assert_eq!(sensor.slot_in(NEIGHBOUR), Some(0));
+        assert_eq!(sensor.slot_in(DEMO_CELL), Some(3));
+        assert_eq!(sensor.slot_in(0x0871_e701_86ff_ffff), None);
+    }
+
+    #[test]
+    fn dropping_the_previous_slot_leaves_only_the_current() {
+        let mut sensor = moved(10);
+        sensor.drop_previous();
+        assert_eq!(sensor.previous(), None);
+        assert_eq!(sensor.slot_in(DEMO_CELL), None);
+        // The date of the move stays: it still spaces the next one.
+        assert!(sensor.moved_at.is_some());
+    }
+
+    #[test]
+    fn the_record_brought_from_the_old_cell_counts_towards_an_exclusion() {
+        // Slot 3 lied for eight days in the old cell, slot 0 has been clean
+        // for six in the new one: 192 of 336 is well past 20 %.
+        let old = record(3, 6..14, 24, 24);
+        let new = record(0, 14..20, 24, 0);
+        let sensor = moved(13);
+        assert_eq!(
+            exclusion_record(&sensor, &[(&new, 0), (&old, 3)], 20).unwrap(),
+            (6, 19, 336, 192)
+        );
+        // Without the old ring the move would have been a clean slate.
+        assert_eq!(
+            code_of(exclusion_record(&sensor, &[(&new, 0)], 20).unwrap_err()),
+            code(PumpkingError::OutlierShareNotBreached)
+        );
+    }
+
+    #[test]
+    fn a_clean_old_record_dilutes_a_short_bad_streak_as_it_would_have_in_place() {
+        // The same 14 days in one cell would not exclude either: 48 of 336.
+        let old = record(3, 6..18, 24, 0);
+        let new = record(0, 18..20, 24, 24);
+        assert_eq!(
+            code_of(exclusion_record(&moved(17), &[(&new, 0), (&old, 3)], 20).unwrap_err()),
+            code(PumpkingError::OutlierShareNotBreached)
+        );
+    }
+
+    #[test]
+    fn a_first_move_goes_anywhere_but_the_cell_it_is_in() {
+        assert!(check_move(&staked(1_000), NEIGHBOUR, 5, None, 0).is_ok());
+        assert_eq!(
+            code_of(check_move(&staked(1_000), DEMO_CELL, 5, None, 0).unwrap_err()),
+            code(PumpkingError::SensorAlreadyInCell)
+        );
+    }
+
+    #[test]
+    fn an_excluded_sensor_does_not_move() {
+        let mut sensor = staked(1_000);
+        sensor.active = false;
+        assert_eq!(
+            code_of(check_move(&sensor, NEIGHBOUR, 5, None, 0).unwrap_err()),
+            code(PumpkingError::SensorExcluded)
+        );
+    }
+
+    #[test]
+    fn the_next_move_waits_until_the_old_slot_has_left_every_window() {
+        let sensor = moved(10);
+        // The old slot voted on day 10; the window on day 24 reads back to 10.
+        assert_eq!(
+            code_of(check_move(&sensor, DEMO_CELL, 24, Some(10), 0).unwrap_err()),
+            code(PumpkingError::MovedTooRecently)
+        );
+        assert!(outlier_window(25).unwrap().0 > 10);
+        assert!(check_move(&sensor, DEMO_CELL, 25, Some(10), 0).is_ok());
+    }
+
+    #[test]
+    fn the_next_move_waits_for_the_old_slot_s_earnings_to_be_claimed() {
+        assert_eq!(
+            code_of(check_move(&moved(10), DEMO_CELL, 40, Some(10), 1).unwrap_err()),
+            code(PumpkingError::PreviousSlotUnclaimed)
         );
     }
 }

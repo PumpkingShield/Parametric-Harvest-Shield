@@ -5,6 +5,7 @@ import type { FieldsBody } from '../errors.ts'
 import { createSensorsRoute, type SensorWire } from './sensors.ts'
 
 const H3 = '871e701b3ffffff'
+const NEIGHBOUR = '871e701b2ffffff'
 const MIN_STAKE = 1_000_000n
 
 let rows: RegistryRow[]
@@ -24,6 +25,9 @@ beforeEach(async () => {
       operatorWallet: 'operator',
       cellId: cellIdFromH3Index(H3),
       slotInCell: 0,
+      previousCellId: null,
+      previousSlot: null,
+      movedAt: null,
       stake: MIN_STAKE,
       accepted: 0,
       outliers: 0,
@@ -49,8 +53,33 @@ describe('GET /v1/sensors/:pubkey', () => {
     expect(await sensor()).toEqual({
       pubkey,
       cellId: H3,
+      previousCellId: null,
+      movedAt: null,
       stake: '1000000',
       minStake: '1000000',
+      voting: true,
+      problem: null,
+    })
+  })
+
+  it('names the cell a moved key left and when, for the votes and the earnings left there — FR-059', async () => {
+    const [row] = rows
+    if (row === undefined) throw new Error('no row')
+    const movedAt = new Date('2026-10-05T12:30:00.000Z')
+    rows = [
+      {
+        ...row,
+        cellId: cellIdFromH3Index(NEIGHBOUR),
+        slotInCell: 3,
+        previousCellId: cellIdFromH3Index(H3),
+        previousSlot: 0,
+        movedAt,
+      },
+    ]
+    expect(await sensor()).toMatchObject({
+      cellId: NEIGHBOUR,
+      previousCellId: H3,
+      movedAt: '2026-10-05T12:30:00.000Z',
       voting: true,
       problem: null,
     })

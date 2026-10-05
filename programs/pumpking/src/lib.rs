@@ -119,7 +119,15 @@ pub mod pumpking {
 
     /// Sends a sensor's earned rewards to its operator's token account —
     /// `FR-036`. Anyone may call it; the destination is bound to the operator.
-    pub fn claim_reward(ctx: Context<ClaimReward>) -> Result<()> {
-        instructions::rewards::claim_reward(ctx)
+    /// `cell_id` is the sensor's cell, or the one it left on its last move.
+    pub fn claim_reward(ctx: Context<ClaimReward>, cell_id: u64) -> Result<()> {
+        instructions::rewards::claim_reward(ctx, cell_id)
+    }
+
+    /// Moves a sensor to another cell (`FR-059`): a fresh slot there, the old
+    /// one kept for the record and the earnings it carries. Operator and
+    /// sensor key both sign, as at registration.
+    pub fn move_sensor(ctx: Context<MoveSensor>, cell_id: u64) -> Result<()> {
+        instructions::sensor::move_sensor(ctx, cell_id)
     }
 }

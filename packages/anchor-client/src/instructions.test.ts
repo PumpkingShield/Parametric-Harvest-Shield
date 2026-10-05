@@ -11,6 +11,7 @@ import {
   excludeSensorInstruction,
   initializePoolInstruction,
   issuePolicyInstruction,
+  moveSensorInstruction,
   type PoolParams,
   registerSensorInstruction,
   reinstateSensorInstruction,
@@ -850,7 +851,14 @@ describe('excludeSensorInstruction', () => {
   const sensorKey = key(12)
 
   it('burns from the stake vault into the capital vault, signed by anyone', () => {
-    const instruction = excludeSensorInstruction({ caller, sensorKey, cellId, assetMint, programId })
+    const instruction = excludeSensorInstruction({
+      caller,
+      sensorKey,
+      cellId,
+      previousCellId: cellId,
+      assetMint,
+      programId,
+    })
     expect(decode(instruction.data).name).toBe('excludeSensor')
     const pool = poolPda(programId).address
     expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
@@ -858,6 +866,8 @@ describe('excludeSensorInstruction', () => {
       pool.toBase58(),
       sensorPda(sensorKey, programId).address.toBase58(),
       reputationPda(cellId, programId).address.toBase58(),
+      reputationPda(cellId, programId).address.toBase58(),
+      rewardsPda(cellId, programId).address.toBase58(),
       rewardsPda(cellId, programId).address.toBase58(),
       assetMint.toBase58(),
       stakeVaultPda(pool, programId).address.toBase58(),
@@ -867,6 +877,27 @@ describe('excludeSensorInstruction', () => {
     expect(
       instruction.keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58()),
     ).toEqual([caller.toBase58()])
+  })
+
+  it('reads the ring and the schedule of the cell a moved sensor left', () => {
+    const previousCellId = 0x0871e701b2ffffffn
+    const instruction = excludeSensorInstruction({
+      caller,
+      sensorKey,
+      cellId,
+      previousCellId,
+      assetMint,
+      programId,
+    })
+    const keys = instruction.keys.map((meta) => meta.pubkey.toBase58())
+    expect(keys.slice(3, 7)).toEqual([
+      reputationPda(cellId, programId).address.toBase58(),
+      reputationPda(previousCellId, programId).address.toBase58(),
+      rewardsPda(cellId, programId).address.toBase58(),
+      rewardsPda(previousCellId, programId).address.toBase58(),
+    ])
+    expect(instruction.keys[4]?.isWritable).toBe(false)
+    expect(instruction.keys[6]?.isWritable).toBe(true)
   })
 })
 
@@ -899,7 +930,9 @@ describe('claimRewardInstruction', () => {
       operatorTokens,
       programId,
     })
-    expect(decode(instruction.data).name).toBe('claimReward')
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('claimReward')
+    expect(BigInt(String(data.cellId))).toBe(cellId)
     const pool = poolPda(programId).address
     expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
       caller.toBase58(),
@@ -914,5 +947,40 @@ describe('claimRewardInstruction', () => {
     expect(
       instruction.keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58()),
     ).toEqual([caller.toBase58()])
+  })
+})
+
+describe('moveSensorInstruction', () => {
+  const operator = key(11)
+  const sensorKey = key(12)
+  // The neighbour of the demo cell, and the demo cell it leaves.
+  const cellId = 0x0871e701b2ffffffn
+  const previousCellId = 0x0871e701b3ffffffn
+
+  it('round-trips the cell, opens it if needed and is signed by operator and sensor key', () => {
+    const instruction = moveSensorInstruction({
+      operator,
+      sensorKey,
+      cellId,
+      previousCellId,
+      programId,
+    })
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('moveSensor')
+    expect(BigInt(String(data.cellId))).toBe(cellId)
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      operator.toBase58(),
+      sensorKey.toBase58(),
+      poolPda(programId).address.toBase58(),
+      sensorPda(sensorKey, programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+      rewardsPda(previousCellId, programId).address.toBase58(),
+      SYSTEM_PROGRAM_ID.toBase58(),
+    ])
+    expect(
+      instruction.keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58()),
+    ).toEqual([operator.toBase58(), sensorKey.toBase58()])
+    expect(instruction.keys[4]?.isWritable).toBe(true)
+    expect(instruction.keys[5]?.isWritable).toBe(false)
   })
 })

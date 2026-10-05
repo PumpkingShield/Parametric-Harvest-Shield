@@ -75,7 +75,7 @@ export type RegisterViewProps = {
   onRegister: () => void
 }
 
-const button = (enabled: boolean) =>
+export const button = (enabled: boolean) =>
   ({
     marginTop: 12,
     width: '100%',
@@ -115,7 +115,7 @@ const field = {
   borderRadius: 0,
 } as const
 
-const heading = { margin: '18px 0 6px', fontSize: 15, fontWeight: 700, color: INK } as const
+export const heading = { margin: '18px 0 6px', fontSize: 15, fontWeight: 700, color: INK } as const
 
 export function placeText(place: Place): string {
   switch (place.kind) {
@@ -145,19 +145,23 @@ export function progressText(progress: Progress): string | null {
   }
 }
 
-export function RegisterView(props: RegisterViewProps) {
-  const { operator, place, progress } = props
-  const working = progress.kind === 'working'
-  const canRegister =
-    operator !== null && place.kind === 'cell' && !working && progress.kind !== 'done'
-  const status = progressText(progress)
+export type PlaceFieldsProps = {
+  place: Place
+  lat: string
+  lng: string
+  working: boolean
+  onLocate: () => void
+  onLat: (text: string) => void
+  onLng: (text: string) => void
+  onTyped: () => void
+}
 
+/** Where the phone is: its own position, or coordinates typed in — `FR-058`. */
+export function PlaceFields(props: PlaceFieldsProps) {
+  const { working } = props
   return (
-    <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
-      <p style={{ margin: 0, fontSize: 17, fontWeight: 700, color: INK }}>Register this phone</p>
-
-      <p style={heading}>1. Where it is</p>
-      <Prose>{placeText(place)}</Prose>
+    <>
+      <Prose>{placeText(props.place)}</Prose>
       <button type="button" style={quiet} onClick={props.onLocate} disabled={working}>
         Use this phone’s location
       </button>
@@ -186,6 +190,32 @@ export function RegisterView(props: RegisterViewProps) {
       <button type="button" style={quiet} onClick={props.onTyped} disabled={working}>
         Use these coordinates
       </button>
+    </>
+  )
+}
+
+export function RegisterView(props: RegisterViewProps) {
+  const { operator, place, progress } = props
+  const working = progress.kind === 'working'
+  const canRegister =
+    operator !== null && place.kind === 'cell' && !working && progress.kind !== 'done'
+  const status = progressText(progress)
+
+  return (
+    <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+      <p style={{ margin: 0, fontSize: 17, fontWeight: 700, color: INK }}>Register this phone</p>
+
+      <p style={heading}>1. Where it is</p>
+      <PlaceFields
+        place={place}
+        lat={props.lat}
+        lng={props.lng}
+        working={working}
+        onLocate={props.onLocate}
+        onLat={props.onLat}
+        onLng={props.onLng}
+        onTyped={props.onTyped}
+      />
 
       <p style={heading}>2. Whose it is</p>
       <Prose>
@@ -254,40 +284,17 @@ export type RegisterProps = {
   vault?: OperatorVault
 }
 
-function openVault(): OperatorVault {
-  return typeof indexedDB === 'undefined' ? memoryOperatorVault() : indexedDbOperatorVault()
-}
-
 /** Degrees as typed — comma or point, nothing else. */
 function degrees(text: string): number {
   const trimmed = text.trim().replace(',', '.')
   return /^-?\d{1,3}(\.\d+)?$/.test(trimmed) ? Number(trimmed) : Number.NaN
 }
 
-const Register = (props: RegisterProps) => {
-  const [vault] = useState<OperatorVault>(() => props.vault ?? openVault())
-  const apiUrl = props.apiUrl ?? API_URL
-  const fetchFn = props.fetchFn ?? ((input: string, init?: RequestInit) => fetch(input, init))
-  const [operator, setOperator] = useState<OperatorRecord | null>(null)
+/** The phone's place and the two ways of giving it, as `PlaceFields` shows them. */
+export function usePlace() {
   const [place, setPlace] = useState<Place>({ kind: 'none' })
   const [lat, setLat] = useState('')
   const [lng, setLng] = useState('')
-  const [progress, setProgress] = useState<Progress>({ kind: 'idle' })
-
-  // The wallet is made the first time this opens, so its address can be shown
-  // — and funded by hand — before anything is sent.
-  useEffect(() => {
-    let live = true
-    void (async () => {
-      const loaded = await vault.load().catch(() => null)
-      const record = loaded ?? newOperator()
-      if (loaded === null) await vault.save(record)
-      if (live) setOperator(record)
-    })()
-    return () => {
-      live = false
-    }
-  }, [vault])
 
   const locate = () => {
     if (typeof navigator === 'undefined' || navigator.geolocation === undefined) {
@@ -324,6 +331,42 @@ const Register = (props: RegisterProps) => {
       })
     }
   }
+
+  return { place, lat, lng, setLat, setLng, locate, typed }
+}
+
+/** The operator key this phone keeps, made the first time it is asked for. */
+export function useOperator(vault: OperatorVault): OperatorRecord | null {
+  const [operator, setOperator] = useState<OperatorRecord | null>(null)
+  // Made the first time this opens, so its address can be shown — and funded
+  // by hand — before anything is sent.
+  useEffect(() => {
+    let live = true
+    void (async () => {
+      const loaded = await vault.load().catch(() => null)
+      const record = loaded ?? newOperator()
+      if (loaded === null) await vault.save(record)
+      if (live) setOperator(record)
+    })()
+    return () => {
+      live = false
+    }
+  }, [vault])
+  return operator
+}
+
+export function openOperatorVault(): OperatorVault {
+  return typeof indexedDB === 'undefined' ? memoryOperatorVault() : indexedDbOperatorVault()
+}
+
+const Register = (props: RegisterProps) => {
+  const [vault] = useState<OperatorVault>(() => props.vault ?? openOperatorVault())
+  const apiUrl = props.apiUrl ?? API_URL
+  const fetchFn = props.fetchFn ?? ((input: string, init?: RequestInit) => fetch(input, init))
+  const operator = useOperator(vault)
+  const { place, lat, lng, setLat, setLng, locate, typed } = usePlace()
+  const [progress, setProgress] = useState<Progress>({ kind: 'idle' })
+
 
   const download = () => {
     if (operator === null) return

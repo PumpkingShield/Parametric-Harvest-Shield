@@ -201,4 +201,16 @@ pub enum PumpkingError {
 
     #[msg("The sensor has no reward to claim")]
     NothingToClaim,
+
+    #[msg("The sensor is already in this cell")]
+    SensorAlreadyInCell,
+
+    #[msg("A sensor moves at most once per outlier window")]
+    MovedTooRecently,
+
+    #[msg("The slot the sensor left on its last move still has rewards to claim")]
+    PreviousSlotUnclaimed,
+
+    #[msg("The sensor holds no slot in this cell")]
+    NotTheSensorsCell,
 }

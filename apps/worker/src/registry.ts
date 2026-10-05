@@ -61,11 +61,21 @@ export interface RegistrySource {
 
 /** A decoded `Sensor` account, as the store takes it. */
 export function chainSensorOf(account: SensorAccount): ChainSensor {
+  const cellId = BigInt(account.cellId.toString())
+  const previousCellId = BigInt(account.previousCellId.toString())
+  // The program writes "no previous slot" as the current cell and slot —
+  // before the first move and after a reinstatement (`FR-059`). A move always
+  // changes the cell, so the pair can only be equal on purpose.
+  const moved = previousCellId !== cellId || account.previousSlot !== account.slotInCell
   return {
     pubkey: account.sensorKey.toBase58(),
     operatorWallet: account.operator.toBase58(),
-    cellId: BigInt(account.cellId.toString()),
+    cellId,
     slotInCell: account.slotInCell,
+    previousCellId: moved ? previousCellId : null,
+    previousSlot: moved ? account.previousSlot : null,
+    movedAt:
+      account.movedAt === null ? null : new Date(Number(account.movedAt.toString()) * 1000),
     stake: BigInt(account.stake.toString()),
     accepted: account.accepted,
     outliers: account.outliers,
@@ -93,6 +103,9 @@ function agrees(row: RegistryRow, chain: ChainSensor): boolean {
     row.operatorWallet === chain.operatorWallet &&
     row.cellId === chain.cellId &&
     row.slotInCell === chain.slotInCell &&
+    row.previousCellId === chain.previousCellId &&
+    row.previousSlot === chain.previousSlot &&
+    row.movedAt?.getTime() === chain.movedAt?.getTime() &&
     row.stake === chain.stake &&
     row.accepted === chain.accepted &&
     row.outliers === chain.outliers &&

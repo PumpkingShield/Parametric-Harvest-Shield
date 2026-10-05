@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { LookUp } from './publish.ts'
+import type { LookUp, Registration } from './publish.ts'
 import {
   outcomeText,
   registrationText,
@@ -22,6 +22,8 @@ const registered = (problem: 'excluded' | null = null): LookUp => ({
   registration: {
     pubkey: KEY,
     cellId: CELL,
+    previousCellId: null,
+    movedAt: null,
     stake: '1000000',
     minStake: '1000000',
     voting: problem === null,
@@ -77,6 +79,22 @@ describe('ThisPhoneView', () => {
     expect(registrationText(registered())).toContain(CELL)
     expect(markup).toContain(registrationText(registered()))
     expect(sendDisabled(markup)).toBe(false)
+  })
+
+  it('says where a moved key came from, and from when it counts — FR-059', () => {
+    const moved: LookUp = {
+      kind: 'registered',
+      registration: {
+        ...((registered() as { registration: Registration }).registration),
+        cellId: '871e701b2ffffff',
+        previousCellId: CELL,
+        movedAt: '2026-10-05T12:30:00.000Z',
+      },
+    }
+    const text = registrationText(moved)
+    expect(text).toContain('871e701b2ffffff')
+    expect(text).toContain(`moved here from ${CELL}`)
+    expect(text).toContain('first whole interval')
   })
 
   it('sends for a registered key that does not vote, and says its readings do not count', () => {

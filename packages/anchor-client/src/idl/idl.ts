@@ -18,7 +18,8 @@ export const PUMPKING_IDL: Pumpking = {
       "name": "claimReward",
       "docs": [
         "Sends a sensor's earned rewards to its operator's token account —",
-        "`FR-036`. Anyone may call it; the destination is bound to the operator."
+        "`FR-036`. Anyone may call it; the destination is bound to the operator.",
+        "`cell_id` is the sensor's cell, or the one it left on its last move."
       ],
       "discriminator": [
         149,
@@ -80,6 +81,10 @@ export const PUMPKING_IDL: Pumpking = {
         },
         {
           "name": "rewards",
+          "docs": [
+            "The schedule of `cell_id` — the sensor's cell, or the one it left on",
+            "its last move."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -96,9 +101,8 @@ export const PUMPKING_IDL: Pumpking = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "sensor.cell_id",
-                "account": "sensor"
+                "kind": "arg",
+                "path": "cellId"
               }
             ]
           }
@@ -125,7 +129,12 @@ export const PUMPKING_IDL: Pumpking = {
           "name": "tokenProgram"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "cellId",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "claimUnclaimedPayout",
@@ -497,6 +506,10 @@ export const PUMPKING_IDL: Pumpking = {
         },
         {
           "name": "reputation",
+          "docs": [
+            "and read in place if it has been opened. Zero-copy: the ring is never",
+            "copied onto the stack."
+          ],
           "pda": {
             "seeds": [
               {
@@ -523,10 +536,42 @@ export const PUMPKING_IDL: Pumpking = {
           }
         },
         {
+          "name": "previousReputation",
+          "docs": [
+            "the seeds — the caller cannot leave out a record that would raise or",
+            "dilute the share. The same account as `reputation` when the sensor",
+            "never moved, and then not read."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  112,
+                  117,
+                  116,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.previous_cell_id",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
           "name": "rewards",
           "docs": [
-            "What the sensor earned and had not claimed is forfeited with the",
-            "stake. It already sits in the capital vault, so only the books move."
+            "sensor earned and had not claimed is forfeited with the stake; it",
+            "already sits in the capital vault, so only the books move."
           ],
           "writable": true,
           "pda": {
@@ -546,6 +591,34 @@ export const PUMPKING_IDL: Pumpking = {
               {
                 "kind": "account",
                 "path": "sensor.cell_id",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "previousRewards",
+          "docs": [
+            "earnings parked there are forfeited as well."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.previous_cell_id",
                 "account": "sensor"
               }
             ]
@@ -861,6 +934,145 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "moveSensor",
+      "docs": [
+        "Moves a sensor to another cell (`FR-059`): a fresh slot there, the old",
+        "one kept for the record and the earnings it carries. Operator and",
+        "sensor key both sign, as at registration."
+      ],
+      "discriminator": [
+        238,
+        91,
+        117,
+        165,
+        240,
+        131,
+        144,
+        68
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "docs": [
+            "Pays for the new cell's account if the sensor is its first, as in",
+            "`register_sensor`. Only the operator: the sensor's votes and stake are",
+            "theirs, and so is the choice of where they count."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "sensor"
+          ]
+        },
+        {
+          "name": "sensorKey",
+          "docs": [
+            "The device consents too: it is what names the cell in every reading it",
+            "signs, and a move it never heard of would leave it naming the old one."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sensor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  110,
+                  115,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensorKey"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "cellId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "previousRewards",
+          "docs": [
+            "fixed by the seeds and read only if it has been opened — a slot",
+            "cannot drop out of the pointer with earnings on it."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sensor.previous_cell_id",
+                "account": "sensor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "cellId",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "registerSensor",
       "docs": [
         "Puts a sensor on the network. Open to anyone (`FR-007`); the sensor's",
@@ -1022,6 +1234,10 @@ export const PUMPKING_IDL: Pumpking = {
         },
         {
           "name": "reputation",
+          "docs": [
+            "and cleared if it has been opened — a sensor excluded on the record it",
+            "brought from another cell may have none here yet."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -1882,6 +2098,19 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "sensorMoved",
+      "discriminator": [
+        47,
+        78,
+        77,
+        46,
+        222,
+        23,
+        255,
+        193
+      ]
+    },
+    {
       "name": "sensorRegistered",
       "discriminator": [
         203,
@@ -2277,6 +2506,26 @@ export const PUMPKING_IDL: Pumpking = {
       "code": 6065,
       "name": "nothingToClaim",
       "msg": "The sensor has no reward to claim"
+    },
+    {
+      "code": 6066,
+      "name": "sensorAlreadyInCell",
+      "msg": "The sensor is already in this cell"
+    },
+    {
+      "code": 6067,
+      "name": "movedTooRecently",
+      "msg": "A sensor moves at most once per outlier window"
+    },
+    {
+      "code": 6068,
+      "name": "previousSlotUnclaimed",
+      "msg": "The slot the sensor left on its last move still has rewards to claim"
+    },
+    {
+      "code": 6069,
+      "name": "notTheSensorsCell",
+      "msg": "The sensor holds no slot in this cell"
     }
   ],
   "types": [
@@ -3559,6 +3808,35 @@ export const PUMPKING_IDL: Pumpking = {
             "type": "u8"
           },
           {
+            "name": "previousCellId",
+            "docs": [
+              "The cell and slot the sensor held before its last move — `FR-059`.",
+              "Equal to `cell_id` and `slot_in_cell` when there is none: before the",
+              "first move, and after `reinstate_sensor` wipes the record. A move",
+              "always takes a fresh slot, so the two can only be equal on purpose.",
+              "The old slot stays the sensor's: its record counts towards an",
+              "exclusion while the window reaches back to it, and what it earned is",
+              "still the operator's to claim."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "previousSlot",
+            "type": "u8"
+          },
+          {
+            "name": "movedAt",
+            "docs": [
+              "Unix time of the last move, `None` for a sensor that never moved. The",
+              "aggregator reads the interval boundary off it: the old cell counts the",
+              "intervals that ended before it, the new one those that start after.",
+              "It also spaces moves a window apart, and a reinstatement keeps it."
+            ],
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
             "name": "stake",
             "docs": [
               "Stake that votes — `FR-050`. What the registry mirror reads as stake."
@@ -3656,6 +3934,46 @@ export const PUMPKING_IDL: Pumpking = {
               "Rewards earned and not claimed, now capital as well."
             ],
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sensorMoved",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sensorKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "fromCellId",
+            "type": "u64"
+          },
+          {
+            "name": "fromSlot",
+            "type": "u8"
+          },
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "slotInCell",
+            "type": "u8"
+          },
+          {
+            "name": "movedAt",
+            "docs": [
+              "Unix time the move landed. The old cell counts the intervals that",
+              "ended before it; the new one starts with the next whole interval."
+            ],
+            "type": "i64"
           }
         ]
       }

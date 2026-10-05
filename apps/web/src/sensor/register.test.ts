@@ -1,5 +1,6 @@
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  decodeInstruction,
   Keypair,
   PROGRAM_ID,
   PublicKey,
@@ -12,11 +13,17 @@ import {
   cellOf,
   explorerUrl,
   keypairOf,
+  LAMPORTS_TO_MOVE,
   LAMPORTS_TO_REGISTER,
+  MOVE_SPACING_DAYS,
+  type MoveStanding,
+  movePlanFor,
+  moveTransaction,
   type Network,
   needsFaucet,
   operatorKeyFile,
   planFor,
+  readMoveStanding,
   registrationTransaction,
   type Standing,
   sendAndConfirm,
@@ -290,5 +297,121 @@ describe('explorerUrl', () => {
     expect(explorerUrl('s', 'http://127.0.0.1:8899')).toBe(
       'https://explorer.solana.com/tx/s?cluster=custom&customUrl=http%3A%2F%2F127.0.0.1%3A8899',
     )
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Moving — T039                                                              */
+/* -------------------------------------------------------------------------- */
+
+const NEIGHBOUR = 0x871e701b2ffffffn
+
+function moveStanding(
+  sensorOverrides: Partial<NonNullable<MoveStanding['sensor']>> = {},
+  overrides: Partial<MoveStanding> = {},
+): MoveStanding {
+  return {
+    lamports: 30_000_000n,
+    sensor: {
+      operator: operator.publicKey,
+      cellId: CELL,
+      previousCellId: null,
+      active: true,
+      lastMoveDay: null,
+      ...sensorOverrides,
+    },
+    unclaimed: 0n,
+    cellSensors: 3,
+    today: 40,
+    ...overrides,
+  }
+}
+
+describe('movePlanFor', () => {
+  it('moves a sensor that never moved, the program checking its own cell for the pointer', () => {
+    expect(movePlanFor(moveStanding(), NEIGHBOUR, operator.publicKey)).toEqual({
+      kind: 'move',
+      previousCellId: CELL,
+      claim: 0n,
+    })
+  })
+
+  it('claims what the slot left last time earned in the same transaction', () => {
+    const plan = movePlanFor(
+      moveStanding(
+        { cellId: NEIGHBOUR, previousCellId: CELL, lastMoveDay: 20 },
+        { unclaimed: 2_500n },
+      ),
+      CELL,
+      operator.publicKey,
+    )
+    expect(plan).toEqual({ kind: 'move', previousCellId: CELL, claim: 2_500n })
+  })
+
+  it('waits a window and a day after the last move, as the program does', () => {
+    expect(MOVE_SPACING_DAYS).toBe(15)
+    const standing = moveStanding({ cellId: NEIGHBOUR, previousCellId: CELL, lastMoveDay: 30 })
+    expect(movePlanFor({ ...standing, today: 44 }, CELL, operator.publicKey)).toEqual({
+      kind: 'too-soon',
+      day: 45,
+    })
+    expect(movePlanFor({ ...standing, today: 45 }, CELL, operator.publicKey).kind).toBe('move')
+  })
+
+  it('says why it will not send, before the chain does', () => {
+    const other = keypairOf(new Uint8Array(32).fill(9)).publicKey
+    const cases: Array<[MoveStanding, bigint, string]> = [
+      [{ ...moveStanding(), sensor: null }, NEIGHBOUR, 'unregistered'],
+      [moveStanding({ operator: other }), NEIGHBOUR, 'foreign'],
+      [moveStanding({ active: false }), NEIGHBOUR, 'excluded'],
+      [moveStanding(), CELL, 'same-cell'],
+      [moveStanding({}, { cellSensors: 32 }), NEIGHBOUR, 'cell-full'],
+      [moveStanding({}, { lamports: LAMPORTS_TO_MOVE - 1n }), NEIGHBOUR, 'no-sol'],
+    ]
+    for (const [standing, cell, kind] of cases) {
+      expect(movePlanFor(standing, cell, operator.publicKey).kind).toBe(kind)
+    }
+  })
+})
+
+describe('moveTransaction', () => {
+  it('is one move both keys sign, the operator paying', () => {
+    const tx = moveTransaction({
+      operator: operator.publicKey,
+      sensorKey: sensor.publicKey,
+      cellId: NEIGHBOUR,
+      network,
+      plan: { kind: 'move', previousCellId: CELL, claim: 0n },
+    })
+    expect(tx.instructions).toHaveLength(1)
+    tx.recentBlockhash = PublicKey.default.toBase58()
+    const message = tx.compileMessage()
+    expect(message.header.numRequiredSignatures).toBe(2)
+    expect(message.accountKeys[0]?.equals(operator.publicKey)).toBe(true)
+  })
+
+  it('claims the slot left last time first, when it holds anything', () => {
+    const tx = moveTransaction({
+      operator: operator.publicKey,
+      sensorKey: sensor.publicKey,
+      cellId: CELL,
+      network,
+      plan: { kind: 'move', previousCellId: CELL, claim: 2_500n },
+    })
+    expect(tx.instructions.map((ix) => decodeInstruction(ix.data)?.name)).toEqual([
+      'claimReward',
+      'moveSensor',
+    ])
+    tx.recentBlockhash = PublicKey.default.toBase58()
+    tx.sign(operator, sensor)
+    expect(tx.serialize().length).toBeLessThanOrEqual(1232)
+  })
+})
+
+describe('readMoveStanding', () => {
+  it('reads nothing into a network without a pool', async () => {
+    expect(
+      await readMoveStanding(fakeChain({}), operator.publicKey, sensor.publicKey, CELL, new Date()),
+    ).toBeNull()
   })
 })

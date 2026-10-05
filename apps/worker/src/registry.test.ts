@@ -20,6 +20,8 @@ import {
  */
 
 const CELL_ID = 613_196_570_331_971_583n
+/** Any other cell id: the decoder does not ask whether it is one. */
+const NEIGHBOUR = 613_196_570_315_194_367n
 const key = (fill: number): PublicKey => new PublicKey(new Uint8Array(32).fill(fill))
 
 function sensor(fill: number, overrides: Partial<ChainSensor> = {}): ChainSensor {
@@ -28,6 +30,9 @@ function sensor(fill: number, overrides: Partial<ChainSensor> = {}): ChainSensor
     operatorWallet: key(100 + fill).toBase58(),
     cellId: CELL_ID,
     slotInCell: fill,
+    previousCellId: null,
+    previousSlot: null,
+    movedAt: null,
     stake: 1_000_000n,
     accepted: 0,
     outliers: 0,
@@ -193,6 +198,11 @@ function sensorAccountBytes(input: {
   operator: PublicKey
   cellId: bigint
   slotInCell: number
+  /** Equal to the current cell and slot for a sensor that never moved. */
+  previousCellId: bigint
+  previousSlot: number
+  /** Unix seconds. */
+  movedAt: bigint | null
   stake: bigint
   unstaking: bigint
   unlockAtDay: number | null
@@ -200,8 +210,11 @@ function sensorAccountBytes(input: {
   outliers: number
   active: boolean
 }): Uint8Array {
+  const moved = input.movedAt === null ? 1 : 9
   const optional = input.unlockAtDay === null ? 1 : 5
-  const bytes = new Uint8Array(8 + 32 + 32 + 8 + 1 + 8 + 8 + optional + 4 + 4 + 1 + 1)
+  const bytes = new Uint8Array(
+    8 + 32 + 32 + 8 + 1 + 8 + 1 + moved + 8 + 8 + optional + 4 + 4 + 1 + 1,
+  )
   const view = new DataView(bytes.buffer)
   let at = 0
   bytes.set(SENSOR_DISCRIMINATOR, at)
@@ -214,6 +227,18 @@ function sensorAccountBytes(input: {
   at += 8
   view.setUint8(at, input.slotInCell)
   at += 1
+  view.setBigUint64(at, input.previousCellId, true)
+  at += 8
+  view.setUint8(at, input.previousSlot)
+  at += 1
+  if (input.movedAt === null) {
+    view.setUint8(at, 0)
+    at += 1
+  } else {
+    view.setUint8(at, 1)
+    view.setBigInt64(at + 1, input.movedAt, true)
+    at += 9
+  }
   view.setBigUint64(at, input.stake, true)
   at += 8
   view.setBigUint64(at, input.unstaking, true)
@@ -252,6 +277,9 @@ describe('rpcRegistrySource', () => {
                 operator: key(2),
                 cellId: CELL_ID,
                 slotInCell: 31,
+                previousCellId: NEIGHBOUR,
+                previousSlot: 4,
+                movedAt: 1_790_000_123n,
                 stake: 18_446_744_073_709_551_615n,
                 unstaking: 7n,
                 unlockAtDay: 900,
@@ -269,6 +297,9 @@ describe('rpcRegistrySource', () => {
                 operator: key(2),
                 cellId: CELL_ID,
                 slotInCell: 0,
+                previousCellId: CELL_ID,
+                previousSlot: 0,
+                movedAt: null,
                 stake: 0n,
                 unstaking: 0n,
                 unlockAtDay: null,
@@ -295,6 +326,9 @@ describe('rpcRegistrySource', () => {
         operatorWallet: key(2).toBase58(),
         cellId: CELL_ID,
         slotInCell: 31,
+        previousCellId: NEIGHBOUR,
+        previousSlot: 4,
+        movedAt: new Date(1_790_000_123_000),
         // u64 end to end: a stake past 2^53 must not round.
         stake: 18_446_744_073_709_551_615n,
         accepted: 12,
@@ -306,6 +340,10 @@ describe('rpcRegistrySource', () => {
         operatorWallet: key(2).toBase58(),
         cellId: CELL_ID,
         slotInCell: 0,
+        // "No previous slot" is the current one on chain, and null here.
+        previousCellId: null,
+        previousSlot: null,
+        movedAt: null,
         stake: 0n,
         accepted: 0,
         outliers: 0,

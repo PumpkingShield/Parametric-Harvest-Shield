@@ -874,8 +874,14 @@ export interface ExcludeSensorInput {
   /** Anyone; signs and pays the fee, gains nothing. */
   caller: PublicKey
   sensorKey: PublicKey
-  /** The sensor's cell — the reputation account is seeded by it. */
+  /** The sensor's cell — `Sensor.cell_id`; its ring and schedule are seeded by it. */
   cellId: bigint
+  /**
+   * `Sensor.previous_cell_id` — the cell it left on its last move (`FR-059`),
+   * equal to `cellId` for a sensor that never moved. The program fixes both
+   * accounts by seeds: a wrong one is refused, not read as no record.
+   */
+  previousCellId: bigint
   /** Must equal `pool.asset_mint`. */
   assetMint: PublicKey
   stakeVault?: PublicKey
@@ -899,8 +905,10 @@ export function excludeSensorInstruction(input: ExcludeSensorInput): Transaction
       // Both seeded by fields of the sensor account, which the IDL cannot follow.
       sensor: sensorPda(input.sensorKey, programId).address,
       reputation: reputationPda(input.cellId, programId).address,
-      // Unclaimed rewards are forfeited with the stake.
+      previousReputation: reputationPda(input.previousCellId, programId).address,
+      // Unclaimed rewards are forfeited with the stake, in both cells.
       rewards: rewardsPda(input.cellId, programId).address,
+      previousRewards: rewardsPda(input.previousCellId, programId).address,
       assetMint: input.assetMint,
       stakeVault: input.stakeVault ?? stakeVaultPda(pool, programId).address,
       vault: input.vault ?? vaultPda(pool, programId).address,
@@ -947,7 +955,11 @@ export interface ClaimRewardInput {
   /** Anybody: the destination is bound to the operator either way. */
   caller: PublicKey
   sensorKey: PublicKey
-  /** The sensor's cell — the reward schedule is seeded by it. */
+  /**
+   * The cell to claim from: the sensor's own, or the one it left on its last
+   * move (`FR-059`) — earnings stay in the schedule of the cell that paid
+   * them. Every slot the sensor holds there is paid at once.
+   */
   cellId: bigint
   /** Must equal `pool.asset_mint`. */
   assetMint: PublicKey
@@ -960,8 +972,9 @@ export interface ClaimRewardInput {
 }
 
 /**
- * Sends everything a sensor has earned to its operator — `FR-036`. An excluded
- * sensor is refused with `SensorExcluded`; one with nothing earned with
+ * Sends everything a sensor has earned in one cell to its operator — `FR-036`.
+ * An excluded sensor is refused with `SensorExcluded`, a cell it holds no slot
+ * in with `NotTheSensorsCell`, and one with nothing earned with
  * `NothingToClaim`.
  */
 export function claimRewardInstruction(input: ClaimRewardInput): TransactionInstruction {
@@ -971,14 +984,54 @@ export function claimRewardInstruction(input: ClaimRewardInput): TransactionInst
     programId,
     accounts: {
       caller: input.caller,
-      // Both seeded by fields of the sensor account, which the IDL cannot follow.
+      // Seeded by a field of the sensor account, which the IDL cannot follow.
       sensor: sensorPda(input.sensorKey, programId).address,
-      rewards: rewardsPda(input.cellId, programId).address,
       assetMint: input.assetMint,
       vault: input.vault ?? vaultPda(pool, programId).address,
       operatorTokens: input.operatorTokens,
       tokenProgram: input.tokenProgram ?? TOKEN_PROGRAM_ID,
     },
-    args: {},
+    args: { cellId: new BN(input.cellId.toString()) },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* move_sensor                                                                */
+/* -------------------------------------------------------------------------- */
+
+export interface MoveSensorInput {
+  /** Must be the sensor's operator; pays for the new cell if it is the first there. */
+  operator: PublicKey
+  /** Co-signs, as at registration: it is what names the cell in every reading. */
+  sensorKey: PublicKey
+  /** Where the sensor goes — an H3 cell on the network's grid level. */
+  cellId: bigint
+  /**
+   * `Sensor.previous_cell_id` before this move — the cell left on the last
+   * one, or the sensor's own cell if it never moved. The program checks that
+   * slot holds nothing unclaimed before the pointer moves past it.
+   */
+  previousCellId: bigint
+  programId?: PublicKey
+}
+
+/**
+ * Moves a sensor to another cell — `FR-059`. A fresh slot there; the old one
+ * stays the sensor's for its record and its earnings. Stake and operator do
+ * not change. A second move waits `OUTLIER_WINDOW_DAYS + 1` days
+ * (`MovedTooRecently`) and for the slot before to be claimed
+ * (`PreviousSlotUnclaimed`).
+ */
+export function moveSensorInstruction(input: MoveSensorInput): TransactionInstruction {
+  const programId = input.programId ?? PROGRAM_ID
+  return buildInstruction('moveSensor', {
+    programId,
+    accounts: {
+      operator: input.operator,
+      sensorKey: input.sensorKey,
+      // Seeded by a field of the sensor account, which the IDL cannot follow.
+      previousRewards: rewardsPda(input.previousCellId, programId).address,
+    },
+    args: { cellId: new BN(input.cellId.toString()) },
   })
 }
