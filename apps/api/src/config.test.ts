@@ -1,4 +1,4 @@
-import { PROGRAM_ID } from '@pumpking/anchor-client'
+import { Keypair, PROGRAM_ID } from '@pumpking/anchor-client'
 import { describe, expect, it } from 'vitest'
 import { ConfigError, readApiConfig } from './config.ts'
 
@@ -89,5 +89,29 @@ describe('readApiConfig', () => {
     expect(
       readApiConfig({ ...MINIMUM, WEB_ORIGIN: 'https://a.app, https://b.app' }).webOrigin,
     ).toEqual(['https://a.app', 'https://b.app'])
+  })
+
+  it('has no faucet without a key, and none for the empty placeholder line', () => {
+    expect(readApiConfig(MINIMUM).faucet).toBeNull()
+    expect(readApiConfig({ ...MINIMUM, FAUCET_KEYPAIR: '' }).faucet).toBeNull()
+  })
+
+  it('reads a faucet key and its limits, and refuses a key that is not one', () => {
+    const key = Keypair.generate()
+    const config = readApiConfig({
+      ...MINIMUM,
+      FAUCET_KEYPAIR: JSON.stringify([...key.secretKey]),
+      FAUCET_DAILY: '5',
+    })
+    expect(config.faucet?.keypair.publicKey.equals(key.publicKey)).toBe(true)
+    expect(config.faucet?.lamports).toBe(30_000_000n)
+    expect(config.faucet?.perAddress).toBe(3)
+    expect(config.faucet?.daily).toBe(5)
+    expect(() => readApiConfig({ ...MINIMUM, FAUCET_KEYPAIR: '[1,2,3]' })).toThrow(/FAUCET_KEYPAIR/)
+  })
+
+  it('trusts no forwarded header unless told how many proxies stand in front', () => {
+    expect(readApiConfig(MINIMUM).trustedProxyHops).toBe(0)
+    expect(readApiConfig({ ...MINIMUM, TRUSTED_PROXY_HOPS: '1' }).trustedProxyHops).toBe(1)
   })
 })

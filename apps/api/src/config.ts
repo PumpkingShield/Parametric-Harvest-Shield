@@ -1,4 +1,5 @@
-import { PROGRAM_ID, PublicKey } from '@pumpking/anchor-client'
+import { type Keypair, PROGRAM_ID, PublicKey } from '@pumpking/anchor-client'
+import { parseKeypair } from '@pumpking/worker/config'
 import { z } from 'zod'
 
 /**
@@ -63,6 +64,22 @@ const schema = z.object({
    * between an anonymous caller and a hundred sensors' worth of writes.
    */
   FEEDER_TOKEN: z.string().min(32, 'must be at least 32 characters').optional(),
+  /**
+   * `T038a`: the devnet faucet's key — the mock asset's mint authority, and
+   * nothing in the program (`FR-057`). Absent and `/v1/faucet` answers 404.
+   */
+  // An empty line in `.env` (the `.env.example` placeholder) is no faucet,
+  // not a key that fails to parse.
+  FAUCET_KEYPAIR: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()).optional(),
+  /** Lamports per grant: rent for a `Sensor`, a token account, a new cell's `CellState`, fees. */
+  FAUCET_LAMPORTS: z.coerce.bigint().min(1n).default(30_000_000n),
+  FAUCET_PER_ADDRESS: z.coerce.number().int().min(1).default(3),
+  FAUCET_DAILY: z.coerce.number().int().min(1).default(50),
+  /**
+   * Proxies in front of this process that append to `x-forwarded-for`. 0 trusts
+   * no header (local runs); Render puts one public hop after the client, so 1.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   // No `FEEDER_OPERATORS` since `T077`: whose vote a feeder sensor carries is
   // the chain's answer, read through the registry mirror, not a setting.
 })
@@ -81,6 +98,9 @@ export type ApiConfig = {
   shutdownTimeoutMs: number
   /** `T058`: the `SC-008` feeder, when this deployment runs it. */
   feeder: { token: string } | null
+  /** `T038a`: the devnet faucet, when this deployment gives one. */
+  faucet: { keypair: Keypair; lamports: bigint; perAddress: number; daily: number } | null
+  trustedProxyHops: number
 }
 
 /** What a caller sees when the environment is wrong: every problem, not the first. */
@@ -100,6 +120,17 @@ export function readApiConfig(env: Record<string, string | undefined>): ApiConfi
   }
   const value = parsed.data
 
+  let faucetKeypair: Keypair | null = null
+  if (value.FAUCET_KEYPAIR !== undefined) {
+    try {
+      faucetKeypair = parseKeypair(value.FAUCET_KEYPAIR)
+    } catch (cause) {
+      throw new ConfigError([
+        `FAUCET_KEYPAIR: ${cause instanceof Error ? cause.message : String(cause)}`,
+      ])
+    }
+  }
+
   return {
     port: value.PORT,
     databaseUrl: value.DATABASE_URL,
@@ -117,5 +148,15 @@ export function readApiConfig(env: Record<string, string | undefined>): ApiConfi
       value.WEB_ORIGIN === '*' ? '*' : value.WEB_ORIGIN.split(',').map((one) => one.trim()),
     shutdownTimeoutMs: value.SHUTDOWN_TIMEOUT_MS,
     feeder: value.FEEDER_TOKEN === undefined ? null : { token: value.FEEDER_TOKEN },
+    faucet:
+      faucetKeypair === null
+        ? null
+        : {
+            keypair: faucetKeypair,
+            lamports: value.FAUCET_LAMPORTS,
+            perAddress: value.FAUCET_PER_ADDRESS,
+            daily: value.FAUCET_DAILY,
+          },
+    trustedProxyHops: value.TRUSTED_PROXY_HOPS,
   }
 }

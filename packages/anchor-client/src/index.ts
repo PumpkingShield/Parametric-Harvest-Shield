@@ -94,12 +94,20 @@ export {
   vaultPda,
 } from './pda.ts'
 export { PROGRAM_ID } from './program.ts'
+export {
+  createAssociatedTokenAccountIdempotentInstruction,
+  decodeMintDecimals,
+  decodeTokenAmount,
+  mintToCheckedInstruction,
+  systemTransferInstruction,
+} from './spl.ts'
 export type { Commitment } from './web3.ts'
 export {
   Connection,
   Keypair,
   PublicKey,
   SYSTEM_PROGRAM_ID,
+  SystemProgram,
   sendAndConfirmTransaction,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,

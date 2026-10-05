@@ -42,6 +42,9 @@ export const sendAndConfirmTransaction: typeof web3.sendAndConfirmTransaction =
 
 export type Commitment = web3.Commitment
 
+/** `T038a`: the faucet's SOL is a plain system transfer. */
+export const SystemProgram: typeof web3.SystemProgram = web3.SystemProgram
+
 /** `11111111111111111111111111111111` — every `init` needs it. */
 export const SYSTEM_PROGRAM_ID: PublicKey = web3.SystemProgram.programId
 

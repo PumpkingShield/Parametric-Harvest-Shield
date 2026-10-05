@@ -49,7 +49,7 @@ export function memoryVault(initial: SensorRecord | null = null): SensorVault {
 
 const DB_NAME = 'pumpking-sensor'
 const STORE = 'sensor'
-/** One phone, one sensor: the record has a fixed key. */
+/** One phone, one sensor: the record has a fixed key (the operator has its own, below). */
 const RECORD_KEY = 'this-phone'
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
@@ -123,6 +123,85 @@ export function indexedDbVault(): SensorVault {
         // is on disk before the reading leaves, and only `complete` says so.
         const tx = db.transaction(STORE, 'readwrite')
         tx.objectStore(STORE).put(record, RECORD_KEY)
+        await committed(tx)
+      } finally {
+        db.close()
+      }
+    },
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The operator                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The operator's wallet — `T038a`, `FR-001`, `FR-007`.
+ *
+ * A second key, not the sensor's: the sensor key signs readings, the operator
+ * pays for the registration, owns the stake and is paid the rewards. One
+ * operator may run several sensors, and a sensor key that also held the money
+ * would make every reading device a wallet.
+ *
+ * Kept the same way, as the 32-byte ed25519 seed, beside the sensor's record
+ * in the same database. It is the one secret on this phone worth money (on
+ * devnet, a mock of money), so the page offers it for download: a cleared
+ * browser without a copy loses the stake.
+ */
+export type OperatorRecord = { secretKey: Uint8Array }
+
+export interface OperatorVault {
+  load(): Promise<OperatorRecord | null>
+  save(record: OperatorRecord): Promise<void>
+}
+
+export function newOperator(): OperatorRecord {
+  return { secretKey: crypto.getRandomValues(new Uint8Array(32)) }
+}
+
+export function memoryOperatorVault(initial: OperatorRecord | null = null): OperatorVault {
+  let stored = initial
+  return {
+    load: () => Promise.resolve(stored),
+    save: (record) => {
+      stored = record
+      return Promise.resolve()
+    },
+  }
+}
+
+const OPERATOR_KEY = 'operator'
+
+function isOperator(value: unknown): value is OperatorRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'secretKey' in value &&
+    value.secretKey instanceof Uint8Array &&
+    value.secretKey.length === 32
+  )
+}
+
+/** The same database and store as the sensor, under its own key. */
+export function indexedDbOperatorVault(): OperatorVault {
+  return {
+    async load() {
+      const db = await open()
+      try {
+        const value: unknown = await request(
+          db.transaction(STORE, 'readonly').objectStore(STORE).get(OPERATOR_KEY),
+        )
+        return isOperator(value) ? value : null
+      } finally {
+        db.close()
+      }
+    },
+    async save(record) {
+      void navigator.storage?.persist?.().catch(() => false)
+      const db = await open()
+      try {
+        const tx = db.transaction(STORE, 'readwrite')
+        tx.objectStore(STORE).put(record, OPERATOR_KEY)
         await committed(tx)
       } finally {
         db.close()

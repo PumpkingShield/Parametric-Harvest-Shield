@@ -8,9 +8,12 @@
 # enough to pay a premium. What the program itself is asked to do comes after,
 # in scripts/devnet-init.mjs and scripts/devnet-issue.mjs.
 #
-# The mint authority stays this wallet and is NEVER the pool authority: a pool
-# that can print its own asset is solvent by definition, and the SC-006 check
-# would be checking nothing.
+# The mint authority is NEVER the pool authority: a pool that can print its own
+# asset is solvent by definition, and the SC-006 check would be checking
+# nothing. This wallet creates the mint and, last, hands its authority to
+# FAUCET_KEYPAIR (T038a) — the API faucet's key, which holds no role in the
+# program — so this wallet keeps only the program's upgrade authority. A run
+# after the handover mints with the faucet key instead.
 set -euo pipefail
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
@@ -38,6 +41,9 @@ POLICY_OWNER_TOKENS=10000
 # costs `pool.min_stake` (one token) a sensor: 35 for that operator.
 OPERATOR_SOL=0.10
 OPERATOR_TOKENS=50
+# T038a: the faucet gives 0.03 SOL a grant (FAUCET_LAMPORTS), so this is ~16
+# phones registered. Top it up with `solana transfer` when it runs low.
+FAUCET_SOL=0.5
 
 [ -f "$ENV_FILE" ] || { echo "no .env — run: node scripts/devnet-keys.mjs"; exit 1; }
 
@@ -69,11 +75,13 @@ POOL_AUTHORITY=$(address_of POOL_AUTHORITY_KEYPAIR)
 AGGREGATOR=$(address_of AGGREGATOR_KEYPAIR)
 POLICY_OWNER=$(address_of POLICY_OWNER_KEYPAIR)
 OPERATORS=("$(address_of OPERATOR_A_KEYPAIR)" "$(address_of OPERATOR_B_KEYPAIR)" "$(address_of OPERATOR_C_KEYPAIR)")
+FAUCET=$(address_of FAUCET_KEYPAIR)
 
 echo "pool authority : $POOL_AUTHORITY"
 echo "aggregator     : $AGGREGATOR"
 echo "policy owner   : $POLICY_OWNER"
 echo "operators      : ${OPERATORS[*]}"
+echo "faucet         : $FAUCET"
 echo "payer          : $(solana address)"
 echo
 
@@ -98,6 +106,7 @@ fund "$POOL_AUTHORITY" "$POOL_AUTHORITY_SOL"
 fund "$AGGREGATOR" "$AGGREGATOR_SOL"
 fund "$POLICY_OWNER" "$POLICY_OWNER_SOL"
 for OPERATOR in "${OPERATORS[@]}"; do fund "$OPERATOR" "$OPERATOR_SOL"; done
+fund "$FAUCET" "$FAUCET_SOL"
 echo
 
 # --- the mock asset ----------------------------------------------------------
@@ -123,6 +132,22 @@ else
   echo "  ASSET_MINT and TREASURY_TOKENS written to .env"
 fi
 
+# Whoever the mint names now signs the mints below: this wallet before the
+# handover at the end of this script, the faucet key after it. spl-token takes
+# a signer only as a file, so the faucet's key is written to one only this
+# user can read, and removed when the script exits however it exits.
+mint_authority() {
+  spl-token display "$MINT" --url "$URL" | sed -n 's/^ *Mint authority: *//p' | head -1
+}
+MINT_AUTHORITY_ARGS=()
+if [ "$(mint_authority)" = "$FAUCET" ]; then
+  FAUCET_KEYFILE=$(umask 077; mktemp "$HOME/.pumpking-faucet-XXXXXX.json")
+  trap 'rm -f "$FAUCET_KEYFILE"' EXIT
+  sed -n 's/^FAUCET_KEYPAIR=//p' "$ENV_FILE" | head -1 > "$FAUCET_KEYFILE"
+  MINT_AUTHORITY_ARGS=(--mint-authority "$FAUCET_KEYFILE")
+  echo "  minting as the faucet (it holds the mint authority)"
+fi
+
 # --- the farmer's token account ----------------------------------------------
 # The buyer of the demo policy pays the premium from this account, and the
 # payout lands in the same one (FR-066: the destination is derived from the
@@ -141,7 +166,7 @@ else
   # 0 does not say whether the account is there — so creation may fail, and
   # the mint after it is what has to succeed.
   spl-token create-account "$MINT" --owner "$POLICY_OWNER" --url "$URL" --fee-payer "$HOME/.config/solana/id.json" >/dev/null 2>&1 || true
-  spl-token mint "$MINT" "$POLICY_OWNER_TOKENS" "$FARMER_TOKENS" --url "$URL" >/dev/null
+  spl-token mint "$MINT" "$POLICY_OWNER_TOKENS" "$FARMER_TOKENS" --url "$URL" "${MINT_AUTHORITY_ARGS[@]}" >/dev/null
   echo "  $FARMER_TOKENS minted $POLICY_OWNER_TOKENS tokens"
 fi
 
@@ -159,10 +184,25 @@ for OPERATOR in "${OPERATORS[@]}"; do
     echo "  $TOKENS already holds $HAVE tokens"
   else
     spl-token create-account "$MINT" --owner "$OPERATOR" --url "$URL" --fee-payer "$HOME/.config/solana/id.json" >/dev/null 2>&1 || true
-    spl-token mint "$MINT" "$OPERATOR_TOKENS" "$TOKENS" --url "$URL" >/dev/null
+    spl-token mint "$MINT" "$OPERATOR_TOKENS" "$TOKENS" --url "$URL" "${MINT_AUTHORITY_ARGS[@]}" >/dev/null
     echo "  $TOKENS minted $OPERATOR_TOKENS tokens"
   fi
 done
+
+# --- the mint authority goes to the faucet -----------------------------------
+# Last, after every mint above. Irreversible from this wallet: once the faucet
+# holds it, only the faucet's key can mint or hand it on.
+echo
+echo "mint authority:"
+CURRENT=$(mint_authority)
+if [ "$CURRENT" = "$FAUCET" ]; then
+  echo "  already the faucet ($FAUCET)"
+elif [ "$CURRENT" = "$(solana address)" ]; then
+  spl-token authorize "$MINT" mint "$FAUCET" --url "$URL" >/dev/null
+  echo "  handed from this wallet to the faucet ($FAUCET)"
+else
+  echo "  the mint names $CURRENT — neither this wallet nor the faucet; left alone"
+fi
 
 echo
 echo "Next: node scripts/devnet-init.mjs, then node scripts/devnet-register.mjs"

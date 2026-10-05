@@ -1,9 +1,16 @@
-import type { CounterStore, IntervalStore, ReadingStore, RegistryStore } from '@pumpking/db'
+import type {
+  CounterStore,
+  FaucetStore,
+  IntervalStore,
+  ReadingStore,
+  RegistryStore,
+} from '@pumpking/db'
 import type { HealthWire as WorkerHealthWire } from '@pumpking/worker/health'
-import { Hono } from 'hono'
+import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { apiError } from './errors.ts'
 import { createCellsRoute } from './routes/cells.ts'
+import { createFaucetRoute, type FaucetChain } from './routes/faucet.ts'
 import { createFeederRoute } from './routes/feeder.ts'
 import { createPoliciesRoute, type PolicyLookup } from './routes/policies.ts'
 import { createReadingsRoute } from './routes/readings.ts'
@@ -62,6 +69,18 @@ export type ApiDeps = {
   worker?: () => WorkerHealthWire
   /** `T058`: the `SC-008` feeder. Absent and `/v1/feeder` answers 404. */
   feeder?: { token: string }
+  /** `T038a`: the devnet faucet. Absent and `/v1/faucet` answers 404. */
+  faucet?: {
+    chain: FaucetChain
+    store: FaucetStore
+    perAddress: number
+    daily: number
+    onError?: (cause: unknown) => void
+  }
+  /** Proxies in front that append to `x-forwarded-for`; 0 trusts none. */
+  proxyHops?: number
+  /** The connection's peer address — the node adapter knows it, a test does not. */
+  socketAddress?: (context: Context) => string | undefined
   now?: () => Date
 }
 
@@ -73,6 +92,14 @@ export type HealthWire = {
   scenarioMode: boolean
   /** `T056`: the loop, when it turns here. Absent when it does not. */
   worker?: WorkerHealthWire
+}
+
+/** Never reached: without a chain the faucet route answers 404 before any store call. */
+const NO_STORE: FaucetStore = {
+  countsSince: () => Promise.reject(new Error('no faucet')),
+  claim: () => Promise.reject(new Error('no faucet')),
+  settle: () => Promise.reject(new Error('no faucet')),
+  release: () => Promise.reject(new Error('no faucet')),
 }
 
 export function createApiApp(deps: ApiDeps): Hono {
@@ -141,6 +168,20 @@ export function createApiApp(deps: ApiDeps): Hono {
       minStake: deps.minStake,
       counters: deps.counters,
       publisher: routeReadingPublisher(readings),
+      now,
+    }),
+  )
+
+  app.route(
+    '/v1/faucet',
+    createFaucetRoute({
+      chain: deps.faucet?.chain ?? null,
+      store: deps.faucet?.store ?? NO_STORE,
+      perAddress: deps.faucet?.perAddress ?? 0,
+      daily: deps.faucet?.daily ?? 0,
+      proxyHops: deps.proxyHops ?? 0,
+      ...(deps.socketAddress === undefined ? {} : { socketAddress: deps.socketAddress }),
+      ...(deps.faucet?.onError === undefined ? {} : { onError: deps.faucet.onError }),
       now,
     }),
   )

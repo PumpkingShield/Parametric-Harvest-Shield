@@ -1,8 +1,10 @@
 import { type ServerType, serve } from '@hono/node-server'
+import { getConnInfo } from '@hono/node-server/conninfo'
 import { Connection } from '@pumpking/anchor-client'
 import {
   createDb,
   pgCounterStore,
+  pgFaucetStore,
   pgIntervalStore,
   pgReadingStore,
   pgCellSlotStore,
@@ -17,6 +19,7 @@ import { guardProcess } from '@pumpking/worker/process-guard'
 import { rpcCycle, startWorker, type WorkerRuntime } from '@pumpking/worker/run'
 import { pino } from 'pino'
 import { ConfigError, readApiConfig } from './config.ts'
+import { rpcFaucet } from './routes/faucet.ts'
 import { rpcPolicyLookup } from './routes/policies.ts'
 import { createApiApp } from './server.ts'
 
@@ -111,6 +114,24 @@ const app = createApiApp({
   scenarioMode: config.scenarioMode,
   webOrigin: config.webOrigin,
   ...(config.feeder === null ? {} : { feeder: config.feeder }),
+  ...(config.faucet === null
+    ? {}
+    : {
+        faucet: {
+          chain: rpcFaucet(
+            connection,
+            config.faucet.keypair,
+            config.faucet.lamports,
+            config.programId,
+          ),
+          store: pgFaucetStore(database.db),
+          perAddress: config.faucet.perAddress,
+          daily: config.faucet.daily,
+          onError: (cause: unknown) => log.warn({ err: cause }, 'a faucet grant failed'),
+        },
+      }),
+  proxyHops: config.trustedProxyHops,
+  socketAddress: (context) => getConnInfo(context).remote.address,
   ...(worker === null
     ? {}
     : { worker: () => healthOf(worker.state, new Date(), worker.stalledMs).wire }),
@@ -123,6 +144,7 @@ const server: ServerType = serve({ fetch: app.fetch, port: config.port }, (info)
       programId: config.programId.toBase58(),
       scenarioMode: config.scenarioMode,
       runWorker: config.runWorker,
+      faucet: config.faucet?.keypair.publicKey.toBase58() ?? null,
     },
     // Said out loud at startup because a deployment that can invent weather and
     // does not know it is the one failure `FR-039` cannot be checked for later.

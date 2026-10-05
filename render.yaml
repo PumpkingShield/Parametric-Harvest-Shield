@@ -82,3 +82,12 @@ services:
       # turned on in the dashboard for the show, and back off after it.
       - key: SCENARIO_MODE
         sync: false
+      # T038a: the devnet faucet's key — the mock asset's mint authority and
+      # nothing in the program (FR-057). Unset and /v1/faucet answers 404, so
+      # it goes in only with the program upgrade that brings register_sensor.
+      - key: FAUCET_KEYPAIR
+        sync: false
+      # Render puts one public proxy hop after the client in x-forwarded-for;
+      # the faucet's per-caller limit counts back past it (routes/faucet.ts).
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"

@@ -15,10 +15,16 @@
 //                           payer are one key). Not the pool authority — a
 //                           pool selling cover to its own authority is a demo
 //                           of nothing.
-//   the mint authority      stays the deployer's CLI wallet in WSL and is
-//                           never the pool authority: a pool that can print
-//                           its own asset is solvent by definition, which
-//                           makes the SC-006 check meaningless.
+//   FAUCET_KEYPAIR          the mock asset's mint authority since T038a, and
+//                           the API faucet's wallet: it gives an operator
+//                           registering a phone the SOL and the stake to do
+//                           it. Never the pool authority — a pool that can
+//                           print its own asset is solvent by definition,
+//                           which makes the SC-006 check meaningless — and
+//                           not the deployer's CLI wallet either, which keeps
+//                           the upgrade authority and never goes to a server.
+//                           `devnet-prepare.sh` creates the mint with the CLI
+//                           wallet and hands the authority over.
 //   OPERATOR_{A,B,C}        the three operators the fixtures name. `FR-009`
 //                           counts one vote per operator and `operators.wallet`
 //                           is where rewards land and burnt stake comes from,
@@ -55,6 +61,11 @@ const ROLES = [
     name: 'POLICY_OWNER_KEYPAIR',
     what: 'the farmer: buys the demo policy, pays the premium, receives the payout',
     sol: '~0.02',
+  },
+  {
+    name: 'FAUCET_KEYPAIR',
+    what: 'mint authority of the mock asset; the API faucet pays operators from it (T038a)',
+    sol: '~0.5 — 0.03 a grant',
   },
   ...['A', 'B', 'C'].map((letter) => ({
     name: `OPERATOR_${letter}_KEYPAIR`,

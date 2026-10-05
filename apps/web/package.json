@@ -11,7 +11,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@pumpking/anchor-client": "workspace:^",
     "@pumpking/shared": "workspace:^",
+    "buffer": "^6.0.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

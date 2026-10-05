@@ -53,9 +53,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@pumpking/anchor-client':
+        specifier: workspace:^
+        version: link:../../packages/anchor-client
       '@pumpking/shared':
         specifier: workspace:^
         version: link:../../packages/shared
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
       react:
         specifier: ^19.2.8
         version: 19.2.8

@@ -28,6 +28,9 @@ const CODE_OF_STATUS = {
   409: 'CONFLICT',
   429: 'RATE_LIMITED',
   500: 'INTERNAL',
+  // `T038a`: the faucet's transaction did not land — the request was fine, the
+  // cluster was not, and the same request a moment later may well succeed.
+  503: 'UNAVAILABLE',
 } as const
 
 export type ErrorStatus = keyof typeof CODE_OF_STATUS

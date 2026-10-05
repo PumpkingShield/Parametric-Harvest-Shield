@@ -47,6 +47,9 @@ jobs:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
           VITE_POLICY_PUBKEY: ${{ vars.VITE_POLICY_PUBKEY }}
           VITE_ASSET_DECIMALS: ${{ vars.VITE_ASSET_DECIMALS }}
+          # T038a: where a phone sends its registration; unset is public devnet.
+          VITE_SOLANA_RPC_URL: ${{ vars.VITE_SOLANA_RPC_URL }}
+          VITE_PUMPKING_PROGRAM_ID: ${{ vars.VITE_PUMPKING_PROGRAM_ID }}
         run: pnpm --filter @pumpking/web build
 
       # Pages has no rewrites: an unknown path is answered with 404.html. The

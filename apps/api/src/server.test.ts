@@ -225,6 +225,55 @@ describe('the four routes are mounted where the contract says', () => {
     expect(started.status).toBe(404)
     expect(status.status).toBe(404)
   })
+
+  it('POST /v1/faucet/:pubkey reaches the faucet, counted by the socket with no proxies', async () => {
+    const asked: string[] = []
+    const seen: string[] = []
+    const mounted = app({
+      faucet: {
+        chain: {
+          grant: (wallet) => {
+            asked.push(wallet.toBase58())
+            return Promise.resolve({
+              signature: 's',
+              lamports: '1',
+              tokens: '1',
+              tokenAccount: 'a',
+            })
+          },
+        },
+        store: {
+          countsSince: (_since, address) => {
+            seen.push(address)
+            return Promise.resolve({ total: 0, fromAddress: 0 })
+          },
+          claim: () => Promise.resolve({ claimed: true }),
+          settle: () => Promise.resolve(),
+          release: () => Promise.resolve(),
+        },
+        perAddress: 1,
+        daily: 1,
+      },
+      socketAddress: () => '198.51.100.7',
+    })
+    const wallet = '11111111111111111111111111111111'
+    const response = await mounted.request(`/v1/faucet/${wallet}`, {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.1' },
+    })
+    expect(response.status).toBe(201)
+    expect(asked).toEqual([wallet])
+    // `proxyHops` defaults to 0: the header is a client's say-so.
+    const { createHash } = await import('node:crypto')
+    expect(seen).toEqual([createHash('sha256').update('198.51.100.7').digest('hex')])
+  })
+
+  it('the faucet is gone without a key', async () => {
+    const response = await app().request('/v1/faucet/11111111111111111111111111111111', {
+      method: 'POST',
+    })
+    expect(response.status).toBe(404)
+  })
 })
 
 describe('the scenario run publishes through the mounted intake', () => {

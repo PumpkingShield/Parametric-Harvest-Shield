@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./cell": "./src/cell.ts",
     "./cell-id": "./src/cell-id.ts",
     "./day": "./src/day.ts",
     "./index-math": "./src/index-math.ts",

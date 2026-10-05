@@ -1,6 +1,6 @@
 import type { SignedReadingWire } from '@pumpking/shared/reading-bytes'
 import { sensorPublicKey } from '@pumpking/shared/signature'
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useState } from 'react'
 import { Block, INK, MONO, Prose, RULE } from '../components/Bits.tsx'
 import {
   type LookUp,
@@ -27,9 +27,9 @@ import {
  * one: the same key type, the same 80 signed bytes, the same door
  * (`POST /v1/readings`) and the same registry deciding whether it counts.
  *
- * Registering the key on chain is not here (`T038a`): `register_sensor` needs
- * an operator who pays and stakes. Until then the screen says plainly that the
- * key is not registered and what that means for its readings.
+ * Registering the key on chain is its own chunk (`Register.tsx`, `T038a`),
+ * fetched only for a key the registry does not know: it carries Anchor,
+ * web3.js and `h3-js`, which a phone that is already a sensor never needs.
  *
  * `SC-009` is measured on this component: `sensor:tap` is marked at the
  * click's own timestamp, `sensor:answer` when the service has answered, and
@@ -37,6 +37,12 @@ import {
  */
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
+
+const Register = lazy(() => import('./Register.tsx'))
+
+/** After registering, how often and how long to ask whether the mirror has caught up. */
+const MIRROR_POLL_MS = 15_000
+const MIRROR_POLL_TRIES = 40
 
 /** What the last send came to, for the line under the button. */
 export type Outcome =
@@ -59,7 +65,7 @@ const PROBLEM_TEXT: Record<NonNullable<Registration['problem']>, string> = {
 export function registrationText(lookUp: LookUp): string {
   switch (lookUp.kind) {
     case 'unknown':
-      return 'This key is not in the registry yet. The service refuses its readings until an operator registers it with a stake.'
+      return 'This key is not in the registry yet. The service refuses its readings until it is registered with a stake — which this phone can do below.'
     case 'unreachable':
       return lookUp.message
     case 'registered': {
@@ -100,6 +106,8 @@ export type ThisPhoneViewProps = {
   onSend: (event: { timeStamp: number }) => void
   onResend: (event: { timeStamp: number }) => void
   onLookUp: () => void
+  /** `T038a`: the registration, shown under the registry's answer when it has one to give. */
+  registration?: ReactNode
 }
 
 const button = (enabled: boolean) =>
@@ -165,6 +173,7 @@ export function ThisPhoneView(props: ThisPhoneViewProps) {
             Ask again
           </button>
         ) : null}
+        {props.registration ?? null}
       </div>
 
       <label style={{ display: 'block', marginTop: 20, fontSize: 17, color: INK }}>
@@ -260,6 +269,8 @@ const ThisPhone = (props: ThisPhoneProps) => {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
+  /** Set once this phone has registered on chain and the mirror has yet to show it. */
+  const [awaitingMirror, setAwaitingMirror] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -299,6 +310,23 @@ const ThisPhone = (props: ThisPhoneProps) => {
       live = false
     }
   }, [secretKey, ask])
+
+  // The chain has the sensor; the API's mirror picks it up on the worker's next
+  // pass. Asked quietly, without the "asking…" line flickering each time.
+  useEffect(() => {
+    if (!awaitingMirror || pubkey === null) return
+    let tries = 0
+    const timer = setInterval(() => {
+      tries += 1
+      void lookUpSensor(apiUrl, pubkey, fetchFn).then((answer) => {
+        if (answer.kind === 'registered' || tries >= MIRROR_POLL_TRIES) {
+          setAwaitingMirror(false)
+          if (answer.kind === 'registered') setLookUp(answer)
+        }
+      })
+    }, MIRROR_POLL_MS)
+    return () => clearInterval(timer)
+  }, [awaitingMirror, pubkey, apiUrl, fetchFn])
 
   const create = async () => {
     const fresh = newRecord()
@@ -390,6 +418,18 @@ const ThisPhone = (props: ThisPhoneProps) => {
       onLookUp={() => {
         if (pubkey !== null) void ask(pubkey)
       }}
+      registration={
+        lookUp?.kind === 'unknown' && record !== null ? (
+          <Suspense fallback={<Prose>Loading registration…</Prose>}>
+            <Register
+              sensorSecret={record.secretKey}
+              apiUrl={apiUrl}
+              fetchFn={fetchFn}
+              onRegistered={() => setAwaitingMirror(true)}
+            />
+          </Suspense>
+        ) : null
+      }
     />
   )
 }

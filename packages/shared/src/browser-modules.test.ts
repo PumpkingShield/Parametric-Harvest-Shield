@@ -46,6 +46,13 @@ describe('the modules the browser sensor imports', () => {
     })
   }
 
+  it('cell.ts — the registration chunk’s, T038a — brings h3-js and no zod', () => {
+    // h3-js is the price of `FR-058`: the cell is computed on the phone, so the
+    // coordinates never leave it. It is paid in the registration chunk only.
+    const reached = packagesReachedFrom('cell.ts')
+    expect([...reached].sort()).toEqual(['h3-js'])
+  })
+
   it('the walk finds both where they are — the control for the tests above', () => {
     // `reading.ts` imports Zod itself, and `cell.ts` imports h3-js.
     expect(packagesReachedFrom('reading.ts').has('zod')).toBe(true)

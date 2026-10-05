@@ -278,3 +278,30 @@ export const cellDays = pgTable(
   },
   (t) => [primaryKey({ columns: [t.cellId, t.dayIndex] })],
 )
+
+/**
+ * What the devnet faucet has handed out — `T038a`. One row per operator key:
+ * the faucet gives a wallet the SOL and the mock asset to register and stake
+ * one phone, once (`FR-007` keeps registration open; the faucet only spares an
+ * operator the trip to a public one).
+ *
+ * The row is written **before** the transaction is sent and removed if it
+ * fails, so two requests for the same key cannot both be paid: the primary key
+ * is the lock. `address_hash` is a SHA-256 of the caller's address, not the
+ * address — the limit per caller needs only to compare them.
+ */
+export const faucetGrants = pgTable(
+  'faucet_grants',
+  {
+    /** Base58 wallet the grant went to. */
+    pubkey: text().primaryKey(),
+    addressHash: text().notNull(),
+    grantedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    /** Null while the transaction is in flight. */
+    signature: text(),
+  },
+  (t) => [
+    index('faucet_grants_address_idx').on(t.addressHash, t.grantedAt),
+    index('faucet_grants_granted_idx').on(t.grantedAt),
+  ],
+)
