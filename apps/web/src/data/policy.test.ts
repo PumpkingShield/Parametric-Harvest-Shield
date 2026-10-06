@@ -85,6 +85,24 @@ describe('policyWindow', () => {
     expect(cells[1]?.topLabel).toBeUndefined()
   })
 
+  it('never prints two labels closer than a label is wide', () => {
+    // A window opening one day before a decade — the shape of CqDa…, which
+    // printed 182369 and 182370 on top of each other.
+    for (const start of [182_369, 182_368, 182_367, 318_725, 10]) {
+      const policy = { ...POLICY, windowStartDay: start, windowEndDay: start + 89, windowDays: 90 }
+      const { cells } = policyWindow(policy, [])
+      const at = cells.flatMap((cell, offset) => (cell.topLabel === undefined ? [] : [offset]))
+
+      expect(at[0]).toBe(0)
+      expect(cells[0]?.topLabel).toBe(String(start))
+      for (let i = 1; i < at.length; i += 1) {
+        expect((at[i] ?? 0) - (at[i - 1] ?? 0)).toBeGreaterThanOrEqual(3)
+      }
+      // Still one every ten after the first: the rule drops a crowded mark, not the scale.
+      expect(at.length).toBeGreaterThanOrEqual(9)
+    }
+  })
+
   it('counts a missing day as a break in the run, like the chain does', () => {
     const { days } = policyWindow(POLICY, ROWS)
 

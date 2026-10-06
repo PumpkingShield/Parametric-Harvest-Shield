@@ -15,6 +15,13 @@ const SIZE = 22
 const GAP = 3
 const STEP = SIZE + GAP
 
+/**
+ * Squares a day label covers (a six-digit index at 13 px is about two and a
+ * half). A label that starts closer than this to the end of its row would hang
+ * past the strip, so it ends on its square instead of starting on it.
+ */
+const LABEL_SQUARES = 3
+
 const INK = '#141310'
 const RULE = '#E2DED4'
 const DRY = '#C8892B'
@@ -110,7 +117,9 @@ const DayStrip = ({ id, cells, bracket, hint }: Props) => {
                       key={cell.detail}
                       style={{
                         position: 'absolute',
-                        left: offset * STEP,
+                        ...(offset > cols - LABEL_SQUARES
+                          ? { left: (offset + 1) * STEP - GAP, transform: 'translateX(-100%)' }
+                          : { left: offset * STEP }),
                         top: 0,
                         fontSize: 13,
                         fontWeight: 600,

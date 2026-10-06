@@ -21,6 +21,15 @@ import type { StripCell } from './rainfall.ts'
 /** Day indices are labelled every ten squares, so a strip can be read. */
 const LABEL_EVERY = 10
 
+/**
+ * How many squares a label needs before the next one may start. A six-digit
+ * index at 13 px is about two and a half squares wide, so a window opening on
+ * 182369 would print 182369 and 182370 on top of each other. The window's
+ * first day keeps its label — it is where the policy begins — and a decade
+ * mark that close to it is the one that goes.
+ */
+const LABEL_SPAN = 3
+
 function millimetres(rainfallX100: number): string {
   return (rainfallX100 / 100).toFixed(1)
 }
@@ -66,8 +75,10 @@ export function policyWindow(policy: Policy, rows: readonly Day[]): PolicyWindow
   const days: DayClassification[] = []
 
   for (let index = policy.windowStartDay; index <= policy.windowEndDay; index += 1) {
-    const topLabel =
-      index === policy.windowStartDay || index % LABEL_EVERY === 0 ? String(index) : undefined
+    const labelled =
+      index === policy.windowStartDay ||
+      (index % LABEL_EVERY === 0 && index - policy.windowStartDay >= LABEL_SPAN)
+    const topLabel = labelled ? String(index) : undefined
     const row = byDay.get(index)
 
     if (row === undefined) {
