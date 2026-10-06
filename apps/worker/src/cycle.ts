@@ -11,10 +11,13 @@ import {
   type DayOutcome,
   type DaySubmitter,
   DEFAULT_BACKLOG_DAYS,
+  dayIndexAt,
+  oldestBacklogDay,
   type PoolClock,
 } from './interval.ts'
 import type { MirrorOutcome, RegistryMirror } from './registry.ts'
 import type { RetentionSweeper, SweepOutcome } from './retention.ts'
+import type { RewardMirror, RewardReadOutcome } from './rewards.ts'
 import {
   type PolicySource,
   type SettleDeps,
@@ -48,7 +51,10 @@ import {
  * 4. **`excludeAfterDays`** — sensors whose record over the window, now one
  *    day longer, breaches the outlier share (`T035`). After the money, because
  *    an exclusion moves a stake into capital and nobody is waiting on it.
- * 5. **`sweepIfDue`** — readings and hourly medians past their retention
+ * 5. **`readIfDue`** — what each slot earned on the days just written, read
+ *    out of their own transactions into `slot_rewards` (`T040`). After the
+ *    money, because it moves none: it is the operator screen's history.
+ * 6. **`sweepIfDue`** — readings and hourly medians past their retention
  *    (`T055`), once an hour. Last, because it has no deadline, and never newer
  *    than the oldest day step 1 could still close.
  *
@@ -91,6 +97,8 @@ export type CycleDeps = {
    * held, and on a fresh one nothing votes.
    */
   registry?: RegistryMirror
+  /** Absent in tests that are not about the reward history — `T040`. */
+  rewards?: RewardMirror
 }
 
 /** Why a cycle did nothing, when it did nothing. */
@@ -124,11 +132,21 @@ export type CycleReport = {
   swept: SweepOutcome | null
   /** Null when no read of the registry was due this cycle. */
   registry: MirrorOutcome | null
+  /** Null when no read of the reward history was due this cycle. */
+  rewards: RewardReadOutcome[] | null
 }
 
 /** A fresh set of empty lists — never a shared one a caller could append to. */
 function nothing(): Omit<CycleReport, 'skipped' | 'aggregatorMatches'> {
-  return { days: [], settled: [], closed: [], excluded: [], swept: null, registry: null }
+  return {
+    days: [],
+    settled: [],
+    closed: [],
+    excluded: [],
+    swept: null,
+    registry: null,
+    rewards: null,
+  }
 }
 
 /** The pool's own clock, plus how finely this worker cuts a day. */
@@ -224,6 +242,16 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
           now,
         )
 
+  const today = dayIndexAt(clock, now)
+  const rewards =
+    deps.rewards === undefined || today === null
+      ? null
+      : await deps.rewards.readIfDue(
+          now,
+          days.some((day) => day.status === 'submitted'),
+          oldestBacklogDay(today, deps.backlogDays ?? DEFAULT_BACKLOG_DAYS),
+        )
+
   const swept =
     deps.retention === undefined
       ? null
@@ -232,7 +260,17 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
           backlogHorizon(clock, now, deps.backlogDays ?? DEFAULT_BACKLOG_DAYS),
         )
 
-  return { skipped: null, aggregatorMatches, days, settled, closed, excluded, swept, registry }
+  return {
+    skipped: null,
+    aggregatorMatches,
+    days,
+    settled,
+    closed,
+    excluded,
+    swept,
+    registry,
+    rewards,
+  }
 }
 
 /** What a finished cycle is worth saying in one log line. */

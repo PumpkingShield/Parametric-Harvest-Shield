@@ -4,6 +4,7 @@ import {
   pgIntervalStore,
   pgRegistryMirrorStore,
   pgRetentionStore,
+  pgRewardMirrorStore,
 } from '@pumpking/db'
 import { pino } from 'pino'
 import { ConfigError, readWorkerConfig } from './config.ts'
@@ -50,6 +51,7 @@ const worker = startWorker({
     pgRetentionStore(database.db),
     pgRegistryMirrorStore(database.db),
     pgCellSlotStore(database.db),
+    pgRewardMirrorStore(database.db),
   ),
 })
 

@@ -290,9 +290,45 @@ export const cellDays = pgTable(
     merkleRoot: text(),
     /** Signature of the `submit_day_record` transaction, once committed. */
     txSignature: text(),
+    /**
+     * When the worker read the day's `DayRewarded` out of that transaction
+     * into `slot_rewards` (`T040`). Null until then — a day that earned nobody
+     * anything has no rows there, and this is what tells it from a day not
+     * read yet.
+     */
+    rewardsReadAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.cellId, t.dayIndex] })],
+)
+
+/**
+ * What a slot of a cell earned on a day — `FR-036`, `T040`. Copied from the
+ * program's `DayRewarded` event in the day's own transaction; nowhere else
+ * holds it, because `CellRewards.accrued` only knows what is still unclaimed.
+ *
+ * Keyed by the slot, as the chain is: a slot is never reused in a cell, so
+ * `(cell_id, slot)` names one sensor for good. `sensor_pubkey` is that sensor
+ * as the mirror knew it when the day was read — a convenience for the
+ * operator screen, null if the mirror had not seen the slot yet. Only slots
+ * that earned something have a row. Kept forever, like `cell_days`.
+ */
+export const slotRewards = pgTable(
+  'slot_rewards',
+  {
+    cellId: cellId()
+      .notNull()
+      .references(() => cells.id),
+    dayIndex: integer().notNull(),
+    slot: smallint().notNull(),
+    sensorPubkey: text().references(() => sensors.pubkey),
+    /** Base units of the pool's asset. */
+    earned: bigint({ mode: 'bigint' }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.cellId, t.dayIndex, t.slot] }),
+    index('slot_rewards_sensor_idx').on(t.sensorPubkey, t.dayIndex),
+  ],
 )
 
 /**

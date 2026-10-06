@@ -54,6 +54,15 @@ function decode<T>(name: string, data: Uint8Array): T {
   return coder.decode<T>(name, Buffer.from(data))
 }
 
+/**
+ * An account's bytes from its fields — the inverse of the decoders, through
+ * the same coder. For a test or a tool that needs to stand an account up
+ * without a program to write it; nothing on a real path encodes accounts.
+ */
+export async function encodeAccount(name: string, value: unknown): Promise<Uint8Array> {
+  return Uint8Array.from(await coder.encode(name, value))
+}
+
 export function decodePolicy(data: Uint8Array): PolicyAccount {
   return decode<PolicyAccount>('policy', data)
 }

@@ -254,6 +254,26 @@ describe('the order of a cycle', () => {
   })
 })
 
+describe('the reward history — T040', () => {
+  it('is read after the money, told a day was just submitted, back to the backlog’s first day', async () => {
+    const asked: { submitted: boolean; fromDay: number; sent: number }[] = []
+    deps.rewards = {
+      readIfDue: async (_now, submitted, fromDay) => {
+        asked.push({ submitted, fromDay, sent: chain.sent.length })
+        return []
+      },
+    }
+    store.window = twoDryDays()
+    open = [policy(1, key(20), 1)]
+
+    const report = await runCycle(deps, new Date('2026-08-03T00:00:01Z'))
+
+    // Two days and a settlement went out before it was asked.
+    expect(asked).toEqual([{ submitted: true, fromDay: 0, sent: 3 }])
+    expect(report.rewards).toEqual([])
+  })
+})
+
 describe('the clock is the pool’s', () => {
   it('a compressed pool needs no worker configuration', async () => {
     // `seconds_per_day = 2` is what a scenario run is (`FR-049`). Nothing here
@@ -389,6 +409,7 @@ describe('summarise', () => {
       ],
       swept: null,
       registry: null,
+      rewards: null,
     }
 
     expect(summarise(failed)).toEqual({

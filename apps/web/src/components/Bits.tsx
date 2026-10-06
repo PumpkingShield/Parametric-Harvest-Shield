@@ -72,10 +72,15 @@ export const Block = ({ children, top = 28 }: { children: ReactNode; top?: numbe
 )
 
 /**
- * Said on every screen, in the same words — `FR-039`, `FR-056`. Plain small
- * print and not a warning box: it is a statement of fact, not an alert.
+ * Said on every screen — `FR-039`, `FR-056`. Plain small print and not a
+ * warning box: it is a statement of fact, not an alert.
+ *
+ * A screen whose numbers are not all synthetic says precisely which are
+ * (`children`) instead of the blanket line: the operator screen's keys,
+ * signatures and stake are real, and calling them synthetic is as false as
+ * the reverse. `T048` turns this into the badge every screen carries.
  */
-export const SyntheticNote = () => (
+export const SyntheticNote = ({ children }: { children?: ReactNode }) => (
   <p
     style={{
       margin: '36px 0 0',
@@ -86,6 +91,6 @@ export const SyntheticNote = () => (
       color: INK,
     }}
   >
-    All numbers on this screen are synthetic. No real money moves.
+    {children ?? 'All numbers on this screen are synthetic. No real money moves.'}
   </p>
 )

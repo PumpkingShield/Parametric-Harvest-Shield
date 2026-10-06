@@ -2,6 +2,7 @@ import type { SignedReadingWire } from '@pumpking/shared/reading-bytes'
 import { sensorPublicKey } from '@pumpking/shared/signature'
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useState } from 'react'
 import { Block, INK, MONO, Prose, RULE } from '../components/Bits.tsx'
+import Operator from './Operator.tsx'
 import {
   type LookUp,
   lookUpSensor,
@@ -121,6 +122,8 @@ export type ThisPhoneViewProps = {
   registration?: ReactNode
   /** `T039`: the move, for a registered phone that has been carried elsewhere. */
   move?: ReactNode
+  /** `T040`: the operator screen, under the sensor, for a phone the registry knows. */
+  operator?: ReactNode
 }
 
 const quiet = {
@@ -172,93 +175,105 @@ export function ThisPhoneView(props: ThisPhoneViewProps) {
   const canSend = lookUp?.kind === 'registered' && !busy
 
   return (
-    <Block top={0}>
-      <p style={{ margin: '0 0 12px', fontSize: 17, fontWeight: 700, color: INK }}>
-        This phone as a sensor
-      </p>
-      <div
-        style={{
-          padding: '12px 0',
-          borderTop: `1px solid ${RULE}`,
-          borderBottom: `1px solid ${RULE}`,
-          fontFamily: MONO,
-          fontSize: 13,
-          color: INK,
-          wordBreak: 'break-all',
-        }}
-      >
-        {pubkey}
-      </div>
-      <div style={{ marginTop: 12 }}>
-        <Prose>
-          {lookUp === null ? 'Asking the registry about this key…' : registrationText(lookUp)}
-        </Prose>
-        {lookUp?.kind === 'unreachable' ? (
-          <button type="button" style={button(true)} onClick={props.onLookUp}>
-            Ask again
-          </button>
-        ) : null}
-        {props.registration ?? null}
-        {props.move ?? null}
-      </div>
-
-      <label style={{ display: 'block', marginTop: 20, fontSize: 17, color: INK }}>
-        Rain in the past hour, mm
-        <input
-          type="text"
-          inputMode="decimal"
-          autoComplete="off"
-          value={text}
-          onChange={(event) => props.onText(event.target.value)}
+    <>
+      <Block top={0}>
+        <p style={{ margin: '0 0 12px', fontSize: 17, fontWeight: 700, color: INK }}>
+          This phone as a sensor
+        </p>
+        <div
           style={{
-            display: 'block',
-            width: '100%',
-            boxSizing: 'border-box',
-            marginTop: 8,
-            padding: '12px',
-            fontSize: 22,
+            padding: '12px 0',
+            borderTop: `1px solid ${RULE}`,
+            borderBottom: `1px solid ${RULE}`,
             fontFamily: MONO,
+            fontSize: 13,
             color: INK,
-            background: 'transparent',
-            border: `2px solid ${INK}`,
-            borderRadius: 0,
+            wordBreak: 'break-all',
           }}
-        />
-      </label>
-      <button
-        type="button"
-        disabled={!canSend}
-        style={button(canSend)}
-        onClick={(event) => props.onSend({ timeStamp: event.timeStamp })}
-      >
-        {busy ? 'Signing and sending…' : 'Sign and send'}
-      </button>
-
-      {outcome === null ? null : (
-        <div role="status" style={{ marginTop: 14 }}>
-          <Prose>{outcomeText(outcome)}</Prose>
+        >
+          {pubkey}
         </div>
-      )}
-      {pending === null || busy ? null : (
-        <div style={{ marginTop: 14 }}>
+        <div style={{ marginTop: 12 }}>
           <Prose>
-            {`A reading of ${formatMillimetres(pending.valueX100)} mm from ${new Date(
-              pending.measuredAt,
-            ).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })} has no answer yet. Sending it again cannot count it twice.`}
+            {lookUp === null ? 'Asking the registry about this key…' : registrationText(lookUp)}
           </Prose>
-          <button
-            type="button"
-            style={button(true)}
-            onClick={(event) => props.onResend({ timeStamp: event.timeStamp })}
-          >
-            Send it again
-          </button>
+          {lookUp?.kind === 'unreachable' ? (
+            <button type="button" style={button(true)} onClick={props.onLookUp}>
+              Ask again
+            </button>
+          ) : null}
+          {props.registration ?? null}
+          {props.move ?? null}
         </div>
+
+        <label style={{ display: 'block', marginTop: 20, fontSize: 17, color: INK }}>
+          Rain in the past hour, mm
+          <input
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            value={text}
+            onChange={(event) => props.onText(event.target.value)}
+            style={{
+              display: 'block',
+              width: '100%',
+              boxSizing: 'border-box',
+              marginTop: 8,
+              padding: '12px',
+              fontSize: 22,
+              fontFamily: MONO,
+              color: INK,
+              background: 'transparent',
+              border: `2px solid ${INK}`,
+              borderRadius: 0,
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={!canSend}
+          style={button(canSend)}
+          onClick={(event) => props.onSend({ timeStamp: event.timeStamp })}
+        >
+          {busy ? 'Signing and sending…' : 'Sign and send'}
+        </button>
+
+        {outcome === null ? null : (
+          <div role="status" style={{ marginTop: 14 }}>
+            <Prose>{outcomeText(outcome)}</Prose>
+          </div>
+        )}
+        {pending === null || busy ? null : (
+          <div style={{ marginTop: 14 }}>
+            <Prose>
+              {`A reading of ${formatMillimetres(pending.valueX100)} mm from ${new Date(
+                pending.measuredAt,
+              ).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })} has no answer yet. Sending it again cannot count it twice.`}
+            </Prose>
+            <button
+              type="button"
+              style={button(true)}
+              onClick={(event) => props.onResend({ timeStamp: event.timeStamp })}
+            >
+              Send it again
+            </button>
+          </div>
+        )}
+      </Block>
+      {lookUp?.kind === 'unknown' ? (
+        <div style={{ margin: '36px 0 0', paddingTop: 14, borderTop: `2px solid ${INK}` }}>
+          <Prose>
+            Once this phone is registered with a stake, this is where it shows what the network made
+            of each reading, the stake and what it earned, and who else measures its cell.
+          </Prose>
+        </div>
+      ) : (
+        (props.operator ?? null)
       )}
-    </Block>
+    </>
   )
 }
 
@@ -468,6 +483,17 @@ const ThisPhone = (props: ThisPhoneProps) => {
               onRegistered={() => setAwaiting({ kind: 'registered' })}
             />
           </Suspense>
+        ) : null
+      }
+      operator={
+        lookUp?.kind === 'registered' && record !== null && pubkey !== null ? (
+          <Operator
+            apiUrl={apiUrl}
+            fetchFn={fetchFn}
+            pubkey={pubkey}
+            cellId={lookUp.registration.cellId}
+            sensorSecret={record.secretKey}
+          />
         ) : null
       }
       move={

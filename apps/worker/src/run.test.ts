@@ -46,6 +46,7 @@ function report(overrides: Partial<CycleReport> = {}): CycleReport {
     excluded: [],
     swept: null,
     registry: null,
+    rewards: null,
     ...overrides,
   }
 }

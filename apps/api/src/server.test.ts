@@ -2,6 +2,7 @@ import type {
   CounterStore,
   DayRow,
   IntervalStore,
+  OperatorStore,
   ReadingRow,
   RegistryRow,
   RegistryStore,
@@ -52,6 +53,17 @@ const noPolicies: PolicyLookup = { policyAt: () => Promise.resolve(null) }
 /** `T067`: nothing has published here yet, so every sensor starts at one. */
 const noCounters: CounterStore = { lastCounters: () => Promise.resolve(new Map()) }
 
+/** `T040`: a network that has judged and paid nothing yet. */
+const noActivity: OperatorStore = {
+  sensorReadings: () => Promise.resolve([]),
+  closedDays: () => Promise.resolve([]),
+  cellIntervals: () => Promise.resolve([]),
+  sensorVerdicts: () => Promise.resolve([]),
+  earnedDays: () => Promise.resolve([]),
+  earnedTotal: () => Promise.resolve(0n),
+  cellSensors: () => Promise.resolve([]),
+}
+
 function days(rows: DayRow[]): Pick<IntervalStore, 'dayRecords'> {
   return { dayRecords: () => Promise.resolve(rows) }
 }
@@ -63,6 +75,8 @@ function app(overrides: Partial<ApiDeps> = {}) {
     policies: noPolicies,
     registry: new Registry(),
     minStake: () => Promise.resolve(1_000_000n),
+    clock: () => Promise.resolve(null),
+    operator: noActivity,
     counters: noCounters,
     scenarioMode: false,
     ...overrides,
@@ -266,6 +280,17 @@ describe('the four routes are mounted where the contract says', () => {
     // `proxyHops` defaults to 0: the header is a client's say-so.
     const { createHash } = await import('node:crypto')
     expect(seen).toEqual([createHash('sha256').update('198.51.100.7').digest('hex')])
+  })
+
+  it('GET /v1/cells/:cellId/sensors and /v1/sensors/:pubkey/activity reach the operator screen’s routes — T040', async () => {
+    const cell = await app().request(`/v1/cells/${H3}/sensors`)
+    expect(cell.status).toBe(200)
+    expect(await cell.json()).toMatchObject({ cellId: H3, sensors: [] })
+
+    // A 400 that names the key: the activity route refused it, not the router.
+    const activity = await app().request('/v1/sensors/not-a-key/activity')
+    expect(activity.status).toBe(400)
+    expect(await activity.json()).toMatchObject({ error: { message: 'invalid sensor key' } })
   })
 
   it('the faucet is gone without a key', async () => {

@@ -6,11 +6,13 @@ import {
   pgCounterStore,
   pgFaucetStore,
   pgIntervalStore,
+  pgOperatorStore,
   pgReadingStore,
   pgCellSlotStore,
   pgRegistryMirrorStore,
   pgRegistryStore,
   pgRetentionStore,
+  pgRewardMirrorStore,
 } from '@pumpking/db'
 import { rpcPoolSource } from '@pumpking/worker/chain'
 import { readWorkerConfig, ConfigError as WorkerConfigError } from '@pumpking/worker/config'
@@ -93,6 +95,7 @@ const worker: WorkerRuntime | null = (() => {
         pgRetentionStore(database.db),
         pgRegistryMirrorStore(database.db),
         pgCellSlotStore(database.db),
+        pgRewardMirrorStore(database.db),
       ),
     })
   } catch (cause) {
@@ -110,6 +113,16 @@ const app = createApiApp({
     const pool = await poolSource.read()
     return pool === null ? null : BigInt(pool.minStake.toString())
   },
+  clock: async () => {
+    const pool = await poolSource.read()
+    return pool === null
+      ? null
+      : {
+          genesisTs: new Date(Number(pool.genesisTs.toString()) * 1000),
+          secondsPerDay: pool.secondsPerDay,
+        }
+  },
+  operator: pgOperatorStore(database.db),
   counters: pgCounterStore(database.db),
   scenarioMode: config.scenarioMode,
   webOrigin: config.webOrigin,

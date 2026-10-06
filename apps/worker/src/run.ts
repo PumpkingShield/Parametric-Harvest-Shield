@@ -3,6 +3,7 @@ import type {
   CellSlotStore,
   IntervalStore,
   RegistryMirrorStore,
+  RewardMirrorStore,
   RetentionStore,
 } from '@pumpking/db'
 import type { Logger } from 'pino'
@@ -13,6 +14,7 @@ import { type CycleDeps, type CycleReport, runCycle, summarise } from './cycle.t
 import { stalledAfterMs, type WorkerHealthState } from './health.ts'
 import { registryMirror, rpcRegistrySource } from './registry.ts'
 import { retentionSweeper } from './retention.ts'
+import { rewardMirror, rpcDayRewardSource } from './rewards.ts'
 import { rpcPolicySource } from './settle.ts'
 
 /**
@@ -75,6 +77,7 @@ export function rpcCycle(
   retention: RetentionStore,
   registry: RegistryMirrorStore,
   slots: CellSlotStore,
+  rewards: RewardMirrorStore,
 ): CycleRunner {
   const connection = new Connection(config.rpcUrl, 'confirmed')
 
@@ -95,6 +98,11 @@ export function rpcCycle(
       config.registrySyncMs,
     ),
     exclusion: { slots, chain: rpcExclusionSource(connection, config.programId) },
+    rewards: rewardMirror({
+      store: rewards,
+      source: rpcDayRewardSource(connection, config.programId),
+      slots,
+    }),
   }
 
   return (now) => runCycle(deps, now)
@@ -168,6 +176,17 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
         if (summary.failed > 0) log.warn(line, 'cycle finished with failures')
         else if (summary.submitted + summary.settled + summary.closed + summary.excluded > 0) log.info(line, 'cycle')
         else log.debug(line, 'cycle')
+
+        for (const read of report.rewards ?? []) {
+          // Nothing waits on the history, and an unread day is read again
+          // later; a failure is worth a line, a missing transaction a debug one.
+          const at = { cellId: read.cellId.toString(), dayIndex: read.dayIndex }
+          if (read.status === 'failed') {
+            log.warn({ ...at, err: read.error }, 'reading the day’s rewards failed')
+          } else if (read.status === 'missing') {
+            log.debug(at, 'the day’s transaction is not on the cluster yet')
+          } else log.debug({ ...at, slots: read.slots }, 'day rewards read')
+        }
 
         if (report.swept?.status === 'failed') {
           log.warn({ err: report.swept.error }, 'the retention sweep failed, next try in an hour')

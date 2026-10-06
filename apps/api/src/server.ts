@@ -2,6 +2,7 @@ import type {
   CounterStore,
   FaucetStore,
   IntervalStore,
+  OperatorStore,
   ReadingStore,
   RegistryStore,
 } from '@pumpking/db'
@@ -9,6 +10,8 @@ import type { HealthWire as WorkerHealthWire } from '@pumpking/worker/health'
 import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { apiError } from './errors.ts'
+import { createActivityRoute, type PoolClock } from './routes/activity.ts'
+import { createCellSensorsRoute } from './routes/cell-sensors.ts'
 import { createCellsRoute } from './routes/cells.ts'
 import { createFaucetRoute, type FaucetChain } from './routes/faucet.ts'
 import { createFeederRoute } from './routes/feeder.ts'
@@ -51,6 +54,13 @@ export type ApiDeps = {
    * `initialize_pool`.
    */
   minStake: () => Promise<bigint | null>
+  /**
+   * The pool's clock, from the chain — which pool day a reading fell on, and
+   * when a day began. Null before `initialize_pool`.
+   */
+  clock: () => Promise<PoolClock | null>
+  /** `T040`: what the operator screen reads — readings judged, days paid. */
+  operator: OperatorStore
   /** `T067`: where each sensor's counter stopped, so a second run resumes it. */
   counters: CounterStore
   /** `SCENARIO_MODE=on`. False and every scenario path answers 404. */
@@ -146,8 +156,26 @@ export function createApiApp(deps: ApiDeps): Hono {
 
   app.route('/v1/readings', readings)
   app.route('/v1/cells', createCellsRoute({ store: deps.intervals }))
+  app.route(
+    '/v1/cells',
+    createCellSensorsRoute({
+      store: deps.operator,
+      minStake: deps.minStake,
+      clock: deps.clock,
+      now,
+    }),
+  )
   app.route('/v1/policies', createPoliciesRoute({ policies: deps.policies, store: deps.intervals }))
   app.route('/v1/sensors', createSensorsRoute({ registry: deps.registry, minStake: deps.minStake }))
+  app.route(
+    '/v1/sensors',
+    createActivityRoute({
+      registry: deps.registry,
+      store: deps.operator,
+      clock: deps.clock,
+      now,
+    }),
+  )
   app.route(
     '/v1/scenario',
     createScenarioRoute({

@@ -36,6 +36,13 @@
       "when": 1791210181716,
       "tag": "0004_sensor_moves",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791280963599,
+      "tag": "0005_slot_rewards",
+      "breakpoints": true
     }
   ]
 }

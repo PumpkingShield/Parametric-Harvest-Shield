@@ -1,5 +1,6 @@
 import { type DayClassification, DayState } from '@pumpking/shared/day'
 import type { Day, Policy } from '../api/policy.ts'
+import { ASSET } from './money.ts'
 import type { StripCell } from './rainfall.ts'
 
 /**
@@ -98,9 +99,6 @@ export function formatAmount(baseUnits: string, decimals: number): string {
   const hundredths = ((units % scale) * 100n) / scale
   return `${whole}.${String(hundredths).padStart(2, '0')}`
 }
-
-/** `FR-056`: the asset is a mock token, and it says so wherever a sum appears. */
-const ASSET = 'mock USDC'
 
 /**
  * The line under the figure — the run, and what it is short of.

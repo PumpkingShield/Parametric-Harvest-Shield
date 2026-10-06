@@ -233,24 +233,4 @@ export const PAID_WINDOW: StripWindow = buildWindow({
 
 export const PAID_BRACKET = longestDryRun(PAID_WINDOW.days)
 
-/* ---------------------------------------------------------------- */
-/* Screen 2 — one sensor's twenty-four hours, 29 Aug 2026            */
-/* ---------------------------------------------------------------- */
-
-const REJECTED_HOUR = 14
-
-export const SENSOR_HOURS: StripCell[] = Array.from({ length: 24 }, (_unused, hour) => {
-  const stamp = `${String(hour).padStart(2, '0')}:00`
-  if (hour === REJECTED_HOUR) {
-    return {
-      state: 'none' as const,
-      detail: `${stamp} — 11.2 mm — rejected, cell median was 0.0 mm`,
-    }
-  }
-  return {
-    state: 'filled' as const,
-    detail: `${stamp} — 0.0 mm — accepted, matched the cell median`,
-  }
-})
-
 export const CELL_ID = '872a1072dffffff'

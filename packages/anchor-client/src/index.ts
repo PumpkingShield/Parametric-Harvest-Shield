@@ -17,12 +17,15 @@ export {
   decodePolicy,
   decodePool,
   decodeSensor,
+  encodeAccount,
   isPolicyActive,
   POLICY_ACTIVE,
   POLICY_DISCRIMINATOR,
   reputationWindow,
   SENSOR_DISCRIMINATOR,
 } from './accounts.ts'
+export type { DayRewardedEvent } from './events.ts'
+export { dayRewardedFromLogs, programEvents } from './events.ts'
 export { PUMPKING_IDL } from './idl/idl.ts'
 export type { Pumpking } from './idl/pumpking.ts'
 export type {
