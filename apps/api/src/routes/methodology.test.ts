@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 import {
   type ChainCell,
   COLLUSION_MEANING,
-  cellExposureLimit,
   createMethodologyRoute,
   type MethodologyPool,
   type MethodologyWire,
@@ -75,7 +74,10 @@ describe('GET /v1/methodology', () => {
       minVotes: 3,
       capitalTotal: '500000000000',
       cellExposureBps: 1_000,
-      cellExposureLimit: '50000000000',
+      capitalExposureLimit: '50000000000',
+      collusionExposureLimit: '1000000',
+      cellExposureLimit: '1000000',
+      binding: 'collusion',
     })
     expect(wire.collusion?.coverTimes).toBe(2)
     expect(wire.collusion?.floor).toEqual({
@@ -170,9 +172,21 @@ describe('GET /v1/methodology', () => {
   })
 })
 
-describe('cellExposureLimit', () => {
-  it('is the program’s integer share of capital', () => {
-    expect(cellExposureLimit({ ...DEMO, capitalTotal: 999n, cellExposureBps: 1_000 })).toBe(99n)
+describe('the two bounds', () => {
+  it('names the capital share when it is the lower', async () => {
+    // Parameters that keep SC-014 on their own: the share of 1 246 sits under
+    // half the floor, 1 250 — the demo's numbers after the upgrade.
+    const wire = await get({
+      ...DEMO,
+      capitalTotal: 498_766_080_000n,
+      minStake: 1_250n * TOKEN,
+      cellExposureBps: 25,
+    })
+    expect(wire.pool?.capitalExposureLimit).toBe('1246915200')
+    expect(wire.pool?.collusionExposureLimit).toBe('1250000000')
+    expect(wire.pool?.cellExposureLimit).toBe('1246915200')
+    expect(wire.pool?.binding).toBe('capital')
+    expect(wire.collusion?.floor.holds).toBe(true)
   })
 })
 

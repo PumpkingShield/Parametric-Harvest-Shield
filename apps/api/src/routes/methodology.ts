@@ -8,9 +8,11 @@ import {
 } from '@pumpking/anchor-client'
 import type { MethodologyStore, StakeRow } from '@pumpking/db'
 import {
-  BPS_DENOMINATOR,
   COLLUSION_COVER_TIMES,
+  capitalExposureLimit,
+  cellExposureLimit,
   collusionCost,
+  collusionExposureLimit,
   collusionFloor,
   collusionHolds,
   collusionRatio,
@@ -36,6 +38,15 @@ import { Hono } from 'hono'
  * (`collusionFloor`), so the floor holding means every cell holds, and the
  * floor failing is a fact about the parameters whatever the cells look like.
  * The cells are listed beside it to show what the real ones cost.
+ *
+ * **The verdict weighs the price against the capital share** — the exposure
+ * limit as a published parameter (`FR-020`) — and not against the limit the
+ * program sells under, which since `set_pool_params` (`T041a`) is the lower of
+ * that share and half the floor and so passes `SC-014` by construction. Both
+ * are on the wire. The verdict says whether the parameters themselves keep a
+ * cell's price above what it owes; the program's bound is what holds when they
+ * do not, and on a cluster still running a program from before it, nothing
+ * does. Judging the share is the answer that is true on both.
  *
  * The page that explains all this is `T047`; this is the number it reads.
  */
@@ -86,7 +97,7 @@ export type CollusionCellWire = {
   underInvestigation: boolean
   /** Null when no interval here can get a value, for anyone. */
   path: CollusionPathWire | null
-  /** `cost / limit`, for reading; null without a path or against a zero limit. */
+  /** `cost / capital share`, for reading; null without a path or against a zero share. */
   ratio: number | null
   holds: boolean
 }
@@ -99,13 +110,22 @@ export type MethodologyWire = {
     capitalTotal: string
     cellExposureBps: number
     /** `capital_total · cell_exposure_bps / 10 000` — `FR-020`. */
+    capitalExposureLimit: string
+    /** Half the collusion floor — `FR-054`. */
+    collusionExposureLimit: string
+    /** The lower of the two: what the program sells a cell up to (`T041a`). */
     cellExposureLimit: string
+    /** Which of the two bounds is the lower — the one that binds. */
+    binding: 'capital' | 'collusion'
   } | null
   collusion: {
     meaning: string
     /** `SC-014`: the price has to be this many times the limit. */
     coverTimes: number
-    /** The cheapest cell these parameters allow, and the verdict of `SC-014`. */
+    /**
+     * The cheapest cell these parameters allow, and the verdict of `SC-014`
+     * against the capital share.
+     */
     floor: { votes: number; cost: string; ratio: number | null; holds: boolean }
     cells: CollusionCellWire[]
   } | null
@@ -115,11 +135,6 @@ export type MethodologyRouteOptions = {
   pool: () => Promise<MethodologyPool | null>
   cells: CellSource
   store: MethodologyStore
-}
-
-/** `Pool::cell_exposure_limit`, in the same integers. */
-export function cellExposureLimit(pool: MethodologyPool): bigint {
-  return (pool.capitalTotal * BigInt(pool.cellExposureBps)) / BigInt(BPS_DENOMINATOR)
 }
 
 /**
@@ -152,7 +167,8 @@ export function createMethodologyRoute(options: MethodologyRouteOptions): Hono {
       options.cells.cells(),
       options.store.stakes(ReadingKind.PrecipitationMm),
     ])
-    const limit = cellExposureLimit(pool)
+    const limit = capitalExposureLimit(pool)
+    const collusionLimit = collusionExposureLimit(pool)
     const params = { minStake: pool.minStake, minVotes: pool.minVotes }
     const stakes = voteStakesByCell(rows, pool.minStake)
     const floor = collusionFloor(params)
@@ -163,7 +179,10 @@ export function createMethodologyRoute(options: MethodologyRouteOptions): Hono {
         minVotes: pool.minVotes,
         capitalTotal: pool.capitalTotal.toString(),
         cellExposureBps: pool.cellExposureBps,
-        cellExposureLimit: limit.toString(),
+        capitalExposureLimit: limit.toString(),
+        collusionExposureLimit: collusionLimit.toString(),
+        cellExposureLimit: cellExposureLimit(pool).toString(),
+        binding: collusionLimit < limit ? 'collusion' : 'capital',
       },
       collusion: {
         meaning: COLLUSION_MEANING,

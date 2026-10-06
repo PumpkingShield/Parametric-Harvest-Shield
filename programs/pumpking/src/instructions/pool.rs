@@ -54,10 +54,11 @@ impl PoolParams {
     /// A day of zero seconds divides by zero in every day index there will
     /// ever be.
     pub fn validate(&self, authority: Pubkey) -> Result<()> {
-        require!(
-            self.cell_exposure_bps > 0 && u64::from(self.cell_exposure_bps) <= BPS_DENOMINATOR,
-            PumpkingError::ExposureShareOutOfRange
-        );
+        RiskParams {
+            cell_exposure_bps: self.cell_exposure_bps,
+            min_stake: self.min_stake,
+        }
+        .validate()?;
         require!(
             u64::from(self.premium_rewards_bps) <= BPS_DENOMINATOR,
             PumpkingError::RewardsShareOutOfRange
@@ -105,6 +106,33 @@ impl PoolParams {
             self.aggregator != authority,
             PumpkingError::RolesNotSeparated
         );
+        Ok(())
+    }
+}
+
+/// The two parameters the price of collusion is weighed with — `FR-054`:
+/// what a vote costs, and what a cell may owe. The only ones that change after
+/// `initialize_pool`, and together, because each is only meaningful against
+/// the other.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct RiskParams {
+    /// `FR-020`: share of capital one cell may be exposed to.
+    pub cell_exposure_bps: u16,
+    /// `FR-050`: stake below which a sensor publishes but does not vote.
+    pub min_stake: u64,
+}
+
+impl RiskParams {
+    /// A zero exposure share sells no policy at all; a share above 100% lets
+    /// one cell owe more than the pool holds, which is `FR-019` broken at
+    /// deployment rather than at settlement. A minimum stake of zero makes a
+    /// vote free, and with it the cell limit `SC-014` holds it to.
+    pub fn validate(&self) -> Result<()> {
+        require!(
+            self.cell_exposure_bps > 0 && u64::from(self.cell_exposure_bps) <= BPS_DENOMINATOR,
+            PumpkingError::ExposureShareOutOfRange
+        );
+        require!(self.min_stake > 0, PumpkingError::MinStakeNotSet);
         Ok(())
     }
 }
@@ -225,6 +253,50 @@ pub fn initialize_pool(ctx: Context<InitializePool>, params: PoolParams) -> Resu
         bump: ctx.bumps.pool,
     });
 
+    Ok(())
+}
+
+/* -------------------------------------------------------------------------- */
+/* set_pool_params                                                            */
+/* -------------------------------------------------------------------------- */
+
+/// A change of what a vote costs or what a cell may owe — `FR-054`. Logged
+/// with both sides, so the price of collusion at any past moment can be read
+/// back from the chain rather than taken on trust.
+#[event]
+pub struct RiskParamsChanged {
+    pub old_cell_exposure_bps: u16,
+    pub new_cell_exposure_bps: u16,
+    pub old_min_stake: u64,
+    pub new_min_stake: u64,
+}
+
+#[derive(Accounts)]
+pub struct SetPoolParams<'info> {
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [POOL_SEED], bump = pool.bump, has_one = authority)]
+    pub pool: Account<'info, Pool>,
+}
+
+/// Re-weighs the price of collusion — `FR-054`.
+///
+/// Nothing already sold is touched: a policy's payout stays reserved whatever
+/// the new limit says, and a lower limit only refuses the next sale. A higher
+/// minimum stake takes the vote from every sensor below it until its operator
+/// tops it up — the price of a vote is the parameter, and a vote held below it
+/// is the cheap vote the change exists to remove.
+pub fn set_pool_params(ctx: Context<SetPoolParams>, params: RiskParams) -> Result<()> {
+    params.validate()?;
+    let pool = &mut ctx.accounts.pool;
+    emit!(RiskParamsChanged {
+        old_cell_exposure_bps: pool.cell_exposure_bps,
+        new_cell_exposure_bps: params.cell_exposure_bps,
+        old_min_stake: pool.min_stake,
+        new_min_stake: params.min_stake,
+    });
+    pool.cell_exposure_bps = params.cell_exposure_bps;
+    pool.min_stake = params.min_stake;
     Ok(())
 }
 
@@ -407,6 +479,45 @@ mod tests {
 
         p.cell_exposure_bps = 10_000;
         assert!(p.validate(Pubkey::new_unique()).is_ok());
+    }
+
+    #[test]
+    fn a_vote_cannot_be_free() {
+        // FR-054: the cell limit is half the price of collusion, and a free
+        // vote makes that price — and the limit — zero.
+        let mut p = params();
+        p.min_stake = 0;
+        assert_eq!(
+            code_of(p.validate(Pubkey::new_unique()).unwrap_err()),
+            u32::from(PumpkingError::MinStakeNotSet)
+        );
+        p.min_stake = 1;
+        assert!(p.validate(Pubkey::new_unique()).is_ok());
+    }
+
+    #[test]
+    fn a_change_of_risk_parameters_obeys_the_same_rules() {
+        let ok = RiskParams {
+            cell_exposure_bps: 1_000,
+            min_stake: 1,
+        };
+        assert!(ok.validate().is_ok());
+        let free = RiskParams {
+            cell_exposure_bps: 1_000,
+            min_stake: 0,
+        };
+        assert_eq!(
+            code_of(free.validate().unwrap_err()),
+            u32::from(PumpkingError::MinStakeNotSet)
+        );
+        let over = RiskParams {
+            cell_exposure_bps: 10_001,
+            min_stake: 1,
+        };
+        assert_eq!(
+            code_of(over.validate().unwrap_err()),
+            u32::from(PumpkingError::ExposureShareOutOfRange)
+        );
     }
 
     #[test]

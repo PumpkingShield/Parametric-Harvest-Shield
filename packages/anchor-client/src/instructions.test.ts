@@ -17,6 +17,7 @@ import {
   reinstateSensorInstruction,
   requestUnstakeInstruction,
   SENSOR_SLOTS,
+  setPoolParamsInstruction,
   settlePolicyInstruction,
   stakeSensorInstruction,
   submitDayRecordInstruction,
@@ -84,6 +85,31 @@ function accountNames(instructionName: string): string[] {
   }
   return instruction.accounts.map((account) => account.name)
 }
+
+describe('setPoolParamsInstruction', () => {
+  const input = { authority, params: { cellExposureBps: 25, minStake: 1_250_000_000n }, programId }
+
+  it('carries both risk parameters through the wire format', () => {
+    const { name, data } = decode(setPoolParamsInstruction(input).data)
+    expect(name).toBe('setPoolParams')
+    const encoded = data.params as Record<string, unknown>
+    expect(encoded.cellExposureBps).toBe(25)
+    expect(String(encoded.minStake)).toBe('1250000000')
+  })
+
+  it('signs with the authority and writes only the pool', () => {
+    expect(accountNames('setPoolParams')).toEqual(['authority', 'pool'])
+    const { keys } = setPoolParamsInstruction(input)
+    expect(keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      authority.toBase58(),
+      poolPda(programId).address.toBase58(),
+    ])
+    expect(keys.map((meta) => [meta.isSigner, meta.isWritable])).toEqual([
+      [true, false],
+      [false, true],
+    ])
+  })
+})
 
 describe('initializePoolInstruction', () => {
   it('carries the discriminator the program compiled', () => {

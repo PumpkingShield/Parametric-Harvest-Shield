@@ -213,4 +213,7 @@ pub enum PumpkingError {
 
     #[msg("The sensor holds no slot in this cell")]
     NotTheSensorsCell,
+
+    #[msg("The minimum stake must be above zero: a free vote makes the cell limit zero")]
+    MinStakeNotSet,
 }

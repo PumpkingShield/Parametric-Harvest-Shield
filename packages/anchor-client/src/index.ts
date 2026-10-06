@@ -71,6 +71,7 @@ export {
   reinstateSensorInstruction,
   requestUnstakeInstruction,
   SENSOR_SLOTS,
+  setPoolParamsInstruction,
   settlePolicyInstruction,
   stakeSensorInstruction,
   submitDayRecordInstruction,

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   type CollusionCell,
   type CollusionParams,
+  capitalExposureLimit,
+  cellExposureLimit,
   collusionCost,
+  collusionExposureLimit,
   collusionFloor,
   collusionHolds,
   collusionRatio,
@@ -187,5 +190,41 @@ describe('collusionHolds', () => {
 describe('collusionRatio', () => {
   it('has no ratio against a limit of nothing', () => {
     expect(collusionRatio(5n, 0n)).toBeNull()
+  })
+})
+
+describe('cellExposureLimit', () => {
+  // The demo pool: one token a vote, quorum 3, 10% of half a million tokens.
+  const demo = {
+    minStake: TOKEN,
+    minVotes: 3,
+    capitalTotal: 500_000n * TOKEN,
+    cellExposureBps: 1_000,
+  }
+
+  it('is the lower of the capital share and half the floor, as the program takes it', () => {
+    expect(capitalExposureLimit(demo)).toBe(50_000n * TOKEN)
+    expect(collusionExposureLimit(demo)).toBe(TOKEN)
+    expect(cellExposureLimit(demo)).toBe(TOKEN)
+    // A small pool is bound by its capital.
+    expect(cellExposureLimit({ ...demo, capitalTotal: 5n * TOKEN })).toBe(TOKEN / 2n)
+  })
+
+  it('rounds half an odd floor down, never past half', () => {
+    // state.rs: `a_cell_owes_at_most_half_its_price_of_collusion`.
+    const odd = { ...demo, minStake: 1_000_001n, minVotes: 1 }
+    expect(collusionExposureLimit(odd)).toBe(500_000n)
+    expect(collusionHolds(collusionFloor(odd), cellExposureLimit(odd))).toBe(true)
+  })
+
+  it('holds SC-014 for every cell, whatever the parameters', () => {
+    for (const minVotes of [1, 2, 3, 4, 5, 32]) {
+      for (const minStake of [1n, 7n, TOKEN, 1_000_001n]) {
+        for (const cellExposureBps of [1, 25, 1_000, 10_000]) {
+          const p = { minStake, minVotes, capitalTotal: 500_000n * TOKEN, cellExposureBps }
+          expect(collusionHolds(collusionFloor(p), cellExposureLimit(p))).toBe(true)
+        }
+      }
+    }
   })
 })

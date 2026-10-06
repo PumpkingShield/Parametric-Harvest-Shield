@@ -22,6 +22,12 @@ pub mod pumpking {
         instructions::pool::initialize_pool(ctx, params)
     }
 
+    /// Changes what a vote costs and what a cell may owe — `FR-054`. The
+    /// authority's alone; policies already sold keep their reservation.
+    pub fn set_pool_params(ctx: Context<SetPoolParams>, params: RiskParams) -> Result<()> {
+        instructions::pool::set_pool_params(ctx, params)
+    }
+
     /// Puts capital in and takes a proportional share out — `FR-032`. The same
     /// instruction seeds the pool and funds it later; there is no second path.
     pub fn deposit_capital(ctx: Context<DepositCapital>, amount: u64) -> Result<()> {

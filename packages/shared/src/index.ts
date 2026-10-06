@@ -10,10 +10,13 @@ export {
   h3IndexFromCellId,
   isCellId,
 } from './cell.ts'
-export type { CollusionCell, CollusionParams, CollusionPath } from './collusion.ts'
+export type { CollusionCell, CollusionParams, CollusionPath, ExposureParams } from './collusion.ts'
 export {
   COLLUSION_COVER_TIMES,
+  capitalExposureLimit,
+  cellExposureLimit,
   collusionCost,
+  collusionExposureLimit,
   collusionFloor,
   collusionHolds,
   collusionRatio,

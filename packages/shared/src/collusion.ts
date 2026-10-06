@@ -30,6 +30,8 @@
  * the collateral in play, and anything said about it has to say so.
  */
 
+import { BPS_DENOMINATOR } from './premium.ts'
+
 /** A cell as the price of collusion sees it. */
 export type CollusionCell = {
   /**
@@ -124,6 +126,34 @@ export function collusionHolds(cost: bigint, exposureLimit: bigint): boolean {
 export function collusionRatio(cost: bigint, exposureLimit: bigint): number | null {
   if (exposureLimit === 0n) return null
   return Number(cost) / Number(exposureLimit)
+}
+
+/** The parameters a cell's exposure limit is read from — the pool's. */
+export type ExposureParams = CollusionParams & {
+  capitalTotal: bigint
+  cellExposureBps: number
+}
+
+/** The published share of capital one cell may owe — `FR-020`. */
+export function capitalExposureLimit(params: ExposureParams): bigint {
+  return (params.capitalTotal * BigInt(params.cellExposureBps)) / BigInt(BPS_DENOMINATOR)
+}
+
+/** Half the collusion floor: the most a cell may owe and still cost twice that to take. */
+export function collusionExposureLimit(params: ExposureParams): bigint {
+  return collusionFloor(params) / COLLUSION_COVER_TIMES
+}
+
+/**
+ * `Pool::cell_exposure_limit` — the lower of the two bounds, as the program
+ * since `set_pool_params` sells against it (`FR-020`, `FR-054`). The same
+ * integers: a floor over `u64` saturates there and here it does not, which
+ * only matters past any capital the lower bound would let through.
+ */
+export function cellExposureLimit(params: ExposureParams): bigint {
+  const capital = capitalExposureLimit(params)
+  const collusion = collusionExposureLimit(params)
+  return capital < collusion ? capital : collusion
 }
 
 function assertParams(params: CollusionParams): void {

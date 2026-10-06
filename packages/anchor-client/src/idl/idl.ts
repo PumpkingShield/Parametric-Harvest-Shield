@@ -1345,6 +1345,59 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "setPoolParams",
+      "docs": [
+        "Changes what a vote costs and what a cell may owe — `FR-054`. The",
+        "authority's alone; policies already sold keep their reservation."
+      ],
+      "discriminator": [
+        155,
+        57,
+        152,
+        27,
+        154,
+        140,
+        166,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "riskParams"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "settlePolicy",
       "docs": [
         "Pays a policy the index has triggered — `FR-026`, `FR-027`, `FR-030`.",
@@ -2085,6 +2138,19 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "riskParamsChanged",
+      "discriminator": [
+        46,
+        250,
+        182,
+        37,
+        162,
+        172,
+        133,
+        96
+      ]
+    },
+    {
       "name": "sensorExcludedForOutliers",
       "discriminator": [
         163,
@@ -2526,6 +2592,11 @@ export const PUMPKING_IDL: Pumpking = {
       "code": 6069,
       "name": "notTheSensorsCell",
       "msg": "The sensor holds no slot in this cell"
+    },
+    {
+      "code": 6070,
+      "name": "minStakeNotSet",
+      "msg": "The minimum stake must be above zero: a free vote makes the cell limit zero"
     }
   ],
   "types": [
@@ -3760,6 +3831,63 @@ export const PUMPKING_IDL: Pumpking = {
             "docs": [
               "`CellState::rewards_reserve` from before `T036`, now capital."
             ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "riskParams",
+      "docs": [
+        "The two parameters the price of collusion is weighed with — `FR-054`:",
+        "what a vote costs, and what a cell may owe. The only ones that change after",
+        "`initialize_pool`, and together, because each is only meaningful against",
+        "the other."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellExposureBps",
+            "docs": [
+              "`FR-020`: share of capital one cell may be exposed to."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "minStake",
+            "docs": [
+              "`FR-050`: stake below which a sensor publishes but does not vote."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "riskParamsChanged",
+      "docs": [
+        "A change of what a vote costs or what a cell may owe — `FR-054`. Logged",
+        "with both sides, so the price of collusion at any past moment can be read",
+        "back from the chain rather than taken on trust."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "oldCellExposureBps",
+            "type": "u16"
+          },
+          {
+            "name": "newCellExposureBps",
+            "type": "u16"
+          },
+          {
+            "name": "oldMinStake",
+            "type": "u64"
+          },
+          {
+            "name": "newMinStake",
             "type": "u64"
           }
         ]

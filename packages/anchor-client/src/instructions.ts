@@ -327,6 +327,36 @@ export function initializePoolInstruction(input: InitializePoolInput): Transacti
 }
 
 /* -------------------------------------------------------------------------- */
+/* set_pool_params                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** `RiskParams` — what a vote costs and what a cell may owe (`FR-054`). */
+export interface RiskParams {
+  cellExposureBps: number
+  minStake: bigint
+}
+
+export interface SetPoolParamsInput {
+  /** `pool.authority`; the program checks it. */
+  authority: PublicKey
+  params: RiskParams
+  programId?: PublicKey
+}
+
+export function setPoolParamsInstruction(input: SetPoolParamsInput): TransactionInstruction {
+  return buildInstruction('setPoolParams', {
+    programId: input.programId ?? PROGRAM_ID,
+    accounts: { authority: input.authority },
+    args: {
+      params: {
+        cellExposureBps: input.params.cellExposureBps,
+        minStake: new BN(input.params.minStake.toString()),
+      },
+    },
+  })
+}
+
+/* -------------------------------------------------------------------------- */
 /* deposit_capital                                                            */
 /* -------------------------------------------------------------------------- */
 

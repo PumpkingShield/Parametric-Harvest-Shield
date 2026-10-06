@@ -274,10 +274,13 @@ fn thaw_world() -> World {
 
 /// The same pool, except one cell may owe all of its capital. With the cell
 /// limit out of the way, the only thing standing between a buyer and cover is
-/// the liquidity check `FR-019` — the one `FR-051` names.
+/// the liquidity check `FR-019` — the one `FR-051` names. Out of the way means
+/// both of its bounds: a vote priced at what each sensor here stakes puts half
+/// the price of collusion (`FR-054`) at twice the capital.
 fn whole_pool_params() -> PoolParams {
     PoolParams {
         cell_exposure_bps: 10_000,
+        min_stake: NETWORK_STAKE,
         ..pool_params()
     }
 }

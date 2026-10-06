@@ -806,6 +806,8 @@ mod tests {
 
     /// A pool with room: a million of capital, nothing reserved, a tenth of it
     /// available to any one cell, three sensors needed, three days of waiting.
+    /// The stake prices a cell at 400_000, so half of that (200_000) sits above
+    /// the capital share and the share is the bound that binds here.
     fn pool() -> Pool {
         Pool {
             authority: Pubkey::new_unique(),
@@ -821,7 +823,7 @@ mod tests {
             risk_loading_bps: 2_500,
             min_rate_bps: 100,
             min_sensors_per_cell: 3,
-            min_stake: 1_000,
+            min_stake: 200_000,
             unstake_delay_days: 30,
             waiting_period_days: 3,
             dry_day_threshold_mm_x100: 100,
@@ -986,6 +988,25 @@ mod tests {
         assert_eq!(
             code_of(check_underwriting(&p, &pool, 3, 0, TODAY).unwrap_err()),
             u32::from(PumpkingError::InsufficientLiquidity)
+        );
+    }
+
+    #[test]
+    fn one_cell_cannot_hold_more_than_half_its_price_of_collusion() {
+        // FR-054, SC-014: at 30_000 a vote and a quorum of three, two votes
+        // take the cell for 60_000, so it may owe 30_000 — although its share
+        // of the pool is 100_000.
+        let mut pool = pool();
+        pool.min_stake = 30_000;
+        let mut fits = params();
+        fits.payout = 20_000;
+        assert!(check_underwriting(&fits, &pool, 3, 10_000, TODAY).is_ok());
+
+        let mut over = params();
+        over.payout = 20_001;
+        assert_eq!(
+            code_of(check_underwriting(&over, &pool, 3, 10_000, TODAY).unwrap_err()),
+            u32::from(PumpkingError::CellExposureExceeded)
         );
     }
 

@@ -38,9 +38,12 @@ POLICY_OWNER_TOKENS=10000
 # SC-008 feeder's. Registration costs rent — ~0.0016 SOL a Sensor account, and
 # the first sensor of a cell opens its CellState — so the busiest operator
 # (34 feeder sensors, one show sensor, two cells) spends ~0.08 SOL. Staking
-# costs `pool.min_stake` (one token) a sensor: 35 for that operator.
+# costs `pool.min_stake` a sensor. T041a prices a vote at half a cell's limit
+# or more, so the demo pool's minimum is thousands of tokens, not one: enough
+# for one show sensor at 6 250 (docs/DEPLOY.md, block T041a) plus the
+# feeder's 34 at the SC-008 pool's one token.
 OPERATOR_SOL=0.10
-OPERATOR_TOKENS=50
+OPERATOR_TOKENS=6300
 # T038a: the faucet gives 0.03 SOL a grant (FAUCET_LAMPORTS), so this is ~16
 # phones registered. Top it up with `solana transfer` when it runs low.
 FAUCET_SOL=0.5

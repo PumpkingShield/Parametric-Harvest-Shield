@@ -30,6 +30,10 @@ pub const BPS_DENOMINATOR: u64 = 10_000;
 /// limit is a signal to split the grid (`FR-069`), not to raise the constant.
 pub const MAX_SENSORS_PER_CELL: u8 = 32;
 
+/// `SC-014`: the price of controlling a cell is at least this many times what
+/// the cell may owe.
+pub const COLLUSION_COVER_TIMES: u64 = 2;
+
 /// Days of history a cell carries. The longest coverage window a policy can
 /// buy is 90 days, so 128 covers it with room to spare, and the log is a ring
 /// buffer rather than an account per day: one array read instead of a walk
@@ -191,11 +195,39 @@ impl Pool {
         self.capital_total.saturating_sub(self.reserved_total)
     }
 
-    /// The most one cell may owe at once — `FR-020`.
-    pub fn cell_exposure_limit(&self) -> u64 {
+    /// The published share of capital one cell may owe — `FR-020`. One of
+    /// the two bounds `cell_exposure_limit` takes the lower of.
+    pub fn capital_exposure_limit(&self) -> u64 {
         let limit = u128::from(self.capital_total) * u128::from(self.cell_exposure_bps)
             / u128::from(BPS_DENOMINATOR);
         u64::try_from(limit).unwrap_or(u64::MAX)
+    }
+
+    /// The cheapest price of collusion any cell can have — `FR-054`.
+    ///
+    /// Control is half or more of a cell's votes: the median of an even count
+    /// is the mean of its two middle votes, so half already moves the value.
+    /// A cell needs `min_sensors_per_cell` votes to have a value at all, half
+    /// of that is `⌈m / 2⌉` votes, and none of them, bought or brought, holds
+    /// less than `min_stake`. Every real cell costs at least this, whoever
+    /// votes in it and whenever their stake thaws — which is why it is the one
+    /// number the program can hold a limit to without reading a single sensor.
+    pub fn collusion_floor(&self) -> u64 {
+        let votes = u64::from(self.min_sensors_per_cell).div_ceil(2).max(1);
+        let floor = u128::from(self.min_stake) * u128::from(votes);
+        u64::try_from(floor).unwrap_or(u64::MAX)
+    }
+
+    /// The most one cell may owe at once — `FR-020`, held under the price of
+    /// collusion (`FR-054`, `SC-014`).
+    ///
+    /// The lower of the capital share and half the collusion floor, so taking
+    /// over a cell always costs at least twice what the cell can be made to
+    /// pay. Capital growing by deposits only raises the first bound, so the
+    /// second keeps holding without anybody remembering to check it.
+    pub fn cell_exposure_limit(&self) -> u64 {
+        self.capital_exposure_limit()
+            .min(self.collusion_floor() / COLLUSION_COVER_TIMES)
     }
 }
 
@@ -943,6 +975,7 @@ mod tests {
     #[test]
     fn cell_exposure_is_a_published_share_of_capital() {
         let mut pool = pool(86_400, 0);
+        pool.min_stake = u64::MAX;
         pool.capital_total = 1_000_000;
         pool.cell_exposure_bps = 1_000; // 10%
         assert_eq!(pool.cell_exposure_limit(), 100_000);
@@ -950,7 +983,47 @@ mod tests {
         // The multiplication goes through u128: u64::MAX * 10_000 overflows.
         pool.capital_total = u64::MAX;
         pool.cell_exposure_bps = 10_000;
-        assert_eq!(pool.cell_exposure_limit(), u64::MAX);
+        assert_eq!(pool.capital_exposure_limit(), u64::MAX);
+    }
+
+    #[test]
+    fn the_collusion_floor_is_half_the_quorum_at_the_minimum_stake() {
+        let mut pool = pool(86_400, 0);
+        pool.min_stake = 1_000;
+        pool.min_sensors_per_cell = 3;
+        assert_eq!(pool.collusion_floor(), 2_000);
+        pool.min_sensors_per_cell = 4;
+        assert_eq!(pool.collusion_floor(), 2_000);
+        pool.min_sensors_per_cell = 5;
+        assert_eq!(pool.collusion_floor(), 3_000);
+        pool.min_sensors_per_cell = 1;
+        assert_eq!(pool.collusion_floor(), 1_000);
+        // Through u128, saturating rather than wrapping into a cheap cell.
+        pool.min_stake = u64::MAX;
+        pool.min_sensors_per_cell = 32;
+        assert_eq!(pool.collusion_floor(), u64::MAX);
+    }
+
+    #[test]
+    fn a_cell_owes_at_most_half_its_price_of_collusion() {
+        // SC-014 on the demo's numbers: one token of stake, quorum 3, 10% of
+        // half a million tokens. The share says 50 000; collusion says one.
+        let mut pool = pool(86_400, 0);
+        pool.min_stake = 1_000_000;
+        pool.capital_total = 500_000_000_000;
+        assert_eq!(pool.capital_exposure_limit(), 50_000_000_000);
+        assert_eq!(pool.cell_exposure_limit(), 1_000_000);
+        assert!(pool.collusion_floor() >= COLLUSION_COVER_TIMES * pool.cell_exposure_limit());
+
+        // The floor rounds the limit down, never up past half.
+        pool.min_stake = 1_000_001;
+        assert_eq!(pool.cell_exposure_limit(), 1_000_001);
+        pool.min_sensors_per_cell = 1;
+        assert_eq!(pool.cell_exposure_limit(), 500_000);
+
+        // A small pool is still bound by its capital.
+        pool.capital_total = 1_000_000;
+        assert_eq!(pool.cell_exposure_limit(), 100_000);
     }
 
     /* ----------------------------------------------------------- Day log */

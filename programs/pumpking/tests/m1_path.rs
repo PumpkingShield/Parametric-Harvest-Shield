@@ -30,7 +30,9 @@ mod harness;
 use anchor_lang::prelude::Pubkey as AnchorPubkey;
 use harness::*;
 use pumpking::errors::PumpkingError;
-use pumpking::instructions::{DayRecordParams, DayReputationParams, PolicyParams, PoolParams};
+use pumpking::instructions::{
+    DayRecordParams, DayReputationParams, PolicyParams, PoolParams, RiskParams,
+};
 use pumpking::index::DayState;
 use pumpking::state::{
     CapitalPosition, CellState, Policy, PolicyState, Pool, DAY_LOG_LEN, MAX_SENSORS_PER_CELL,
@@ -293,6 +295,25 @@ fn issue_policy(params: PolicyParams) -> solana_instruction::Instruction {
         },
         pumpking::instruction::IssuePolicy { params },
     )
+}
+
+fn set_pool_params(signer: AnchorPubkey, params: RiskParams) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::SetPoolParams {
+            authority: signer,
+            pool: pool_pda(),
+        },
+        pumpking::instruction::SetPoolParams { params },
+    )
+}
+
+/// `FR-054`: the demo's exposure share with a vote priced high enough that
+/// the capital share, not the price of collusion, is the bound that binds.
+fn dear_votes() -> RiskParams {
+    RiskParams {
+        cell_exposure_bps: 1_000,
+        min_stake: 100 * CAPITAL,
+    }
 }
 
 fn settle_policy(caller: AnchorPubkey, owner_tokens: AnchorPubkey) -> solana_instruction::Instruction {
@@ -1140,6 +1161,9 @@ fn the_cell_sells_up_to_its_limit_and_not_one_unit_past_it() {
     // стелю (виплата = 10% капіталу), і далі комірка продає рівно стільки,
     // скільки додала до капіталу її ж премія.
     let mut world = world_with_history();
+    // The capital share is what this test is about; the price of collusion
+    // has its own below.
+    world.exec_ok(&set_pool_params(authority(), dear_votes()));
     world.exec_ok(&issue_policy(policy_params()));
 
     let pool: Pool = world.read(pool_pda());
@@ -1184,6 +1208,120 @@ fn the_cell_sells_up_to_its_limit_and_not_one_unit_past_it() {
         FARMER_BALANCE - PREMIUM - 5_625
     );
     assert_vault_matches_books(&world);
+}
+
+/* -------------------------------------------------------------------------- */
+/* The price of collusion bounds the cell — FR-054, SC-014                    */
+/* -------------------------------------------------------------------------- */
+
+#[test]
+fn a_cell_owes_at_most_half_its_price_of_collusion() {
+    // One token a vote and a quorum of three: two votes take the cell for two
+    // tokens, so it may owe one — the first policy, exactly. Its premium
+    // lifts the capital share to 1 022 500, and the cell still sells nothing
+    // more, because the share is not the bound that binds.
+    let mut world = world_with_history();
+    world.exec_ok(&issue_policy(policy_params()));
+
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.capital_exposure_limit(), 1_022_500);
+    assert_eq!(pool.collusion_floor(), 2 * PAYOUT);
+    assert_eq!(pool.cell_exposure_limit(), PAYOUT);
+
+    let mut params = policy_params();
+    params.nonce = NONCE + 1;
+    params.payout = 1;
+    params.max_premium = u64::MAX;
+    world.exec_err(
+        &issue_policy(params.clone()),
+        PumpkingError::CellExposureExceeded,
+    );
+    assert!(!world.exists(policy_pda(farmer(), NONCE + 1)));
+
+    // Twice the price of a vote, and the capital share binds again: the
+    // 22 500 of headroom the premium made is now for sale.
+    world.exec_ok(&set_pool_params(
+        authority(),
+        RiskParams {
+            cell_exposure_bps: 1_000,
+            min_stake: 2 * PAYOUT,
+        },
+    ));
+    params.payout = 22_500;
+    world.exec_ok(&issue_policy(params));
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.reserved, PAYOUT + 22_500);
+    assert_vault_matches_books(&world);
+}
+
+#[test]
+fn a_cheaper_vote_refuses_the_next_sale_and_keeps_the_last_one() {
+    // A sold policy is an obligation, not an offer: lowering the price of a
+    // vote below what the cell already owes refuses new cover and leaves the
+    // reservation where it was.
+    let mut world = world_with_history();
+    world.exec_ok(&issue_policy(policy_params()));
+    world.exec_ok(&set_pool_params(
+        authority(),
+        RiskParams {
+            cell_exposure_bps: 1_000,
+            min_stake: 1,
+        },
+    ));
+
+    let pool: Pool = world.read(pool_pda());
+    assert_eq!(pool.min_stake, 1);
+    assert_eq!(pool.cell_exposure_limit(), 1);
+    assert_eq!(pool.reserved_total, PAYOUT);
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    assert_eq!(cell.reserved, PAYOUT);
+    let policy: Policy = world.read(policy_pda(farmer(), NONCE));
+    assert_eq!(policy.payout, PAYOUT);
+
+    let mut params = policy_params();
+    params.nonce = NONCE + 1;
+    params.payout = 1;
+    params.max_premium = u64::MAX;
+    world.exec_err(&issue_policy(params), PumpkingError::CellExposureExceeded);
+}
+
+#[test]
+fn only_the_authority_reprices_a_vote_and_never_to_nothing() {
+    let mut world = world_with_history();
+    let before: Pool = world.read(pool_pda());
+
+    // Not the authority — `has_one` on the pool.
+    world.exec_anchor_err(
+        &set_pool_params(stranger(), dear_votes()),
+        anchor_lang::error::ErrorCode::ConstraintHasOne,
+    );
+    // The same rules `initialize_pool` holds a pool to.
+    let free = RiskParams {
+        cell_exposure_bps: 1_000,
+        min_stake: 0,
+    };
+    world.exec_err(
+        &set_pool_params(authority(), free),
+        PumpkingError::MinStakeNotSet,
+    );
+    let whole = RiskParams {
+        cell_exposure_bps: 10_001,
+        min_stake: 1,
+    };
+    world.exec_err(
+        &set_pool_params(authority(), whole),
+        PumpkingError::ExposureShareOutOfRange,
+    );
+
+    let after: Pool = world.read(pool_pda());
+    assert_eq!(after.min_stake, before.min_stake);
+    assert_eq!(after.cell_exposure_bps, before.cell_exposure_bps);
+
+    // And the change, when it is the authority's, is the next answer.
+    world.exec_ok(&set_pool_params(authority(), dear_votes()));
+    let changed: Pool = world.read(pool_pda());
+    assert_eq!(changed.min_stake, 100 * CAPITAL);
+    assert_eq!(changed.cell_exposure_bps, 1_000);
 }
 
 #[test]

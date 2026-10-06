@@ -111,13 +111,16 @@ if (!Number.isInteger(secondsPerDay) || secondsPerDay < 1) {
 
 const params = {
   aggregator: aggregator.publicKey,
-  // The rest are the M1 path's own numbers (programs/pumpking/tests/m1_path.rs).
-  cellExposureBps: 1_000,
+  // T041a: a cell may owe at most half its price of collusion, two votes at
+  // `minStake` (quorum 3), so the two are chosen together: 0.25% of the
+  // 500 000 seeded is 1 250, exactly half the floor, and the show's 1 000
+  // payout fits under both. `scripts/devnet-set-params.mjs` changes them later.
+  cellExposureBps: 25,
   premiumRewardsBps: 1_000,
   riskLoadingBps: 2_500,
   minRateBps: 100,
   minSensorsPerCell: scenario.params.minimumVotes,
-  minStake: 1_000_000n,
+  minStake: 1_250_000_000n,
   unstakeDelayDays: 30,
   waitingPeriodDays: 3,
   dryDayThresholdMmX100: scenario.params.dryThresholdX100,
