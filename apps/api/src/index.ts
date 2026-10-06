@@ -6,6 +6,7 @@ import {
   pgCounterStore,
   pgFaucetStore,
   pgIntervalStore,
+  pgMethodologyStore,
   pgOperatorStore,
   pgReadingStore,
   pgCellSlotStore,
@@ -22,6 +23,7 @@ import { rpcCycle, startWorker, type WorkerRuntime } from '@pumpking/worker/run'
 import { pino } from 'pino'
 import { ConfigError, readApiConfig } from './config.ts'
 import { rpcFaucet } from './routes/faucet.ts'
+import { rpcCellSource } from './routes/methodology.ts'
 import { rpcPolicyLookup } from './routes/policies.ts'
 import { createApiApp } from './server.ts'
 
@@ -123,6 +125,21 @@ const app = createApiApp({
         }
   },
   operator: pgOperatorStore(database.db),
+  methodology: {
+    pool: async () => {
+      const pool = await poolSource.read()
+      return pool === null
+        ? null
+        : {
+            minStake: BigInt(pool.minStake.toString()),
+            minVotes: pool.minSensorsPerCell,
+            capitalTotal: BigInt(pool.capitalTotal.toString()),
+            cellExposureBps: pool.cellExposureBps,
+          }
+    },
+    cells: rpcCellSource(connection, config.programId),
+    store: pgMethodologyStore(database.db),
+  },
   counters: pgCounterStore(database.db),
   scenarioMode: config.scenarioMode,
   webOrigin: config.webOrigin,

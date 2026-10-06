@@ -77,12 +77,25 @@ function app(overrides: Partial<ApiDeps> = {}) {
     minStake: () => Promise.resolve(1_000_000n),
     clock: () => Promise.resolve(null),
     operator: noActivity,
+    methodology: {
+      pool: () => Promise.resolve(null),
+      cells: { cells: () => Promise.resolve([]) },
+      store: { stakes: () => Promise.resolve([]) },
+    },
     counters: noCounters,
     scenarioMode: false,
     ...overrides,
   }
   return createApiApp(deps)
 }
+
+describe('GET /v1/methodology', () => {
+  it('is mounted, and says there is no pool before there is one', async () => {
+    const response = await app().request('/v1/methodology')
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ pool: null, collusion: null })
+  })
+})
 
 describe('GET /health', () => {
   it('answers without touching the database or the chain', async () => {

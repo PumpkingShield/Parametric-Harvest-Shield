@@ -47,6 +47,9 @@ export const POLICY_DISCRIMINATOR: Uint8Array = accountDiscriminator('policy')
 /** `Sensor`'s discriminator — what a scan of the registry filters on. */
 export const SENSOR_DISCRIMINATOR: Uint8Array = accountDiscriminator('sensor')
 
+/** `CellState`'s discriminator — what a scan of every cell filters on. */
+export const CELL_STATE_DISCRIMINATOR: Uint8Array = accountDiscriminator('cellState')
+
 function decode<T>(name: string, data: Uint8Array): T {
   // The coder wants a Buffer and checks the discriminator itself, so an
   // account of the wrong type is an error here rather than a struct of

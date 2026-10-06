@@ -11,6 +11,7 @@ export {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   accountDiscriminator,
   associatedTokenAddress,
+  CELL_STATE_DISCRIMINATOR,
   decodeCellReputation,
   decodeCellRewards,
   decodeCellState,

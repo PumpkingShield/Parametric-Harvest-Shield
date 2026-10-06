@@ -2,6 +2,7 @@ import type {
   CounterStore,
   FaucetStore,
   IntervalStore,
+  MethodologyStore,
   OperatorStore,
   ReadingStore,
   RegistryStore,
@@ -15,6 +16,11 @@ import { createCellSensorsRoute } from './routes/cell-sensors.ts'
 import { createCellsRoute } from './routes/cells.ts'
 import { createFaucetRoute, type FaucetChain } from './routes/faucet.ts'
 import { createFeederRoute } from './routes/feeder.ts'
+import {
+  type CellSource,
+  createMethodologyRoute,
+  type MethodologyPool,
+} from './routes/methodology.ts'
 import { createPoliciesRoute, type PolicyLookup } from './routes/policies.ts'
 import { createReadingsRoute } from './routes/readings.ts'
 import { createScenarioRoute, routeReadingPublisher } from './routes/scenario.ts'
@@ -61,6 +67,16 @@ export type ApiDeps = {
   clock: () => Promise<PoolClock | null>
   /** `T040`: what the operator screen reads — readings judged, days paid. */
   operator: OperatorStore
+  /**
+   * `T041`: what `/v1/methodology` reads — the pool's parameters from the
+   * chain (null before `initialize_pool`), the cells from the chain, the stake
+   * behind each vote from the mirror.
+   */
+  methodology: {
+    pool: () => Promise<MethodologyPool | null>
+    cells: CellSource
+    store: MethodologyStore
+  }
   /** `T067`: where each sensor's counter stopped, so a second run resumes it. */
   counters: CounterStore
   /** `SCENARIO_MODE=on`. False and every scenario path answers 404. */
@@ -166,6 +182,7 @@ export function createApiApp(deps: ApiDeps): Hono {
     }),
   )
   app.route('/v1/policies', createPoliciesRoute({ policies: deps.policies, store: deps.intervals }))
+  app.route('/v1/methodology', createMethodologyRoute(deps.methodology))
   app.route('/v1/sensors', createSensorsRoute({ registry: deps.registry, minStake: deps.minStake }))
   app.route(
     '/v1/sensors',

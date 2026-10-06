@@ -10,6 +10,14 @@ export {
   h3IndexFromCellId,
   isCellId,
 } from './cell.ts'
+export type { CollusionCell, CollusionParams, CollusionPath } from './collusion.ts'
+export {
+  COLLUSION_COVER_TIMES,
+  collusionCost,
+  collusionFloor,
+  collusionHolds,
+  collusionRatio,
+} from './collusion.ts'
 export type { DayClassification, DayParams, DayResult } from './day.ts'
 export { classifyDay, DayState } from './day.ts'
 export { drySpell } from './index-math.ts'
