@@ -51,6 +51,7 @@ import {
   Transaction,
 } from '../packages/anchor-client/src/index.ts'
 import { cellIdFromH3Index } from '../packages/shared/src/cell.ts'
+import { cellExposureLimit } from '../packages/shared/src/collusion.ts'
 import {
   dryDayFrequencyBps,
   MIN_HISTORY_DAYS,
@@ -284,16 +285,27 @@ function assess(state, poolState) {
   const capital = BigInt(poolState.capitalTotal.toString())
   const reserved = BigInt(poolState.reservedTotal.toString())
   const free = capital > reserved ? capital - reserved : 0n
-  const cellLimit = (capital * BigInt(poolState.cellExposureBps)) / 10_000n
+  // The program's own bound since `T041a`: the lower of the capital share and
+  // half the collusion floor. The share alone would wave through a policy the
+  // program refuses whenever the floor is the lower of the two.
+  const cellLimit = cellExposureLimit({
+    capitalTotal: capital,
+    cellExposureBps: poolState.cellExposureBps,
+    minStake: BigInt(poolState.minStake.toString()),
+    minVotes: poolState.minSensorsPerCell,
+  })
   const cellAfter = BigInt(state.reserved.toString()) + payout
 
+  // `final` is what waiting for the run cannot fix: the cell's limit and the
+  // pool's free capital move only when a policy ends or capital does.
   const blockers = []
+  const final = []
   if (votes < poolState.minSensorsPerCell) {
     blockers.push(`latest day ${last ?? '—'} has ${votes} votes, needs ${poolState.minSensorsPerCell}`)
   }
   if (frequency === null) blockers.push(`${covered} covered days, needs ${MIN_HISTORY_DAYS}`)
-  if (free < payout) blockers.push(`free liquidity ${free} < payout ${payout}`)
-  if (cellAfter > cellLimit) blockers.push(`cell exposure ${cellAfter} > limit ${cellLimit}`)
+  if (free < payout) final.push(`free liquidity ${free} < payout ${payout}`)
+  if (cellAfter > cellLimit) final.push(`cell exposure ${cellAfter} > limit ${cellLimit}`)
 
   let premium = null
   if (frequency !== null) {
@@ -302,7 +314,7 @@ function assess(state, poolState) {
     if (premium > maxPremium) blockers.push(`premium ${premium} > max ${maxPremium}`)
   }
 
-  return { last, votes, covered, frequency, premium, blockers }
+  return { last, votes, covered, frequency, premium, blockers, final }
 }
 
 function bitCount(mask) {
@@ -370,6 +382,12 @@ while (true) {
   )
   lastLine = `last day ${state.last ?? '—'}, ${state.votes} votes, ${state.covered} covered, dry ${state.frequency === null ? '—' : `${state.frequency / 100}%`}`
   progress(`  day ${today}: ${lastLine}${state.blockers.length === 0 ? '' : ` — ${state.blockers[0]}`}`)
+
+  if (state.final.length > 0) {
+    console.error(`
+the program would refuse this policy, and waiting will not change it: ${state.final.join('; ')}`)
+    process.exit(1)
+  }
 
   if (state.blockers.length > 0) {
     await sleep(POLL_MS)
