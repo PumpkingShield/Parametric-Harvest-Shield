@@ -16,7 +16,7 @@ export const Headline = ({ figure, caption }: { figure: string; caption: string 
   <div style={{ paddingBottom: 26 }}>
     <div
       style={{
-        fontSize: figure.length > 8 ? 48 : 68,
+        fontSize: figure.length > 8 ? 48 : 'clamp(68px, 9vw, 88px)',
         lineHeight: 1,
         fontWeight: 800,
         letterSpacing: '-0.03em',

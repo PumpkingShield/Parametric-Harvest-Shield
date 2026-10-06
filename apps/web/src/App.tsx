@@ -30,12 +30,21 @@ export function initialView(search: string): View {
   return TABS.find((tab) => tab.id === asked)?.id ?? 'policy'
 }
 
+/**
+ * One column, never panels side by side — but not a phone frame on a desktop.
+ * M0 held the column at phone width everywhere; on a wide screen that read as
+ * a phone emulator. 720 px is the landing's text column, so going from the
+ * landing into the app does not change the measure. On a phone the column is
+ * the screen, as before.
+ */
+const COLUMN = 720
+
 export function App() {
   const [view, setView] = useState<View>(() => initialView(window.location.search))
 
   return (
     <div style={{ minHeight: '100vh', background: '#FBFAF7', color: INK }}>
-      <div style={{ width: '100%', maxWidth: 390, margin: '0 auto', padding: '0 20px 64px' }}>
+      <div style={{ width: '100%', maxWidth: COLUMN, margin: '0 auto', padding: '0 20px 64px' }}>
         <header style={{ paddingTop: 26 }}>
           <div
             style={{
