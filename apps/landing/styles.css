@@ -1,0 +1,517 @@
+/*
+ * Pumpking landing — the cell's journal (T070, docs/landing-brief.md).
+ * One meaning colour: --dry. The logo purple is ink, never a field.
+ */
+
+:root {
+  --ground: #ffffff;
+  --ink: #503264;
+  --ink-soft: #6e5880;
+  --rule: #e4dde9;
+  --dry: #c8892b;
+  --hatch: rgba(80, 50, 100, 0.38);
+  --mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #141116;
+    --ink: #e9e1ef;
+    --ink-soft: #b7a9c2;
+    --rule: #2e2733;
+    --dry: #d69a3e;
+    --hatch: rgba(233, 225, 239, 0.4);
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: 'Atkinson Hyperlegible Next', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--ink);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--dry);
+  outline-offset: 3px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+.wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.col {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ── top line ───────────────────────────────────────── */
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 28px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.brand svg {
+  width: 30px;
+  height: 30px;
+}
+
+.door {
+  font-weight: 700;
+  text-decoration: none;
+  padding: 12px 0;
+}
+
+.door:hover {
+  text-decoration: underline;
+}
+
+/* ── hero ───────────────────────────────────────────── */
+
+.hero {
+  padding-top: 120px;
+  padding-bottom: 140px;
+}
+
+.hero h1 {
+  max-width: 760px;
+  margin: 0;
+  font-size: 60px;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+}
+
+.lede {
+  max-width: 760px;
+  margin: 28px 0 0;
+  font-size: 21px;
+  line-height: 1.5;
+}
+
+.record {
+  margin: 96px 0 0;
+}
+
+.strip,
+.marks {
+  display: grid;
+  grid-template-columns: repeat(90, minmax(0, 1fr));
+  column-gap: 3px;
+  row-gap: 6px;
+}
+
+.marks {
+  height: 34px;
+  margin-bottom: 10px;
+}
+
+.bracket {
+  grid-column: 13 / 31;
+  position: relative;
+  align-self: end;
+  height: 10px;
+  border: 2px solid var(--ink);
+  border-bottom: 0;
+}
+
+.bracket span {
+  position: absolute;
+  top: -26px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/*
+ * The 14th dry day is column 13 of the bracket's 18. The label ends on the
+ * tick, so its arrow stands over it and it never runs past the strip's edge.
+ */
+.bracket .at {
+  left: calc(13 / 18 * 100% + 1px);
+  transform: translateX(-100%);
+}
+
+.bracket .end {
+  right: 0;
+}
+
+.bracket::after {
+  content: '';
+  position: absolute;
+  left: calc(13 / 18 * 100%);
+  top: -2px;
+  width: 2px;
+  height: 12px;
+  background: var(--ink);
+}
+
+.strip i {
+  display: block;
+  aspect-ratio: 1 / 1;
+  animation: fill 120ms ease-out both;
+  animation-delay: calc(var(--n) * 20ms);
+}
+
+.d,
+.key-d {
+  background: var(--dry);
+}
+
+.w,
+.key-w {
+  border: 2px solid var(--ink);
+}
+
+.n,
+.key-n {
+  background: repeating-linear-gradient(45deg, var(--hatch) 0 1.5px, transparent 1.5px 4px);
+}
+
+@keyframes fill {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strip i {
+    animation: none;
+  }
+}
+
+.tail {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+.tail span {
+  width: calc(60 / 90 * 100%);
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+}
+
+.paid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px 28px;
+  margin-top: 36px;
+}
+
+.paid strong {
+  font-size: 28px;
+  line-height: 1.25;
+}
+
+.tag {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 28px;
+  margin-top: 18px;
+  font-size: 15px;
+}
+
+.key > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.key b {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
+.key a {
+  margin-left: auto;
+  font-weight: 700;
+  padding: 12px 0;
+}
+
+/* ── sections ───────────────────────────────────────── */
+
+section.part {
+  padding: 120px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.kicker {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+h2 {
+  margin: 14px 0 0;
+  font-size: 38px;
+  line-height: 1.15;
+}
+
+.part p {
+  margin: 28px 0 0;
+}
+
+.proofs {
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+  margin-top: 56px;
+}
+
+.proof .num {
+  font-size: 56px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.proof p {
+  margin: 12px 0 6px;
+}
+
+.rules {
+  margin: 40px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rules li {
+  display: flex;
+  gap: 20px;
+  align-items: baseline;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--rule);
+  line-height: 1.55;
+}
+
+.rules b {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  transform: translateY(3px);
+}
+
+.cta {
+  display: inline-block;
+  margin-top: 48px;
+  font-size: 18px;
+  font-weight: 700;
+  padding: 12px 0;
+}
+
+.basis {
+  margin-top: 36px;
+  overflow-x: auto;
+}
+
+.basis table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.basis th {
+  padding: 0 16px 12px 0;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--ink-soft);
+}
+
+.basis td {
+  padding: 18px 16px 18px 0;
+  vertical-align: top;
+}
+
+.basis td:last-child {
+  font-weight: 700;
+}
+
+.basis tbody tr:first-child {
+  border-top: 2px solid var(--ink);
+}
+
+.basis tbody tr + tr {
+  border-top: 1px solid var(--rule);
+}
+
+.basis tbody tr:last-child {
+  border-bottom: 2px solid var(--ink);
+}
+
+.addresses {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px 20px;
+  align-items: baseline;
+  margin: 40px 0 0;
+  font-size: 15px;
+}
+
+.addresses dt {
+  color: var(--ink-soft);
+}
+
+.addresses dd {
+  margin: 0;
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+/* ── footer ─────────────────────────────────────────── */
+
+footer {
+  border-top: 1px solid var(--rule);
+}
+
+footer .wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 32px;
+  padding-top: 40px;
+  padding-bottom: 56px;
+  font-size: 15px;
+}
+
+footer a {
+  padding: 12px 0;
+}
+
+footer .door {
+  margin-left: auto;
+}
+
+/* ── phone ──────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  body {
+    font-size: 18px;
+  }
+
+  .hero {
+    padding-top: 64px;
+    padding-bottom: 88px;
+  }
+
+  .hero h1 {
+    font-size: 38px;
+  }
+
+  .lede {
+    font-size: 19px;
+  }
+
+  .record {
+    margin-top: 56px;
+  }
+
+  /* Three rows of thirty: the whole run and its bracket sit in the first. */
+  .strip,
+  .marks {
+    grid-template-columns: repeat(30, minmax(0, 1fr));
+  }
+
+  .tail span {
+    width: 100%;
+  }
+
+  .paid strong {
+    font-size: 23px;
+  }
+
+  section.part {
+    padding: 80px 0;
+  }
+
+  h2 {
+    font-size: 30px;
+  }
+
+  .proof .num {
+    font-size: 40px;
+  }
+
+  .key a,
+  footer .door {
+    margin-left: 0;
+  }
+
+  .addresses {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .addresses dd + dt {
+    margin-top: 12px;
+  }
+}

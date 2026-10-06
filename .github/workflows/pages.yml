@@ -41,9 +41,10 @@ jobs:
 
       - name: Build
         env:
-          # A project site is served from /<repo>/, so the bundle has to be
-          # built for that prefix. A custom domain sets PAGES_BASE_PATH to /.
-          BASE_PATH: ${{ vars.PAGES_BASE_PATH || format('/{0}/', github.event.repository.name) }}
+          # The landing owns the site's root and the app lives under app/
+          # (T070), so the bundle is built for /<repo>/app/. A custom domain
+          # sets PAGES_BASE_PATH to /app/.
+          BASE_PATH: ${{ vars.PAGES_BASE_PATH || format('/{0}/app/', github.event.repository.name) }}
           VITE_API_URL: ${{ vars.VITE_API_URL }}
           VITE_POLICY_PUBKEY: ${{ vars.VITE_POLICY_PUBKEY }}
           VITE_ASSET_DECIMALS: ${{ vars.VITE_ASSET_DECIMALS }}
@@ -52,15 +53,30 @@ jobs:
           VITE_PUMPKING_PROGRAM_ID: ${{ vars.VITE_PUMPKING_PROGRAM_ID }}
         run: pnpm --filter @pumpking/web build
 
-      # Pages has no rewrites: an unknown path is answered with 404.html. The
-      # screens are one page today, and this keeps a deep link from becoming a
-      # GitHub error page the day they are not.
-      - name: SPA fallback
-        run: cp apps/web/dist/index.html apps/web/dist/404.html
+      # One artifact, two folders: the static landing at the root, the app
+      # under app/. The landing has no build step and no package.json, so
+      # pnpm never sees it; it is copied as it is.
+      #
+      # Pages answers an unknown path with the root 404.html only (a nested
+      # one is ignored), and the app has no paths of its own — the screens are
+      # switched in state, the only parameters are ?policy= and ?view=. So the
+      # fallback is the landing, given a <base> for the site's root: its links
+      # are relative, and from /<repo>/some/old/link they would resolve under
+      # /some/old/ without it.
+      - name: Assemble the site
+        env:
+          BASE_PATH: ${{ vars.PAGES_BASE_PATH || format('/{0}/app/', github.event.repository.name) }}
+        run: |
+          site_root="${BASE_PATH%app/}"
+          mkdir -p dist
+          cp -r apps/landing/. dist/
+          cp -r apps/web/dist dist/app
+          sed "s|<head>|<head>\n<base href=\"${site_root}\">|" apps/landing/index.html > dist/404.html
+          grep -q "<base href=\"${site_root}\">" dist/404.html
 
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: apps/web/dist
+          path: dist
 
   deploy:
     needs: build

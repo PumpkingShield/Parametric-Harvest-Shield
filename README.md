@@ -43,7 +43,8 @@ tests rather than by discipline.
 apps/
   api/        Hono — reading intake, the day journal, policy reads
   worker/     interval close, median, day record, settlement, closure
-  web/        React + Vite — the owner's policy screen
+  web/        React + Vite — the owner's policy screen, served under /app/
+  landing/    the static front page — plain HTML and CSS, no build step
 packages/
   shared/     canonical serialisation, median, day classification, dry spell, Merkle
   anchor-client/  PDAs, instruction encoding, decoded accounts
@@ -107,7 +108,8 @@ previous version and its green means nothing.
 
 One Render free web service carries the API **and** the aggregation loop
 (`RUN_WORKER=on` — the free plan has no background worker), GitHub Pages carries
-the interface, Supabase carries Postgres. `render.yaml` and the two workflows in
+the landing page at the site's root and the interface under `/app/`, Supabase
+carries Postgres. `render.yaml` and the two workflows in
 `.github/workflows` hold the configuration.
 
 ```bash

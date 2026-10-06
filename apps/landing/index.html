@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pumpking — drought cover paid on the rain journal</title>
+<meta name="description" content="Crop cover for smallholders on Solana devnet: sensors keep a daily rain journal per cell, and a run of dry days pays the farmer with no claim filed.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Pumpking — drought cover paid on the rain journal">
+<meta property="og:description" content="A run of dry days in the cell's journal pays the farmer. No claim form, no inspector, no argument. Devnet, synthetic readings, mock USDC.">
+<meta property="og:url" content="https://pumpkingshield.github.io/Parametric-Harvest-Shield/">
+<meta property="og:image" content="https://pumpkingshield.github.io/Parametric-Harvest-Shield/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Pumpking: ninety days of a cell's rain journal, eighteen dry in a row, paid 1,000 mock USDC with no claim filed.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#503264">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700&amp;display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="brand" href="./" aria-label="Pumpking, home" style="text-decoration: none">
+    <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M47 44 C51 39 51 34 47 30 L52 26 C55 30 57 35 55 39 C54 41 55 43 57 44"/>
+      <ellipse cx="50" cy="61" rx="7" ry="16.5"/>
+      <path d="M46 44.6 C38 44 33 52 33 61 C33 70 38 77.6 46 77.4"/>
+      <path d="M54 44.6 C62 44 67 52 67 61 C67 70 62 77.6 54 77.4"/>
+      <path d="M42 44.4 C29 42.5 22 51 22 61 C22 71 29 79 42 77.6"/>
+      <path d="M58 44.4 C71 42.5 78 51 78 61 C78 71 71 79 58 77.6"/>
+    </svg>
+    Pumpking
+  </a>
+  <a class="door" href="app/">Open the app →</a>
+</header>
+
+<main>
+<section class="wrap hero">
+  <h1>Drought cover that pays on the rain journal, not on a claim.</h1>
+  <p class="lede">Pumpking is crop cover for smallholders. Cheap rain sensors keep a daily journal for each cell, and when the journal shows the policy’s run of dry days, the payout goes to the farmer’s wallet — no claim form, no inspector, no argument.</p>
+
+  <figure class="record">
+    <div class="marks" aria-hidden="true">
+      <div class="bracket"><span class="at">threshold 14 ↓</span><span class="end">run 18</span></div>
+    </div>
+    <div class="strip" role="img" aria-label="Ninety days of policy EdLC…a8z1 in cell 871e701b3ffffff: four wet days with gaps, three dry, one wet, then eighteen dry days in a row; the payout came on the fourteenth. The remaining sixty days have no coverage.">
+<i class="n" style="--n:0"></i><i class="w" style="--n:1"></i><i class="w" style="--n:2"></i><i class="w" style="--n:3"></i><i class="w" style="--n:4"></i><i class="n" style="--n:5"></i><i class="n" style="--n:6"></i><i class="w" style="--n:7"></i><i class="d" style="--n:8"></i><i class="d" style="--n:9"></i>
+<i class="d" style="--n:10"></i><i class="w" style="--n:11"></i><i class="d" style="--n:12"></i><i class="d" style="--n:13"></i><i class="d" style="--n:14"></i><i class="d" style="--n:15"></i><i class="d" style="--n:16"></i><i class="d" style="--n:17"></i><i class="d" style="--n:18"></i><i class="d" style="--n:19"></i>
+<i class="d" style="--n:20"></i><i class="d" style="--n:21"></i><i class="d" style="--n:22"></i><i class="d" style="--n:23"></i><i class="d" style="--n:24"></i><i class="d" style="--n:25"></i><i class="d" style="--n:26"></i><i class="d" style="--n:27"></i><i class="d" style="--n:28"></i><i class="d" style="--n:29"></i>
+<i class="n" style="--n:30"></i><i class="n" style="--n:31"></i><i class="n" style="--n:32"></i><i class="n" style="--n:33"></i><i class="n" style="--n:34"></i><i class="n" style="--n:35"></i><i class="n" style="--n:36"></i><i class="n" style="--n:37"></i><i class="n" style="--n:38"></i><i class="n" style="--n:39"></i>
+<i class="n" style="--n:40"></i><i class="n" style="--n:41"></i><i class="n" style="--n:42"></i><i class="n" style="--n:43"></i><i class="n" style="--n:44"></i><i class="n" style="--n:45"></i><i class="n" style="--n:46"></i><i class="n" style="--n:47"></i><i class="n" style="--n:48"></i><i class="n" style="--n:49"></i>
+<i class="n" style="--n:50"></i><i class="n" style="--n:51"></i><i class="n" style="--n:52"></i><i class="n" style="--n:53"></i><i class="n" style="--n:54"></i><i class="n" style="--n:55"></i><i class="n" style="--n:56"></i><i class="n" style="--n:57"></i><i class="n" style="--n:58"></i><i class="n" style="--n:59"></i>
+<i class="n" style="--n:60"></i><i class="n" style="--n:61"></i><i class="n" style="--n:62"></i><i class="n" style="--n:63"></i><i class="n" style="--n:64"></i><i class="n" style="--n:65"></i><i class="n" style="--n:66"></i><i class="n" style="--n:67"></i><i class="n" style="--n:68"></i><i class="n" style="--n:69"></i>
+<i class="n" style="--n:70"></i><i class="n" style="--n:71"></i><i class="n" style="--n:72"></i><i class="n" style="--n:73"></i><i class="n" style="--n:74"></i><i class="n" style="--n:75"></i><i class="n" style="--n:76"></i><i class="n" style="--n:77"></i><i class="n" style="--n:78"></i><i class="n" style="--n:79"></i>
+<i class="n" style="--n:80"></i><i class="n" style="--n:81"></i><i class="n" style="--n:82"></i><i class="n" style="--n:83"></i><i class="n" style="--n:84"></i><i class="n" style="--n:85"></i><i class="n" style="--n:86"></i><i class="n" style="--n:87"></i><i class="n" style="--n:88"></i><i class="n" style="--n:89"></i>
+    </div>
+    <div class="tail"><span>the run ended after the payout — no readings, no coverage</span></div>
+    <figcaption class="paid">
+      <strong>Paid 1,000 mock USDC · no claim filed</strong>
+      <span class="tag">policy EdLC…a8z1 · cell 871e701b3ffffff · devnet · synthetic readings · record as of 2026-10-06</span>
+    </figcaption>
+    <div class="key">
+      <span><b class="key-d"></b>dry</span>
+      <span><b class="key-w"></b>wet</span>
+      <span><b class="key-n"></b>no coverage</span>
+      <a href="app/?policy=EdLCRmVgS8Jithe8qPEkvgjsQ811bK2UUUnjq68pa8z1">See this policy in the app →</a>
+    </div>
+  </figure>
+</section>
+
+<div class="col">
+
+<section class="part" id="policy">
+  <div class="kicker">The policy</div>
+  <h2>One cell, ninety days, fourteen dry in a row.</h2>
+  <p>A policy names a cell, a window of days, a payout and a threshold: <em>N</em> dry days in a row. This one: cell <span class="mono">871e701b3ffffff</span>, 90 days, 14 in a row, payout 1,000 mock USDC, premium 10 mock USDC.</p>
+  <div class="proofs">
+    <div class="proof">
+      <div class="num">0 actions</div>
+      <p>by the owner between buying the policy and receiving the money. When the journal shows the run, anybody can call <span class="mono">settle_policy</span>; the owner does nothing, and nobody can stop it.</p>
+      <div class="tag">SC-002 · devnet · 2026-09-26</div>
+    </div>
+  </div>
+  <p>The premium was 10 against a payout of 1,000 — one per cent, because the policy was quoted on a wet history. <span class="tag">synthetic readings</span></p>
+</section>
+
+<section class="part" id="days">
+  <div class="kicker">When a day counts</div>
+  <h2>A day is dry, wet, or not on record. Silence is not drought.</h2>
+  <ul class="rules">
+    <li><b class="key-d" aria-hidden="true"></b><span><strong>Dry</strong> — the day’s rainfall does not exceed the pool’s threshold.</span></li>
+    <li><b class="key-w" aria-hidden="true"></b><span><strong>Wet</strong> — it does.</span></li>
+    <li><b class="key-n" aria-hidden="true"></b><span><strong>No coverage</strong> — too few intervals had a value. A day without coverage <strong>breaks</strong> a run: a quiet network is never evidence of drought.</span></li>
+  </ul>
+  <p>The run is the longest sequence of dry days inside the window, computed the same way in the program and in the interface — both run the same fixtures.</p>
+  <div class="proofs">
+    <div class="proof">
+      <div class="num">35 s</div>
+      <p>from the close of the 14th dry day to <span class="mono">settle_policy</span> on chain. Budget 60 s.</p>
+      <div class="tag">SC-001 · devnet, Render + Supabase · 2026-09-26 · synthetic readings, compressed time</div>
+    </div>
+    <div class="proof">
+      <div class="num">85 s</div>
+      <p>from the drought’s first reading to the payout. Budget 90 s.</p>
+      <div class="tag">SC-011 · same run</div>
+    </div>
+  </div>
+</section>
+
+<section class="part" id="journal">
+  <div class="kicker">Who keeps the journal</div>
+  <h2>The journal is kept by sensors anyone can run — and staked.</h2>
+  <p>A phone can be a sensor: register it, stake, and it signs a rain reading on each interval. The cell’s value is the median of independent votes, so one sensor cannot write the day.</p>
+  <div class="proofs">
+    <div class="proof">
+      <div class="num">1.13 s</div>
+      <p>to publish a signed reading from a phone on 3G — median of 10, all under 5 s; emulated 3G, 400 kbit/s and 400 ms each way. Budget 5 s.</p>
+      <div class="tag">SC-009 · devnet · 2026-10-06</div>
+    </div>
+    <div class="proof">
+      <div class="num">$0.0000084</div>
+      <p>per reading, and $0.0066 a month to keep a sensor, on a three-sensor cell with SOL at $120.30. Budgets $0.0005 and $0.02. One-off and not returned: about $0.16 of rent per sensor. The monthly figure crosses its budget if SOL passes $364.</p>
+      <div class="tag">SC-007 · devnet · 2026-10-06</div>
+    </div>
+    <div class="proof">
+      <div class="num">4,163 / 4,163</div>
+      <p>days of real rain gauges on which the worst-placed minority of sensors never moved a cell outside its honest votes. It could still flip <strong>283</strong> of those days (6.8 %) between dry and not dry. No budget is set for that share; it is printed so you can judge it.</p>
+      <div class="tag">SC-003 · real gauges, CoCoRaHS, Colorado Front Range, Apr–Sep 2025</div>
+    </div>
+    <div class="proof">
+      <div class="num">12,500</div>
+      <p>mock USDC of stake to control a cell — about twice the most any policy in that cell can pay out (6,235.64). The program refuses a policy past that limit: a 1,300 policy into a cell already owing 5,000 was refused on chain. The stake is locked, not lost: a majority is never an outlier against the median it sets, so this is the price of holding the vote, not a penalty for using it.</p>
+      <div class="tag">SC-014 · devnet · 2026-10-06</div>
+    </div>
+  </div>
+  <a class="cta" href="app/?view=sensor">Run a sensor from your phone →</a>
+</section>
+
+<section class="part" id="basis">
+  <div class="kicker">What it pays on</div>
+  <h2>It pays on the cell’s rain, not on your field.</h2>
+  <p>This policy pays on rainfall measured across cell <span class="mono">871e701b3ffffff</span>, not on what happens in your field. Nobody comes to look at the crop, and there is nothing to claim.</p>
+  <div class="basis">
+    <table>
+      <thead>
+        <tr><th scope="col">The cell…</th><th scope="col">…while your field…</th><th scope="col">…and you</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>records 14 dry days in a row</td><td>comes through fine</td><td>are paid 1,000 mock USDC</td></tr>
+        <tr><td>never records 14 dry days in a row</td><td>is lost anyway</td><td>are paid nothing</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Both of these happen, and neither is a fault to be fixed. The gauges measure a cell, your field is smaller than the cell, and rain does not fall evenly across either. It is what a payout with no claim form, no inspector and no argument costs.</p>
+</section>
+
+<section class="part" id="where">
+  <div class="kicker">Where this journal is kept</div>
+  <h2>On devnet, with synthetic rain and a mock dollar.</h2>
+  <p>The program, the signatures, the median and every transfer are real, on Solana devnet. The rain in the demo runs comes from scenario files and is marked synthetic wherever it is shown. Amounts are in mock USDC, a token with no value. Not audited.</p>
+  <p><strong>Not here yet:</strong> a public trace from a reading to the payout, a methodology page, and a public weather reference to check the journal against — the next milestone. Thirty days of uninterrupted collection on the free plan is being measured now and is not claimed. The pool’s solvency under its whole book is a later milestone.</p>
+  <dl class="addresses">
+    <dt>program</dt>
+    <dd><a href="https://explorer.solana.com/address/F2cw4FWjzUL29G4WEWHANUE2jXAyF9QJLCdvmsjy7YbY?cluster=devnet">F2cw4FWjzUL29G4WEWHANUE2jXAyF9QJLCdvmsjy7YbY</a></dd>
+    <dt>pool</dt>
+    <dd><a href="https://explorer.solana.com/address/D2E63BS4em5ENEzsa6iZcQFSJNLWGf87RkYEx8dRRBY?cluster=devnet">D2E63BS4em5ENEzsa6iZcQFSJNLWGf87RkYEx8dRRBY</a></dd>
+    <dt>policy</dt>
+    <dd><a href="https://explorer.solana.com/address/EdLCRmVgS8Jithe8qPEkvgjsQ811bK2UUUnjq68pa8z1?cluster=devnet">EdLCRmVgS8Jithe8qPEkvgjsQ811bK2UUUnjq68pa8z1</a></dd>
+    <dt>payout</dt>
+    <dd><a href="https://explorer.solana.com/tx/4XfFZvwj9xyAVL8L2YuEkwQK8nY42EJsGK41ZdCk3y8HN57HQhjA9pPfrdWGvACArNTKctDA5LRGL2gRNazJQcTu?cluster=devnet">4XfFZvwj…RNazJQcTu</a> <span class="tag">settle_policy · 2026-09-26 18:23:54Z</span></dd>
+  </dl>
+</section>
+
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a href="https://github.com/PumpkingShield/Parametric-Harvest-Shield">PumpkingShield/Parametric-Harvest-Shield</a>
+    <a href="https://github.com/PumpkingShield/Parametric-Harvest-Shield/blob/main/LICENSE">MIT licence</a>
+    <a class="door" href="app/">Open the app →</a>
+  </div>
+</footer>
+
+</body>
+</html>

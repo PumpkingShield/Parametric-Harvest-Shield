@@ -20,8 +20,18 @@ const TABS: ReadonlyArray<{ id: View; label: string }> = [
   { id: 'proof', label: 'Why it paid' },
 ]
 
+/**
+ * `?view=sensor` opens on that screen — the landing's door for operators, the
+ * way `?policy=` is the farmer's. Anything else, including no parameter, is the
+ * policy screen: a link that names a screen we do not have still lands somewhere.
+ */
+export function initialView(search: string): View {
+  const asked = new URLSearchParams(search).get('view')
+  return TABS.find((tab) => tab.id === asked)?.id ?? 'policy'
+}
+
 export function App() {
-  const [view, setView] = useState<View>('policy')
+  const [view, setView] = useState<View>(() => initialView(window.location.search))
 
   return (
     <div style={{ minHeight: '100vh', background: '#FBFAF7', color: INK }}>
