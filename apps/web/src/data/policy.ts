@@ -83,7 +83,8 @@ export function policyWindow(policy: Policy, rows: readonly Day[]): PolicyWindow
 
     if (row === undefined) {
       days.push(DayState.NoCoverage)
-      cells.push({ state: 'future', detail: `Day ${index} — not recorded yet`, topLabel })
+      const absent = policy.state === 'active' ? 'not recorded yet' : 'not in this record'
+      cells.push({ state: 'future', detail: `Day ${index} — ${absent}`, topLabel })
       continue
     }
 
@@ -112,6 +113,37 @@ export function formatAmount(baseUnits: string, decimals: number): string {
 }
 
 /**
+ * A closed policy whose window has no day on record here.
+ *
+ * The API carries `recordedDays` because `spell` is ambiguous at zero, and this
+ * is the case it exists for: a policy settled on a run this deployment's store
+ * never held (the 2026-09-23 run kept its days in a local Postgres), or whose
+ * days have been pruned. Its `spell` reads 0, and "0 dry days in a row — this
+ * policy paid out" contradicts itself. The run is unknown here, not zero —
+ * silence is not drought, on the screen as in the index.
+ *
+ * An active policy is excluded: with nothing recorded yet, 0 is the run.
+ */
+export function journalMissing(policy: Policy): boolean {
+  return policy.recordedDays === 0 && policy.state !== 'active'
+}
+
+/**
+ * The figure over the caption: the run, or words when it is not on record.
+ * Words, not a dash: an em dash at headline size and weight reads as a black
+ * redaction bar, which says "hidden" where the truth is "not here".
+ */
+export function runFigure(policy: Policy): string {
+  return journalMissing(policy) ? 'No record' : String(policy.spell)
+}
+
+const OUTCOME: Record<Exclude<Policy['state'], 'active'>, string> = {
+  paidOut: 'This policy paid out',
+  unclaimed: 'The payout is yours and waiting to be claimed',
+  closedNoEvent: 'This policy closed without paying',
+}
+
+/**
  * The line under the figure — the run, and what it is short of.
  *
  * One branch per state the program has, and the two that mean money is owed
@@ -121,6 +153,9 @@ export function formatAmount(baseUnits: string, decimals: number): string {
  * the screen talking them out of money that is theirs.
  */
 export function runCaption(policy: Policy): string {
+  if (policy.state !== 'active' && journalMissing(policy)) {
+    return `${OUTCOME[policy.state]} — its day journal is not in this deployment’s record`
+  }
   switch (policy.state) {
     case 'paidOut':
       return 'dry days in a row — this policy paid out'

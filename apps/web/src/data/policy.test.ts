@@ -2,7 +2,15 @@ import { DayState } from '@pumpking/shared/day'
 import { drySpell } from '@pumpking/shared/index-math'
 import { describe, expect, it } from 'vitest'
 import type { Day, Policy } from '../api/policy.ts'
-import { basisRisk, formatAmount, policyFacts, policyWindow, runCaption } from './policy.ts'
+import {
+  basisRisk,
+  formatAmount,
+  journalMissing,
+  policyFacts,
+  policyWindow,
+  runCaption,
+  runFigure,
+} from './policy.ts'
 import { longestDryRun } from './rainfall.ts'
 
 const POLICY: Policy = {
@@ -303,5 +311,36 @@ describe('basisRisk', () => {
 
   it('says what the owner gets for carrying it', () => {
     expect(basisRisk(POLICY, 6).trade).toContain('no claim form')
+  })
+})
+
+describe('runFigure', () => {
+  it('is the run while the journal is on record', () => {
+    expect(runFigure(POLICY)).toBe('3')
+    expect(runFigure({ ...POLICY, state: 'paidOut', spell: 18, recordedDays: 90 })).toBe('18')
+  })
+
+  it('is words, not a zero, for a closed policy with no day on record', () => {
+    for (const state of ['paidOut', 'unclaimed', 'closedNoEvent'] as const) {
+      const policy = { ...POLICY, state, spell: 0, recordedDays: 0 }
+      expect(journalMissing(policy)).toBe(true)
+      expect(runFigure(policy)).toBe('No record')
+      expect(runCaption(policy)).toMatch(/its day journal is not in this deployment’s record$/)
+    }
+  })
+
+  it('keeps the outcome in the caption, so a paid owner still reads that it paid', () => {
+    expect(runCaption({ ...POLICY, state: 'paidOut', spell: 0, recordedDays: 0 })).toMatch(
+      /^This policy paid out/,
+    )
+    expect(runCaption({ ...POLICY, state: 'unclaimed', spell: 0, recordedDays: 0 })).toMatch(
+      /^The payout is yours and waiting to be claimed/,
+    )
+  })
+
+  it('leaves an active policy at 0 — nothing recorded yet is a run of none', () => {
+    const policy = { ...POLICY, spell: 0, recordedDays: 0 }
+    expect(journalMissing(policy)).toBe(false)
+    expect(runFigure(policy)).toBe('0')
   })
 })

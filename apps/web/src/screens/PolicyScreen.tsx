@@ -13,7 +13,14 @@ import {
   SyntheticNote,
 } from '../components/Bits.tsx'
 import DayStrip from '../components/DayStrip.tsx'
-import { basisRisk, policyFacts, policyWindow, runCaption } from '../data/policy.ts'
+import {
+  basisRisk,
+  journalMissing,
+  policyFacts,
+  policyWindow,
+  runCaption,
+  runFigure,
+} from '../data/policy.ts'
 import { longestDryRun } from '../data/rainfall.ts'
 
 /**
@@ -108,7 +115,7 @@ export const PolicyView = ({
 
   return (
     <div>
-      <Headline figure={String(policy.spell)} caption={runCaption(policy)} />
+      <Headline figure={runFigure(policy)} caption={runCaption(policy)} />
 
       {strip === null ? (
         <Note>Loading the days of the window…</Note>
@@ -117,7 +124,11 @@ export const PolicyView = ({
           id="policy"
           cells={strip.cells}
           bracket={longestDryRun(strip.days)}
-          hint="Tap any day to see its rainfall and how many intervals carried a value."
+          hint={
+            journalMissing(policy)
+              ? 'None of these days is in this deployment’s record, so the run cannot be drawn here. What the policy did is on chain.'
+              : 'Tap any day to see its rainfall and how many intervals carried a value.'
+          }
         />
       )}
 

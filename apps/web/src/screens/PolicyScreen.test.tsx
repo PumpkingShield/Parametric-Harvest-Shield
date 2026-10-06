@@ -169,3 +169,33 @@ describe('PolicyView — the state before the days (T074)', () => {
     expect(draw(POLICY)).toContain('Day 10 — 6.4 mm — 24 intervals')
   })
 })
+
+describe('PolicyView — a closed policy whose days are not on record here', () => {
+  // The shape of CqDa…: paid on chain, settled on a run this deployment's store
+  // never held, so the API answers spell 0 with recordedDays 0.
+  const gone: Policy = { ...POLICY, state: 'paidOut', spell: 0, recordedDays: 0 }
+  const html = () => renderToStaticMarkup(<PolicyView policy={gone} rows={[]} decimals={6} />)
+
+  it('does not print a zero run under a payout', () => {
+    expect(html()).not.toContain('>0<')
+    expect(html()).toContain('>No record<')
+    expect(html()).toContain(
+      'This policy paid out — its day journal is not in this deployment’s record',
+    )
+  })
+
+  it('says why the strip is empty instead of inviting a tap', () => {
+    expect(html()).toContain('None of these days is in this deployment’s record')
+    expect(html()).not.toContain('Tap any day')
+    expect(html()).toContain('not in this record')
+    expect(html()).not.toContain('not recorded yet')
+  })
+
+  it('still prints 0 for an active policy with nothing recorded yet', () => {
+    const fresh = renderToStaticMarkup(
+      <PolicyView policy={{ ...POLICY, spell: 0, recordedDays: 0 }} rows={[]} decimals={6} />,
+    )
+    expect(fresh).toContain('>0<')
+    expect(fresh).toContain('not recorded yet')
+  })
+})
