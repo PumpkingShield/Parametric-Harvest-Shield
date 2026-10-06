@@ -24,12 +24,19 @@ import type { CellSlotStore, RewardMirrorStore, SlotRewardRow } from '@pumpking/
  * not indexed the transaction yet, or a deploy in between costs a later read,
  * not a hole in the history.
  *
- * **Not every cycle.** A quiet cycle costs one statement already (`T073`);
- * this asks again only after a cycle that submitted a day, and otherwise every
- * few minutes for whatever an earlier try left unread.
+ * **Not every cycle, and never ahead of a day.** A quiet cycle costs one
+ * statement already (`T073`). A cycle that submitted a day leaves the history
+ * for the next quiet one, which reads it straight away: nothing waits on the
+ * history, while the day is the road to a payout, and a worker catching up —
+ * after downtime, or on a scenario pool whose day is two seconds — would
+ * otherwise spend a `getTransaction` and a write per day it has not yet sent.
+ * Measured on the demo (2026-10-06): about 0.46 s a day from a laptop, the
+ * difference between keeping up with a two-second day and falling behind it.
+ * A worker that is never quiet still reads once a retry period, so the
+ * history lags behind a busy worker but is not starved by it.
  */
 
-/** How often unread days are looked for when no day was just submitted. */
+/** How often unread days are looked for, busy or not, when nothing is owed. */
 export const REWARDS_RETRY_MS = 300_000
 
 /**
@@ -125,8 +132,8 @@ export async function readDayRewards(
 
 export interface RewardMirror {
   /**
-   * Reads unread days when a day was just submitted or the retry period has
-   * passed; null when neither.
+   * Reads unread days in the first quiet cycle after one that submitted a
+   * day, or once the retry period has passed, busy or not; null otherwise.
    */
   readIfDue(now: Date, submitted: boolean, fromDay: number): Promise<RewardReadOutcome[] | null>
 }
@@ -139,10 +146,15 @@ export function rewardMirror(
     throw new RangeError(`retryMs must be a positive integer: ${retryMs}`)
   }
   let nextAt: number | null = null
+  // A day went out since the last read: the next quiet cycle owes it one.
+  let owed = false
   return {
     async readIfDue(now, submitted, fromDay) {
       const at = now.getTime()
-      if (!submitted && nextAt !== null && at < nextAt) return null
+      const due = nextAt === null || at >= nextAt
+      if (submitted) owed = true
+      if (!due && (submitted || !owed)) return null
+      owed = false
       nextAt = at + retryMs
       return await readDayRewards(deps, fromDay)
     },

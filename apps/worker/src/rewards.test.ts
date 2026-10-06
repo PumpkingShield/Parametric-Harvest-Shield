@@ -116,23 +116,47 @@ describe('readDayRewards', () => {
 })
 
 describe('rewardMirror', () => {
-  it('reads after a submitted day at once, and otherwise once a period', async () => {
-    let reads = 0
+  function counted() {
+    const log = { reads: 0 }
     const store: RewardMirrorStore = {
       unreadDays: async () => {
-        reads += 1
+        log.reads += 1
         return []
       },
       saveDayRewards: async () => undefined,
     }
-    const mirror = rewardMirror({ store, slots: slots([]), source: source({}) }, 1000)
-    const at = (ms: number) => new Date(ms)
+    return { log, mirror: rewardMirror({ store, slots: slots([]), source: source({}) }, 1000) }
+  }
+  const at = (ms: number) => new Date(ms)
 
+  it('leaves the history to the first quiet cycle while days are going out', async () => {
+    const { log, mirror } = counted()
+
+    expect(await mirror.readIfDue(at(0), true, 0)).toEqual([]) // nothing read yet: read
+    expect(await mirror.readIfDue(at(200), true, 0)).toBeNull() // busy: the days come first
+    expect(await mirror.readIfDue(at(400), true, 0)).toBeNull()
+    expect(await mirror.readIfDue(at(600), false, 0)).toEqual([]) // quiet, and owed: read now
+    expect(await mirror.readIfDue(at(800), false, 0)).toBeNull() // quiet, nothing owed
+    expect(log.reads).toBe(2)
+  })
+
+  it('still reads once a period for a worker that is never quiet', async () => {
+    // A scenario pool's day is two seconds: every cycle submits, forever.
+    const { log, mirror } = counted()
+    for (let ms = 0; ms <= 3000; ms += 100) await mirror.readIfDue(at(ms), true, 0)
+    // At 0, 1000, 2000 and 3000 — not thirty-one times.
+    expect(log.reads).toBe(4)
+  })
+
+  it('reads a real day straight after it, and the leftovers once a period', async () => {
+    // Control: a day of 86 400 s submits once and then sits quiet. The history
+    // must not wait a period for the day that was just sent.
+    const { log, mirror } = counted()
     expect(await mirror.readIfDue(at(0), false, 0)).toEqual([])
-    expect(await mirror.readIfDue(at(500), false, 0)).toBeNull()
-    expect(await mirror.readIfDue(at(600), true, 0)).toEqual([])
-    expect(await mirror.readIfDue(at(1500), false, 0)).toBeNull()
-    expect(await mirror.readIfDue(at(1600), false, 0)).toEqual([])
-    expect(reads).toBe(3)
+    expect(await mirror.readIfDue(at(500), true, 0)).toBeNull()
+    expect(await mirror.readIfDue(at(505), false, 0)).toEqual([])
+    expect(await mirror.readIfDue(at(1400), false, 0)).toBeNull()
+    expect(await mirror.readIfDue(at(1505), false, 0)).toEqual([])
+    expect(log.reads).toBe(3)
   })
 })
