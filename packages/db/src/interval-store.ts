@@ -1,4 +1,4 @@
-import type { DayClassification, ReadingKindName } from '@pumpking/shared'
+import type { DayClassification, ReadingKindName, ReferenceStateName } from '@pumpking/shared'
 import { and, asc, eq, gte, isNotNull, lt, lte, or, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cellDays, cellHours, cells, operators, readings, sensorVerdicts, sensors } from './schema.ts'
@@ -58,7 +58,6 @@ export type IntervalRow = {
   voteCount: number
   /** Base58 root over the signed readings of the interval, null when it had none. */
   merkleRoot: string | null
-  disputed: boolean
 }
 
 /** A classified day, as `cell_days` holds it — `FR-047`, `FR-048`. */
@@ -78,6 +77,19 @@ export type DayRow = {
    */
   txSignature: string | null
 }
+
+/** Where a recorded day stands against the public reference — `FR-013`, `T042`. */
+export type DayReference = {
+  state: ReferenceStateName
+  /** The reference's total for the day, null until it answered for every hour. */
+  rainfallX100: number | null
+}
+
+/**
+ * A day as read back. `reference` is the reference check's, never written by
+ * `saveDay`; optional so a store that knows nothing of it (a test's) still is one.
+ */
+export type RecordedDay = DayRow & { reference?: DayReference }
 
 /** A sensor's standing in one interval, as `sensor_verdicts` holds it — `FR-011`. */
 export type VerdictRow = {
@@ -138,7 +150,7 @@ export interface IntervalStore {
    * same thing the on-chain ring means by `None`: not an answer, and a break
    * in the run.
    */
-  dayRecords(cellId: bigint, fromDay: number, toDay: number): Promise<DayRow[]>
+  dayRecords(cellId: bigint, fromDay: number, toDay: number): Promise<RecordedDay[]>
   saveIntervals(rows: readonly IntervalRow[]): Promise<void>
   /**
    * The verdicts of one day of one cell, replacing whatever an earlier pass
@@ -269,7 +281,7 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
     },
 
     async dayRecords(cellId, fromDay, toDay) {
-      return await db
+      const rows = await db
         .select({
           cellId: cellDays.cellId,
           dayIndex: cellDays.dayIndex,
@@ -278,6 +290,8 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
           coveredHours: cellDays.coveredHours,
           merkleRoot: cellDays.merkleRoot,
           txSignature: cellDays.txSignature,
+          referenceState: cellDays.referenceState,
+          referenceRainfallX100: cellDays.referenceRainfallX100,
         })
         .from(cellDays)
         .where(
@@ -288,6 +302,10 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
           ),
         )
         .orderBy(asc(cellDays.dayIndex))
+      return rows.map(({ referenceState, referenceRainfallX100, ...row }) => ({
+        ...row,
+        reference: { state: referenceState, rainfallX100: referenceRainfallX100 },
+      }))
     },
 
     async saveIntervals(rows) {
@@ -306,7 +324,6 @@ export function pgIntervalStore(db: PostgresJsDatabase<Record<string, never>>): 
             medianX100: excluded('median_x100'),
             voteCount: excluded('vote_count'),
             merkleRoot: excluded('merkle_root'),
-            disputed: excluded('disputed'),
           },
         })
     },

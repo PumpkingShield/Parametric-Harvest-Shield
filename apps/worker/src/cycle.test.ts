@@ -310,7 +310,7 @@ class Sweeps implements RetentionStore {
     this.asked.push(cutoffs)
     this.sentBefore.push(chain.sent.length)
     if (this.fail) return Promise.reject(new Error('statement timeout'))
-    return Promise.resolve({ readings: 7, cellHours: 0, verdicts: 2 })
+    return Promise.resolve({ readings: 7, cellHours: 0, verdicts: 2, referenceHours: 0 })
   }
 }
 
@@ -324,7 +324,13 @@ describe('retention in a cycle', () => {
 
     expect(chain.names).toEqual(['submitDayRecord', 'submitDayRecord'])
     expect(sweeps.sentBefore).toEqual([2])
-    expect(report.swept).toEqual({ status: 'swept', readings: 7, cellHours: 0, verdicts: 2 })
+    expect(report.swept).toEqual({
+      status: 'swept',
+      readings: 7,
+      cellHours: 0,
+      verdicts: 2,
+      referenceHours: 0,
+    })
   })
 
   it('never sweeps readings a backlog day could still be closed from', async () => {
@@ -410,6 +416,7 @@ describe('summarise', () => {
       swept: null,
       registry: null,
       rewards: null,
+      reference: null,
     }
 
     expect(summarise(failed)).toEqual({

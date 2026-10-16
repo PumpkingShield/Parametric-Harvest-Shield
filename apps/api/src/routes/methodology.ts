@@ -16,8 +16,10 @@ import {
   collusionFloor,
   collusionHolds,
   collusionRatio,
+  DISPUTE_TOLERANCE_X100,
   encodeBase58,
   h3IndexFromCellId,
+  REFERENCE_SOURCE,
   ReadingKind,
 } from '@pumpking/shared'
 import { Hono } from 'hono'
@@ -102,7 +104,37 @@ export type CollusionCellWire = {
   holds: boolean
 }
 
+/**
+ * The reference check as published — `FR-013`, `FR-038`. Constant, not from
+ * the pool: the program never sees the reference, so nothing on chain could
+ * hold it.
+ */
+export type ReferenceWire = {
+  source: string
+  url: string
+  licence: string
+  variable: string
+  /** How far apart a day's two totals must be, in a different class, to dispute it. */
+  toleranceX100: number
+  meaning: string
+}
+
+export const REFERENCE_MEANING =
+  "Each day on chain is compared with a public weather model at the cell's centre over the same 24 hours. " +
+  'A day is disputed when the two disagree about dry or wet and are at least the tolerance apart. ' +
+  'A disputed day still counts: the sensors decide the policy, and the model only marks the day.'
+
+export const REFERENCE_WIRE: ReferenceWire = {
+  source: REFERENCE_SOURCE.name,
+  url: REFERENCE_SOURCE.url,
+  licence: REFERENCE_SOURCE.licence,
+  variable: REFERENCE_SOURCE.variable,
+  toleranceX100: DISPUTE_TOLERANCE_X100,
+  meaning: REFERENCE_MEANING,
+}
+
 export type MethodologyWire = {
+  reference: ReferenceWire
   /** Null before `initialize_pool`. */
   pool: {
     minStake: string
@@ -159,7 +191,7 @@ export function createMethodologyRoute(options: MethodologyRouteOptions): Hono {
   return new Hono().get('/', async (context) => {
     const pool = await options.pool()
     if (pool === null) {
-      const wire: MethodologyWire = { pool: null, collusion: null }
+      const wire: MethodologyWire = { reference: REFERENCE_WIRE, pool: null, collusion: null }
       return context.json(wire, 200)
     }
 
@@ -174,6 +206,7 @@ export function createMethodologyRoute(options: MethodologyRouteOptions): Hono {
     const floor = collusionFloor(params)
 
     const wire: MethodologyWire = {
+      reference: REFERENCE_WIRE,
       pool: {
         minStake: pool.minStake.toString(),
         minVotes: pool.minVotes,

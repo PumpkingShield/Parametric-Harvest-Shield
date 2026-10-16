@@ -318,9 +318,6 @@ export function intervalRow(interval: ClosedInterval): IntervalRow {
     medianX100: interval.medianX100,
     voteCount: interval.voteCount,
     merkleRoot: interval.readingsRoot,
-    // `FR-013` is the reference check, and it is T042. Until then no interval
-    // has been compared to anything, and `false` says exactly that.
-    disputed: false,
   }
 }
 

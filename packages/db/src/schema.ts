@@ -1,3 +1,4 @@
+import type { DayClassification } from '@pumpking/shared'
 import { sql } from 'drizzle-orm'
 import {
   bigint,
@@ -14,7 +15,6 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
-import type { DayClassification } from '@pumpking/shared'
 
 /**
  * Off-chain mirror and working set. The chain is the source of truth for
@@ -52,6 +52,14 @@ export const readingStatus = pgEnum('reading_status', [
 ])
 
 export const readingKind = pgEnum('reading_kind', ['precipitation_mm'])
+
+/** `ReferenceState` in `@pumpking/shared` — one list, spelled here for Postgres. */
+export const referenceState = pgEnum('reference_state', [
+  'pending',
+  'agrees',
+  'disputed',
+  'unchecked',
+])
 
 export const operators = pgTable('operators', {
   id: uuid().primaryKey().defaultRandom(),
@@ -117,9 +125,7 @@ export const sensors = pgTable(
     /** `sql`0`` and not `0n`: drizzle-kit 0.31.10 cannot serialise a BigInt
      * literal into its snapshot and dies with "Do not know how to serialize
      * a BigInt" on generate. */
-    stake: bigint({ mode: 'bigint' })
-      .notNull()
-      .default(sql`0`),
+    stake: bigint({ mode: 'bigint' }).notNull().default(sql`0`),
     accepted: integer().notNull().default(0),
     outliers: integer().notNull().default(0),
     /** False once excluded for systematic outliers — FR-012. */
@@ -251,12 +257,6 @@ export const cellHours = pgTable(
     voteCount: smallint().notNull(),
     /** Root over the accepted readings of the hour, for the inclusion proof. */
     merkleRoot: text(),
-    /**
-     * Set when the median diverged from the public reference — FR-013. The hour
-     * still enters the index (FR-017); the flag is a supervision signal, not a
-     * reason to drop the measurement from someone's policy after the fact.
-     */
-    disputed: boolean().notNull().default(false),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -297,9 +297,40 @@ export const cellDays = pgTable(
      * read yet.
      */
     rewardsReadAt: timestamp({ withTimezone: true }),
+    /**
+     * The public reference's total for the same 24 hours — `FR-013`, `T042`.
+     * Null until the reference has answered for every hour of the day.
+     */
+    referenceRainfallX100: valueX100('reference_rainfall_x100'),
+    /**
+     * Where the day stands against the reference — `ReferenceState`. A
+     * disputed day still counts (`FR-017`): the state is a supervision signal,
+     * never a reason to drop a measurement from someone's policy after the fact.
+     */
+    referenceState: referenceState().notNull().default('pending'),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.cellId, t.dayIndex] })],
+)
+
+/**
+ * The public reference, hour by hour, at a cell's centre — `FR-013`, `T042`.
+ * What a disputed day is shown against in the trace (`FR-037`): both numbers
+ * side by side, not a verdict alone. Kept twelve months, like `cell_hours`
+ * (`SC-012`).
+ */
+export const referenceHours = pgTable(
+  'reference_hours',
+  {
+    cellId: cellId()
+      .notNull()
+      .references(() => cells.id),
+    /** Start of the hour, UTC. */
+    hourStart: timestamp({ withTimezone: true }).notNull(),
+    valueX100: valueX100('value_x100').notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.cellId, t.hourStart] })],
 )
 
 /**

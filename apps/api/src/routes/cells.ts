@@ -1,5 +1,10 @@
-import type { DayRow, IntervalStore } from '@pumpking/db'
-import { cellIdFromH3Index, H3_CELL_PATTERN } from '@pumpking/shared'
+import type { IntervalStore, RecordedDay } from '@pumpking/db'
+import {
+  cellIdFromH3Index,
+  H3_CELL_PATTERN,
+  ReferenceState,
+  type ReferenceStateName,
+} from '@pumpking/shared'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { apiError, fieldErrors } from '../errors.ts'
@@ -83,9 +88,15 @@ export type DayWire = {
    * chain can be asked about — `FR-048` shows the trace, not just the number.
    */
   txSignature: string | null
+  /**
+   * The public weather reference for the same 24 hours — `FR-013`, `T042`.
+   * Both numbers side by side, so a disputed day is shown with what it was
+   * disputed against. Never a correction: `rainfallX100` above is what counts.
+   */
+  reference: { state: ReferenceStateName; rainfallX100: number | null }
 }
 
-function toWire(row: DayRow): DayWire {
+function toWire(row: RecordedDay): DayWire {
   return {
     dayIndex: row.dayIndex,
     state: row.state,
@@ -93,6 +104,7 @@ function toWire(row: DayRow): DayWire {
     coveredHours: row.coveredHours,
     merkleRoot: row.merkleRoot,
     txSignature: row.txSignature,
+    reference: row.reference ?? { state: ReferenceState.Pending, rainfallX100: null },
   }
 }
 

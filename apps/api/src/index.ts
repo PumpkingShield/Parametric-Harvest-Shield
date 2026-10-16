@@ -10,6 +10,7 @@ import {
   pgOperatorStore,
   pgReadingStore,
   pgCellSlotStore,
+  pgReferenceStore,
   pgRegistryMirrorStore,
   pgRegistryStore,
   pgRetentionStore,
@@ -98,6 +99,7 @@ const worker: WorkerRuntime | null = (() => {
         pgRegistryMirrorStore(database.db),
         pgCellSlotStore(database.db),
         pgRewardMirrorStore(database.db),
+        pgReferenceStore(database.db),
       ),
     })
   } catch (cause) {

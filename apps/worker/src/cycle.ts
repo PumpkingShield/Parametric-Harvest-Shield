@@ -3,7 +3,7 @@ import type { CellSlotStore, IntervalStore } from '@pumpking/db'
 import { ReadingKind } from '@pumpking/shared'
 import type { PoolSource } from './chain.ts'
 import { type CloseDeps, type CloseOutcome, closeAfterDays } from './close.ts'
-import { type ExclusionSource, type ExcludeOutcome, excludeAfterDays } from './exclude.ts'
+import { type ExcludeOutcome, type ExclusionSource, excludeAfterDays } from './exclude.ts'
 import {
   type AggregationParams,
   backlogHorizon,
@@ -15,6 +15,7 @@ import {
   oldestBacklogDay,
   type PoolClock,
 } from './interval.ts'
+import type { ReferenceChecker, ReferenceReport } from './reference.ts'
 import type { MirrorOutcome, RegistryMirror } from './registry.ts'
 import type { RetentionSweeper, SweepOutcome } from './retention.ts'
 import type { RewardMirror, RewardReadOutcome } from './rewards.ts'
@@ -54,7 +55,11 @@ import {
  * 5. **`readIfDue`** — what each slot earned on the days just written, read
  *    out of their own transactions into `slot_rewards` (`T040`). After the
  *    money, because it moves none: it is the operator screen's history.
- * 6. **`sweepIfDue`** — readings and hourly medians past their retention
+ * 6. **`checkIfDue`** — the days on chain compared with the public weather
+ *    reference (`T042`), every few minutes. After the money and outside it,
+ *    because an outside service must never be the reason a day or a payout
+ *    waited (`FR-044`); the verdict is a mark beside the day, not a change to it.
+ * 7. **`sweepIfDue`** — readings and hourly medians past their retention
  *    (`T055`), once an hour. Last, because it has no deadline, and never newer
  *    than the oldest day step 1 could still close.
  *
@@ -99,6 +104,8 @@ export type CycleDeps = {
   registry?: RegistryMirror
   /** Absent in tests that are not about the reward history — `T040`. */
   rewards?: RewardMirror
+  /** Absent where the reference is switched off, and in tests not about it — `T042`. */
+  reference?: ReferenceChecker
 }
 
 /** Why a cycle did nothing, when it did nothing. */
@@ -134,6 +141,8 @@ export type CycleReport = {
   registry: MirrorOutcome | null
   /** Null when no read of the reward history was due this cycle. */
   rewards: RewardReadOutcome[] | null
+  /** Null when no reference check was due this cycle. */
+  reference: ReferenceReport | null
 }
 
 /** A fresh set of empty lists — never a shared one a caller could append to. */
@@ -146,6 +155,7 @@ function nothing(): Omit<CycleReport, 'skipped' | 'aggregatorMatches'> {
     swept: null,
     registry: null,
     rewards: null,
+    reference: null,
   }
 }
 
@@ -252,6 +262,11 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
           oldestBacklogDay(today, deps.backlogDays ?? DEFAULT_BACKLOG_DAYS),
         )
 
+  const reference =
+    deps.reference === undefined
+      ? null
+      : await deps.reference.checkIfDue(now, clock, params.dryThresholdX100)
+
   const swept =
     deps.retention === undefined
       ? null
@@ -270,6 +285,7 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
     swept,
     registry,
     rewards,
+    reference,
   }
 }
 

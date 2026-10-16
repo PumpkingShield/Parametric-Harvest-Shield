@@ -2,6 +2,7 @@ import { Connection } from '@pumpking/anchor-client'
 import type {
   CellSlotStore,
   IntervalStore,
+  ReferenceStore,
   RegistryMirrorStore,
   RewardMirrorStore,
   RetentionStore,
@@ -12,6 +13,7 @@ import { rpcExclusionSource } from './exclude.ts'
 import type { WorkerConfig } from './config.ts'
 import { type CycleDeps, type CycleReport, runCycle, summarise } from './cycle.ts'
 import { stalledAfterMs, type WorkerHealthState } from './health.ts'
+import { openMeteoSource, referenceChecker } from './reference.ts'
 import { registryMirror, rpcRegistrySource } from './registry.ts'
 import { retentionSweeper } from './retention.ts'
 import { rewardMirror, rpcDayRewardSource } from './rewards.ts'
@@ -78,6 +80,7 @@ export function rpcCycle(
   registry: RegistryMirrorStore,
   slots: CellSlotStore,
   rewards: RewardMirrorStore,
+  reference: ReferenceStore,
 ): CycleRunner {
   const connection = new Connection(config.rpcUrl, 'confirmed')
 
@@ -103,6 +106,14 @@ export function rpcCycle(
       source: rpcDayRewardSource(connection, config.programId),
       slots,
     }),
+    ...(config.referenceUrl === null
+      ? {}
+      : {
+          reference: referenceChecker({
+            store: reference,
+            source: openMeteoSource(config.referenceUrl),
+          }),
+        }),
   }
 
   return (now) => runCycle(deps, now)
@@ -188,12 +199,37 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
           } else log.debug({ ...at, slots: read.slots }, 'day rewards read')
         }
 
+        if (report.reference?.status === 'failed') {
+          log.warn(
+            { err: report.reference.error },
+            'the reference check failed, trying again later',
+          )
+        } else if (report.reference?.status === 'checked') {
+          // The day stands whatever happens here (`FR-044`): a source that
+          // failed is a warning, not an error, and a dispute is worth a line.
+          for (const cell of report.reference.cells) {
+            const at = { cellId: cell.cellId.toString() }
+            if (cell.status === 'failed') {
+              log.warn({ ...at, err: cell.error }, 'the reference did not answer for a cell')
+            } else if (cell.disputed > 0) {
+              log.info({ ...cell, cellId: at.cellId }, 'the reference disputes a day')
+            } else log.debug({ ...cell, cellId: at.cellId }, 'reference checked')
+          }
+          if (report.reference.gaveUp > 0) {
+            log.info(
+              { gaveUp: report.reference.gaveUp, applies: report.reference.applies },
+              'days left without a reference check',
+            )
+          }
+        }
+
         if (report.swept?.status === 'failed') {
           log.warn({ err: report.swept.error }, 'the retention sweep failed, next try in an hour')
         } else if (report.swept?.status === 'swept') {
-          const { readings, cellHours, verdicts } = report.swept
-          const line = { readings, cellHours, verdicts }
-          if (readings + cellHours + verdicts > 0) log.info(line, 'retention sweep')
+          const { readings, cellHours, verdicts, referenceHours } = report.swept
+          const line = { readings, cellHours, verdicts, referenceHours }
+          if (readings + cellHours + verdicts + referenceHours > 0)
+            log.info(line, 'retention sweep')
           else log.debug(line, 'retention sweep')
         }
 

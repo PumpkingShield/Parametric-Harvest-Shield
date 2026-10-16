@@ -79,6 +79,11 @@ describe('readWorkerConfig', () => {
     ).toBe('https://api.app/health')
   })
 
+  it('asks Open-Meteo for the reference unless told otherwise, and nothing when told empty', () => {
+    expect(readWorkerConfig(MINIMUM).referenceUrl).toBe('https://api.open-meteo.com/v1/forecast')
+    expect(readWorkerConfig({ ...MINIMUM, REFERENCE_BASE_URL: ' ' }).referenceUrl).toBeNull()
+  })
+
   it('refuses a coverage fraction that is not one', () => {
     expect(() => readWorkerConfig({ ...MINIMUM, MINIMUM_COVERAGE_X100: '101' })).toThrow(
       ConfigError,

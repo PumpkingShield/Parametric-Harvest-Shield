@@ -1,6 +1,7 @@
 import { Keypair, PROGRAM_ID, PublicKey } from '@pumpking/anchor-client'
 import { decodeBase58 } from '@pumpking/shared'
 import { z } from 'zod'
+import { OPEN_METEO_FORECAST_URL } from './reference.ts'
 
 /**
  * The environment the worker process is started with — read once, refused
@@ -99,6 +100,12 @@ const schema = z.object({
    */
   KEEPALIVE_URL: z.string().default(''),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).default(15_000),
+  /**
+   * The public weather reference (`FR-013`, `T042`) — Open-Meteo's forecast
+   * endpoint unless told otherwise. Empty switches the check off: a local
+   * stack with no internet, or a test, compares nothing and marks nothing.
+   */
+  REFERENCE_BASE_URL: z.string().default(OPEN_METEO_FORECAST_URL),
 })
 
 export type WorkerConfig = {
@@ -115,6 +122,8 @@ export type WorkerConfig = {
   registrySyncMs: number
   keepAliveUrl: string | null
   shutdownTimeoutMs: number
+  /** Null when the reference check is off. */
+  referenceUrl: string | null
 }
 
 /** What a caller sees when the environment is wrong: every problem, not the first. */
@@ -160,5 +169,6 @@ export function readWorkerConfig(env: Record<string, string | undefined>): Worke
     registrySyncMs: value.REGISTRY_SYNC_MS,
     keepAliveUrl: value.KEEPALIVE_URL.trim() === '' ? null : value.KEEPALIVE_URL.trim(),
     shutdownTimeoutMs: value.SHUTDOWN_TIMEOUT_MS,
+    referenceUrl: value.REFERENCE_BASE_URL.trim() === '' ? null : value.REFERENCE_BASE_URL.trim(),
   }
 }

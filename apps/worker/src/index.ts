@@ -2,6 +2,7 @@ import {
   createDb,
   pgCellSlotStore,
   pgIntervalStore,
+  pgReferenceStore,
   pgRegistryMirrorStore,
   pgRetentionStore,
   pgRewardMirrorStore,
@@ -52,6 +53,7 @@ const worker = startWorker({
     pgRegistryMirrorStore(database.db),
     pgCellSlotStore(database.db),
     pgRewardMirrorStore(database.db),
+    pgReferenceStore(database.db),
   ),
 })
 

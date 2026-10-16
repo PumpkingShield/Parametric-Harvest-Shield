@@ -7,6 +7,7 @@ import {
   createMethodologyRoute,
   type MethodologyPool,
   type MethodologyWire,
+  REFERENCE_WIRE,
   rpcCellSource,
   voteStakesByCell,
 } from './methodology.ts'
@@ -168,7 +169,16 @@ describe('GET /v1/methodology', () => {
   })
 
   it('has nothing to say before the pool exists', async () => {
-    expect(await get(null)).toEqual({ pool: null, collusion: null })
+    expect(await get(null)).toEqual({ reference: REFERENCE_WIRE, pool: null, collusion: null })
+  })
+
+  it('publishes the reference, its licence and its tolerance, pool or not — FR-013, FR-038', () => {
+    expect(REFERENCE_WIRE).toMatchObject({
+      source: 'Open-Meteo',
+      licence: 'CC BY 4.0',
+      toleranceX100: 500,
+    })
+    expect(REFERENCE_WIRE.meaning).toMatch(/still counts/)
   })
 })
 

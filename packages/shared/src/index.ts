@@ -1,6 +1,7 @@
 export { decodeBase58, encodeBase58 } from './base58.ts'
 export type { CellSize } from './cell.ts'
 export {
+  cellCenter,
   cellFromLatLng,
   cellIdFromH3Index,
   cellResolution,
@@ -69,6 +70,15 @@ export {
   toReadingWire,
   toSignedReadingWire,
 } from './reading.ts'
+export type { ReferenceHour, ReferenceStateName } from './reference.ts'
+export {
+  DISPUTE_TOLERANCE_X100,
+  judgeDay,
+  REFERENCE_DAY_HOURS,
+  REFERENCE_SOURCE,
+  ReferenceState,
+  referenceDayX100,
+} from './reference.ts'
 export {
   dayWeights,
   intervalWeights,

@@ -1,6 +1,6 @@
 import { lt } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
-import { cellHours, readings, sensorVerdicts } from './schema.ts'
+import { cellHours, readings, referenceHours, sensorVerdicts } from './schema.ts'
 
 /**
  * How long the raw material stays — `SC-012`, `T055`.
@@ -49,6 +49,11 @@ export type SweepResult = {
    * about an interval nobody can check any more.
    */
   verdicts: number
+  /**
+   * `reference_hours` (`T042`) by the hourly medians' cutoff: the reference is
+   * what an hour is shown beside, and it goes when the hour does.
+   */
+  referenceHours: number
 }
 
 const DAY_MS = 86_400_000
@@ -119,10 +124,14 @@ export function pgRetentionStore(db: PostgresJsDatabase<Record<string, never>>):
       const sweptVerdicts = await db
         .delete(sensorVerdicts)
         .where(lt(sensorVerdicts.createdAt, cutoffs.readings))
+      const sweptReference = await db
+        .delete(referenceHours)
+        .where(lt(referenceHours.createdAt, cutoffs.cellHours))
       return {
         readings: sweptReadings.count,
         cellHours: sweptHours.count,
         verdicts: sweptVerdicts.count,
+        referenceHours: sweptReference.count,
       }
     },
   }

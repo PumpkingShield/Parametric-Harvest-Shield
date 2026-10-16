@@ -16,7 +16,7 @@ class Store implements RetentionStore {
       this.failures -= 1
       return Promise.reject(new Error('connection reset'))
     }
-    return Promise.resolve({ readings: 3, cellHours: 1, verdicts: 5 })
+    return Promise.resolve({ readings: 3, cellHours: 1, verdicts: 5, referenceHours: 4 })
   }
 }
 
@@ -28,7 +28,13 @@ describe('retentionSweeper', () => {
     const store = new Store()
     const outcome = await retentionSweeper(store).sweepIfDue(NOW, NOW)
 
-    expect(outcome).toEqual({ status: 'swept', readings: 3, cellHours: 1, verdicts: 5 })
+    expect(outcome).toEqual({
+      status: 'swept',
+      readings: 3,
+      cellHours: 1,
+      verdicts: 5,
+      referenceHours: 4,
+    })
     expect(store.asked).toHaveLength(1)
   })
 

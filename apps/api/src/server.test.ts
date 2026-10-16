@@ -93,7 +93,7 @@ describe('GET /v1/methodology', () => {
   it('is mounted, and says there is no pool before there is one', async () => {
     const response = await app().request('/v1/methodology')
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ pool: null, collusion: null })
+    expect(await response.json()).toMatchObject({ pool: null, collusion: null })
   })
 })
 

@@ -1,4 +1,4 @@
-import type { DayRow } from '@pumpking/db'
+import type { DayRow, RecordedDay } from '@pumpking/db'
 import { cellIdFromH3Index, DayState } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { FieldsBody } from '../errors.ts'
@@ -22,10 +22,10 @@ function day(dayIndex: number, state: DayRow['state'], cellId = CELL_ID): DayRow
 
 /** The store's own contract: rows in `[from, to]`, ascending, gaps absent. */
 class FakeStore {
-  rows: DayRow[] = []
+  rows: RecordedDay[] = []
   asked: { cellId: bigint; from: number; to: number }[] = []
 
-  dayRecords(cellId: bigint, fromDay: number, toDay: number): Promise<DayRow[]> {
+  dayRecords(cellId: bigint, fromDay: number, toDay: number): Promise<RecordedDay[]> {
     this.asked.push({ cellId, from: fromDay, to: toDay })
     return Promise.resolve(
       this.rows
@@ -47,7 +47,11 @@ async function get(path: string): Promise<Response> {
 
 describe('GET /v1/cells/:cellId/days', () => {
   it('answers with the recorded days of the range, ascending', async () => {
-    store.rows = [day(2, DayState.Wet), day(0, DayState.Dry), day(1, DayState.Dry)]
+    store.rows = [
+      day(2, DayState.Wet),
+      day(0, DayState.Dry),
+      { ...day(1, DayState.Dry), reference: { state: 'disputed', rainfallX100: 1_440 } },
+    ]
 
     const response = await get(`/${H3}/days?from=0&to=2`)
     expect(response.status).toBe(200)
@@ -63,6 +67,7 @@ describe('GET /v1/cells/:cellId/days', () => {
         coveredHours: 24,
         merkleRoot: 'root',
         txSignature: 'tx',
+        reference: { state: 'pending', rainfallX100: null },
       },
       {
         dayIndex: 1,
@@ -71,6 +76,7 @@ describe('GET /v1/cells/:cellId/days', () => {
         coveredHours: 24,
         merkleRoot: 'root',
         txSignature: 'tx',
+        reference: { state: 'disputed', rainfallX100: 1_440 },
       },
       {
         dayIndex: 2,
@@ -79,8 +85,21 @@ describe('GET /v1/cells/:cellId/days', () => {
         coveredHours: 24,
         merkleRoot: 'root',
         txSignature: 'tx',
+        reference: { state: 'pending', rainfallX100: null },
       },
     ])
+  })
+
+  it('shows a disputed day with both numbers, and corrects neither — FR-013, FR-043', async () => {
+    store.rows = [{ ...day(0, DayState.Dry), reference: { state: 'disputed', rainfallX100: 900 } }]
+    const body = (await (await get(`/${H3}/days?from=0&to=0`)).json()) as {
+      days: { state: number; rainfallX100: number; reference: unknown }[]
+    }
+    expect(body.days[0]).toMatchObject({
+      state: DayState.Dry,
+      rainfallX100: 120,
+      reference: { state: 'disputed', rainfallX100: 900 },
+    })
   })
 
   it('asks the store for the cell the path named', async () => {
@@ -159,7 +178,10 @@ describe('GET /v1/cells/:cellId/days — refusals', () => {
     const response = await get(`/${H3}/days?from=5&to=4`)
     expect(response.status).toBe(400)
     const body = (await response.json()) as FieldsBody
-    expect(body.error.details.fields[0]).toEqual({ field: 'to', message: 'must not be before from' })
+    expect(body.error.details.fields[0]).toEqual({
+      field: 'to',
+      message: 'must not be before from',
+    })
   })
 
   it('refuses a span longer than a year', async () => {

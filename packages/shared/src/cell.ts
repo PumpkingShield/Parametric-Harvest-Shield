@@ -1,4 +1,5 @@
 import {
+  cellToLatLng,
   getHexagonAreaAvg,
   getHexagonEdgeLengthAvg,
   getResolution,
@@ -6,7 +7,7 @@ import {
   latLngToCell,
   UNITS,
 } from 'h3-js'
-import { cellIdFromH3Index, MAX_CELL_ID, MIN_CELL_ID } from './cell-id.ts'
+import { cellIdFromH3Index, h3IndexFromCellId, MAX_CELL_ID, MIN_CELL_ID } from './cell-id.ts'
 
 export { cellIdFromH3Index, H3_CELL_PATTERN, h3IndexFromCellId } from './cell-id.ts'
 
@@ -98,6 +99,17 @@ export function cellFromLatLng(lat: number, lng: number, resolution = DEFAULT_RE
     throw new RangeError(`longitude must be in -180..180 degrees: ${lng}`)
   }
   return cellIdFromH3Index(latLngToCell(lat, lng, resolution))
+}
+
+/**
+ * The centre of a cell — where the public reference is asked about it
+ * (`FR-013`). The only other direction coordinates travel: the cell is still
+ * the unit, and the centre stands for all of it, which is the basis risk
+ * `FR-040` discloses.
+ */
+export function cellCenter(cellId: bigint): { lat: number; lng: number } {
+  const [lat, lng] = cellToLatLng(h3IndexFromCellId(cellId))
+  return { lat, lng }
 }
 
 /* -------------------------------------------------------------------------- */
