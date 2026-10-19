@@ -52,6 +52,36 @@ export interface ReferenceStore {
   giveUp(beforeDay: number | null): Promise<number>
 }
 
+type Updates = Pick<PostgresJsDatabase<Record<string, never>>, 'update'>
+
+/**
+ * The write a verdict makes — `FR-043`. Beside the day, never into it: the two
+ * `reference_*` columns and nothing else, so the class, the sensors' total, the
+ * root and the transaction stay what the chain holds; and only over a day still
+ * `pending`, so a verdict is made once.
+ */
+export function verdictUpdate(db: Updates, verdict: ReferenceVerdictRow) {
+  return db
+    .update(cellDays)
+    .set({ referenceState: verdict.state, referenceRainfallX100: verdict.rainfallX100 })
+    .where(
+      and(
+        eq(cellDays.cellId, verdict.cellId),
+        eq(cellDays.dayIndex, verdict.dayIndex),
+        eq(cellDays.referenceState, 'pending'),
+      ),
+    )
+}
+
+/** The write giving up makes — `FR-044`: the day stands, only its check is marked absent. */
+export function giveUpUpdate(db: Updates, beforeDay: number | null) {
+  const pending = eq(cellDays.referenceState, 'pending')
+  return db
+    .update(cellDays)
+    .set({ referenceState: 'unchecked' })
+    .where(beforeDay === null ? pending : and(pending, lt(cellDays.dayIndex, beforeDay)))
+}
+
 /** `excluded.<column>` — see `interval-store.ts`. */
 function excluded(column: string): SQL {
   return sql.raw(`excluded.${column}`)
@@ -92,28 +122,12 @@ export function pgReferenceStore(db: PostgresJsDatabase<Record<string, never>>):
               set: { valueX100: excluded('value_x100') },
             })
         }
-        for (const verdict of verdicts) {
-          await tx
-            .update(cellDays)
-            .set({ referenceState: verdict.state, referenceRainfallX100: verdict.rainfallX100 })
-            .where(
-              and(
-                eq(cellDays.cellId, verdict.cellId),
-                eq(cellDays.dayIndex, verdict.dayIndex),
-                // Never over a verdict already made.
-                eq(cellDays.referenceState, 'pending'),
-              ),
-            )
-        }
+        for (const verdict of verdicts) await verdictUpdate(tx, verdict)
       })
     },
 
     async giveUp(beforeDay) {
-      const pending = eq(cellDays.referenceState, 'pending')
-      const result = await db
-        .update(cellDays)
-        .set({ referenceState: 'unchecked' })
-        .where(beforeDay === null ? pending : and(pending, lt(cellDays.dayIndex, beforeDay)))
+      const result = await giveUpUpdate(db, beforeDay)
       return result.count
     },
   }

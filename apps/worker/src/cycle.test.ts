@@ -12,16 +12,20 @@ import type {
   DayRow,
   IntervalRow,
   OpenDay,
+  PendingReferenceDay,
+  RecordedDay,
+  ReferenceStore,
   RegistryMirrorStore,
   RegistryRow,
   RetentionCutoffs,
   RetentionStore,
   SweepResult,
 } from '@pumpking/db'
-import { DayState } from '@pumpking/shared'
+import { DayState, encodeBase58, type ReferenceHour } from '@pumpking/shared'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { PoolSource } from './chain.ts'
 import { type CycleDeps, clockOf, paramsOf, runCycle, summarise } from './cycle.ts'
+import { type ReferenceSource, referenceChecker } from './reference.ts'
 import { type RegistrySource, registryMirror } from './registry.ts'
 import { retentionSweeper } from './retention.ts'
 import type { OpenPolicy } from './settle.ts'
@@ -115,7 +119,9 @@ class Chain {
 
 class Store {
   cells: bigint[] = [CELL_ID]
-  window: DayRow[] = []
+  window: RecordedDay[] = []
+  /** What the sensors sent; none, unless a test gives some. */
+  readings: AcceptedReading[] = []
   saved: DayRow[] = []
   submittedDays: number[] = []
 
@@ -132,12 +138,14 @@ class Store {
   acceptedReadings(
     _cellId: bigint,
     _kind: string,
-    _from: Date,
-    _to: Date,
+    from: Date,
+    to: Date,
     minStake: bigint,
   ): Promise<AcceptedReading[]> {
     this.minStakes.push(minStake)
-    return Promise.resolve([])
+    return Promise.resolve(
+      this.readings.filter((one) => one.measuredAt >= from && one.measuredAt < to),
+    )
   }
   /** No day is closed yet, so every due day is closed by this cycle. */
   dayRecord(): Promise<DayRow | null> {
@@ -225,7 +233,13 @@ describe('the order of a cycle', () => {
       'settlePolicy',
       'closePolicy',
     ])
-    expect(summarise(report)).toEqual({ submitted: 2, settled: 1, closed: 1, excluded: 0, failed: 0 })
+    expect(summarise(report)).toEqual({
+      submitted: 2,
+      settled: 1,
+      closed: 1,
+      excluded: 0,
+      failed: 0,
+    })
   })
 
   it('settles against the mint the pool publishes, not one it was told', async () => {
@@ -502,5 +516,213 @@ describe('the registry in a cycle — T076', () => {
     // A worker holding its own copy of the minimum would disagree with the
     // program the first time the authority changed it.
     expect(store.minStakes).toEqual([1_000_000n, 1_000_000n])
+  })
+})
+
+/**
+ * `FR-043`, `FR-044`, `T043` — the reference beside the money.
+ *
+ * The checker has its own tests; what only exists here is where it sits. The
+ * day on chain is the sensors' median whatever the reference says of it, a
+ * payout is owed on the sensors' run whatever the reference says of its days,
+ * and a reference that is down or does not answer leaves both where they were.
+ */
+describe('the reference in a cycle — FR-043, FR-044', () => {
+  const HOUR_MS = 3_600_000
+  // Days 0 and 1 are over and their forecast has settled; day 2 is not over.
+  const NOW = new Date('2026-08-03T12:00:01Z')
+
+  /** Three operators, every hour of days 0 and 1, and not a drop between them. */
+  function dryReadings(): AcceptedReading[] {
+    const readings: AcceptedReading[] = []
+    let counter = 0n
+    for (let hour = 0; hour < 48; hour += 1) {
+      for (const seed of [1, 2, 3]) {
+        counter += 1n
+        readings.push({
+          sensorPubkey: encodeBase58(new Uint8Array(32).fill(seed)),
+          operator: `operator-${seed}`,
+          slotInCell: seed - 1,
+          valueX100: 0,
+          measuredAt: new Date(GENESIS.getTime() + hour * HOUR_MS + 1_800_000),
+          counter,
+          signature: 'signature',
+        })
+      }
+    }
+    return readings
+  }
+
+  /** Two millimetres an hour at the cell's centre — every day wet, by a lot. */
+  const downpour: ReferenceSource = {
+    hours(_cellId, from, to) {
+      const hours: ReferenceHour[] = []
+      for (let at = from.getTime(); at < to.getTime(); at += HOUR_MS) {
+        hours.push({ hourStart: new Date(at), valueX100: 200 })
+      }
+      return Promise.resolve(hours)
+    },
+  }
+
+  /**
+   * The days this cycle put on chain, as the database would hand them to the
+   * reference — and a note in `events` of when it was asked.
+   */
+  function referenceStoreOver(days: Store, events: string[]): ReferenceStore {
+    const judged = new Set<number>()
+    return {
+      pendingDays() {
+        events.push('reference')
+        const pending: PendingReferenceDay[] = days.saved
+          .filter((row) => days.submittedDays.includes(row.dayIndex) && !judged.has(row.dayIndex))
+          .map(({ cellId, dayIndex, state, rainfallX100 }) => ({
+            cellId,
+            dayIndex,
+            state,
+            rainfallX100,
+          }))
+        return Promise.resolve(pending)
+      },
+      saveReference(_hours, verdicts) {
+        for (const one of verdicts) judged.add(one.dayIndex)
+        return Promise.resolve()
+      },
+      giveUp: () => Promise.resolve(0),
+    }
+  }
+
+  /** A cycle over two dry days and a policy they trigger, with `reference` or none. */
+  async function cycleWith(
+    reference?: (days: Store, events: string[]) => NonNullable<CycleDeps['reference']>,
+  ) {
+    const events: string[] = []
+    const ownChain = new Chain()
+    const days = new Store()
+    days.readings = dryReadings()
+    days.window = twoDryDays()
+    const submit = ownChain.submit.bind(ownChain)
+    ownChain.submit = (instruction) => {
+      events.push(decodeInstruction(instruction.data)?.name ?? 'undecodable')
+      return submit(instruction)
+    }
+    const report = await runCycle(
+      {
+        ...deps,
+        store: days,
+        submitter: ownChain,
+        policies: { openPolicies: () => Promise.resolve([policy(1, key(20), 1)]) },
+        ...(reference === undefined ? {} : { reference: reference(days, events) }),
+      },
+      NOW,
+    )
+    return { report, sent: ownChain.sent, saved: days.saved, events }
+  }
+
+  it('a reference that calls every day wet changes nothing the chain is sent', async () => {
+    const without = await cycleWith()
+    const disputed = await cycleWith((days, events) =>
+      referenceChecker({ store: referenceStoreOver(days, events), source: downpour }),
+    )
+
+    // Every day was judged against the sensors, and lost the argument on paper only.
+    expect(disputed.report.reference).toMatchObject({
+      status: 'checked',
+      cells: [{ cellId: CELL_ID, status: 'checked', disputed: 2, agrees: 0 }],
+    })
+    // The days the sensors measured, dry and on chain, as they are without it.
+    expect(disputed.saved.map((row) => [row.state, row.rainfallX100])).toEqual([
+      [DayState.Dry, 0],
+      [DayState.Dry, 0],
+    ])
+    expect(disputed.saved).toEqual(without.saved)
+    expect(disputed.sent).toEqual(without.sent)
+    // And the reference was asked after the money, not before it.
+    expect(disputed.events).toEqual([
+      'submitDayRecord',
+      'submitDayRecord',
+      'settlePolicy',
+      'reference',
+    ])
+  })
+
+  it('a window of disputed days still pays on the sensors’ run, and closes the same', async () => {
+    const sentFor = async (window: RecordedDay[]) => {
+      chain = new Chain()
+      store = new Store()
+      store.window = window
+      await runCycle(
+        {
+          ...deps,
+          store,
+          submitter: chain,
+          policies: {
+            openPolicies: () => Promise.resolve([policy(1, key(20), 1), policy(5, key(21), 2)]),
+          },
+        },
+        new Date('2026-08-03T00:00:01Z'),
+      )
+      return chain.sent
+    }
+    const undisputed = await sentFor(twoDryDays())
+    // What `dayRecords` hands settlement once the reference has spoken.
+    const disputed = await sentFor(
+      twoDryDays().map((row) => ({
+        ...row,
+        reference: { state: 'disputed' as const, rainfallX100: 4_800 },
+      })),
+    )
+
+    expect(chain.names).toEqual([
+      'submitDayRecord',
+      'submitDayRecord',
+      'settlePolicy',
+      'closePolicy',
+    ])
+    expect(disputed).toEqual(undisputed)
+  })
+
+  it('a reference that does not answer keeps the cycle no longer than its budget, and the money moves', async () => {
+    const without = await cycleWith()
+    const started = performance.now()
+    const silent = await cycleWith((days, events) =>
+      referenceChecker({
+        store: referenceStoreOver(days, events),
+        source: { hours: () => new Promise(() => {}) },
+        budgetMs: 40,
+      }),
+    )
+    const took = performance.now() - started
+
+    expect(took).toBeLessThan(1_000)
+    expect(silent.report.reference).toMatchObject({
+      status: 'checked',
+      cells: [{ cellId: CELL_ID, status: 'failed' }],
+    })
+    expect(silent.sent).toEqual(without.sent)
+    expect(summarise(silent.report)).toEqual({
+      submitted: 2,
+      settled: 1,
+      closed: 0,
+      excluded: 0,
+      failed: 0,
+    })
+  })
+
+  it('a reference whose database is down fails its attempt, and the money moves', async () => {
+    const without = await cycleWith()
+    const down = await cycleWith(() =>
+      referenceChecker({
+        store: {
+          pendingDays: () => Promise.reject(new Error('db down')),
+          saveReference: () => Promise.reject(new Error('db down')),
+          giveUp: () => Promise.reject(new Error('db down')),
+        },
+        source: downpour,
+      }),
+    )
+
+    expect(down.report.reference).toMatchObject({ status: 'failed' })
+    expect(down.sent).toEqual(without.sent)
+    expect(summarise(down.report).failed).toBe(0)
   })
 })

@@ -137,6 +137,23 @@ describe('openMeteoSource', () => {
     ])
   })
 
+  it('lets go of the request when the attempt does', async () => {
+    let seen: AbortSignal | undefined
+    const call = ((_: string | URL | Request, init?: RequestInit) => {
+      seen = init?.signal ?? undefined
+      return new Promise<Response>(() => {})
+    }) as typeof fetch
+    const controller = new AbortController()
+    void openMeteoSource('https://reference.test/v1/forecast', call)
+      .hours(CELL, startOf(3), startOf(4), controller.signal)
+      .catch(() => {})
+    await Promise.resolve()
+    expect(seen?.aborted).toBe(false)
+    controller.abort(new Error('out of budget'))
+    // The request's own timeout still stands beside it.
+    expect(seen?.aborted).toBe(true)
+  })
+
   it('fails on an answer that is not one', async () => {
     await expect(
       answering({ error: true, reason: 'x' }, 400).source.hours(CELL, startOf(3), startOf(4)),
@@ -212,6 +229,7 @@ describe('referenceChecker', () => {
         { cellId: CELL, status: 'checked', agrees: 1, disputed: 1, unchecked: 0, pending: 0 },
         { cellId: OTHER, status: 'checked', agrees: 1, disputed: 0, unchecked: 0, pending: 0 },
       ],
+      deferred: 0,
     })
     // Three days of hours for the first cell, all kept for the trace.
     expect(memory.saved[0]?.hours).toHaveLength(72)
@@ -243,7 +261,13 @@ describe('referenceChecker', () => {
     )
     expect(asked).toEqual([])
     expect(memory.gaveUp).toEqual([null])
-    expect(report).toEqual({ status: 'checked', gaveUp: 2, applies: false, cells: [] })
+    expect(report).toEqual({
+      status: 'checked',
+      gaveUp: 2,
+      applies: false,
+      cells: [],
+      deferred: 0,
+    })
   })
 
   it('leaves a cell pending when the source fails, and still checks the others', async () => {
@@ -284,5 +308,110 @@ describe('referenceChecker', () => {
     expect(await checker.checkIfDue(now, clock, 100)).not.toBeNull()
     expect(await checker.checkIfDue(new Date(now.getTime() + 599_999), clock, 100)).toBeNull()
     expect(await checker.checkIfDue(new Date(now.getTime() + 600_000), clock, 100)).not.toBeNull()
+  })
+})
+
+/**
+ * `FR-044` with a source that does not fail, but does not answer either. The
+ * step runs inside the cycle, so the time it takes is time no day is closed
+ * and no policy settled; what bounds it is the attempt's budget, not the
+ * source's good behaviour.
+ */
+describe('referenceChecker — the budget of an attempt, FR-044', () => {
+  const now = new Date(startOf(9).getTime() + 6 * HOUR_MS)
+  // Three cells in the order the checker sorts them; no centre is needed.
+  const [A, B, C] = [1n, 2n, 3n]
+  const BUDGET_MS = 40
+
+  /** A source that never answers for `stuck`, and ignores its signal while it does not. */
+  function hangingOn(stuck: bigint) {
+    const asked: bigint[] = []
+    const signals: AbortSignal[] = []
+    const source: ReferenceSource = {
+      hours(cellId, _from, _to, signal) {
+        asked.push(cellId)
+        if (signal !== undefined) signals.push(signal)
+        if (cellId === stuck) return new Promise(() => {})
+        return Promise.resolve(hoursOf(5, 5, () => 0))
+      },
+    }
+    return { source, asked, signals }
+  }
+
+  it('lets a cycle go after its budget however long the source would take', async () => {
+    const memory = memoryStore([dry(A, 5), dry(B, 5), dry(C, 5)])
+    const { source, signals } = hangingOn(A)
+    const started = performance.now()
+    const report = await referenceChecker({
+      store: memory.store,
+      source,
+      budgetMs: BUDGET_MS,
+    }).checkIfDue(now, clock, 100)
+    const took = performance.now() - started
+
+    // The source would have kept it for ever; the budget is what returned it.
+    expect(took).toBeGreaterThanOrEqual(BUDGET_MS - 5)
+    expect(took).toBeLessThan(1_000)
+    expect(report).toMatchObject({
+      status: 'checked',
+      cells: [{ cellId: A, status: 'failed' }],
+      deferred: 2,
+    })
+    expect(signals[0]?.aborted).toBe(true)
+    // No day was decided for want of an answer: all three wait, none unchecked.
+    expect(memory.left()).toEqual([dry(A, 5), dry(B, 5), dry(C, 5)])
+    expect(memory.gaveUp).toEqual([2])
+  })
+
+  it('starts the next attempt after the cell it stopped at, so one cell cannot starve the rest', async () => {
+    const memory = memoryStore([dry(A, 5), dry(B, 5), dry(C, 5)])
+    const { source, asked } = hangingOn(A)
+    const checker = referenceChecker({
+      store: memory.store,
+      source,
+      budgetMs: BUDGET_MS,
+      everyMs: 600_000,
+    })
+    await checker.checkIfDue(now, clock, 100)
+    const second = await checker.checkIfDue(new Date(now.getTime() + 600_000), clock, 100)
+
+    expect(asked).toEqual([A, B, C, A])
+    expect(second).toMatchObject({
+      status: 'checked',
+      cells: [
+        { cellId: B, status: 'checked', agrees: 1 },
+        { cellId: C, status: 'checked', agrees: 1 },
+        { cellId: A, status: 'failed' },
+      ],
+      deferred: 0,
+    })
+    expect(memory.left()).toEqual([dry(A, 5)])
+  })
+
+  it('asks no cell once the budget is spent, and says how many wait', async () => {
+    const memory = memoryStore([dry(A, 5), dry(B, 5), dry(C, 5)])
+    let clockMs = 0
+    const { source, asked } = countingSource(() => {
+      // Every answer takes half the budget.
+      clockMs += 500
+      return hoursOf(5, 5, () => 0)
+    })
+    const report = await referenceChecker({
+      store: memory.store,
+      source,
+      budgetMs: 1_000,
+      elapsed: () => clockMs,
+    }).checkIfDue(now, clock, 100)
+
+    expect(asked.map((one) => one.cellId)).toEqual([A, B])
+    expect(report).toMatchObject({ status: 'checked', deferred: 1 })
+    expect(memory.left()).toEqual([dry(C, 5)])
+  })
+
+  it('refuses a budget that is not a positive whole number of milliseconds', () => {
+    const store = memoryStore([]).store
+    const source = countingSource(() => []).source
+    expect(() => referenceChecker({ store, source, budgetMs: 0 })).toThrow(RangeError)
+    expect(() => referenceChecker({ store, source, budgetMs: 1.5 })).toThrow(RangeError)
   })
 })

@@ -185,7 +185,8 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
         const summary = summarise(report)
         const line = { ...summary, aggregatorMatches: report.aggregatorMatches }
         if (summary.failed > 0) log.warn(line, 'cycle finished with failures')
-        else if (summary.submitted + summary.settled + summary.closed + summary.excluded > 0) log.info(line, 'cycle')
+        else if (summary.submitted + summary.settled + summary.closed + summary.excluded > 0)
+          log.info(line, 'cycle')
         else log.debug(line, 'cycle')
 
         for (const read of report.rewards ?? []) {
@@ -219,6 +220,12 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
             log.info(
               { gaveUp: report.reference.gaveUp, applies: report.reference.applies },
               'days left without a reference check',
+            )
+          }
+          if (report.reference.deferred > 0) {
+            log.info(
+              { deferred: report.reference.deferred },
+              'the reference check ran out of time, the rest of the cells wait for the next attempt',
             )
           }
         }
