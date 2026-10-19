@@ -388,6 +388,26 @@ describe('referenceChecker — the budget of an attempt, FR-044', () => {
     expect(memory.left()).toEqual([dry(A, 5)])
   })
 
+  it('ends the attempt when its timer does, even before the clock agrees', async () => {
+    // A timer can fire a fraction of a millisecond before the clock reads the
+    // deadline (it did on CI); a clock that never moves is that, at its worst.
+    const memory = memoryStore([dry(A, 5), dry(B, 5), dry(C, 5)])
+    const { source, asked } = hangingOn(A)
+    const report = await referenceChecker({
+      store: memory.store,
+      source,
+      budgetMs: BUDGET_MS,
+      elapsed: () => 0,
+    }).checkIfDue(now, clock, 100)
+
+    expect(asked).toEqual([A])
+    expect(report).toMatchObject({
+      status: 'checked',
+      cells: [{ cellId: A, status: 'failed' }],
+      deferred: 2,
+    })
+  })
+
   it('asks no cell once the budget is spent, and says how many wait', async () => {
     const memory = memoryStore([dry(A, 5), dry(B, 5), dry(C, 5)])
     let clockMs = 0

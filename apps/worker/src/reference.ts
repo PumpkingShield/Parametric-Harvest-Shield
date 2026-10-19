@@ -192,12 +192,19 @@ function asError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause))
 }
 
-/** `work`, or a rejection once `ms` have passed — whichever comes first. */
+/** The attempt's time ran out while a cell was being asked. */
+class BudgetSpent extends Error {
+  constructor() {
+    super('the reference did not answer within the budget of the attempt')
+  }
+}
+
+/** `work`, or a `BudgetSpent` once `ms` have passed — whichever comes first. */
 async function within<T>(work: Promise<T>, ms: number, controller: AbortController): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      const error = new Error(`the reference did not answer within the budget of the attempt`)
+      const error = new BudgetSpent()
       controller.abort(error)
       reject(error)
     }, ms)
@@ -323,6 +330,10 @@ export function referenceChecker(deps: ReferenceCheckerDeps): ReferenceChecker {
             })
           } catch (cause) {
             cells.push({ cellId, status: 'failed', error: asError(cause) })
+            // The timer is the budget's end, not a reading of the clock: a
+            // timer may fire a fraction of a millisecond before `elapsed()`
+            // agrees, and the cells after this one wait for the next attempt.
+            if (cause instanceof BudgetSpent) break
           }
         }
         return { status: 'checked', gaveUp, applies: true, cells, deferred: queue.length - asked }
