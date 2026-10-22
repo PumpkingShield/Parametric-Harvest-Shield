@@ -113,3 +113,51 @@ export function judgeDay(
     ? ReferenceState.Disputed
     : ReferenceState.Agrees
 }
+
+/**
+ * `FR-045` — when a cell's disagreement with the reference is systematic.
+ *
+ * **Days the cell called dry that the reference disputed**, at least
+ * `INVESTIGATION_DISPUTED_DAYS` of them within `INVESTIGATION_WINDOW_DAYS`
+ * back from today. One-sided, because a faked drought is the only lie that
+ * pays: of the 135 honest days disputed in the measurement behind
+ * `DISPUTE_TOLERANCE_X100`, only 27 go this way, and no honest cell has more
+ * than two of them in any window up to a whole season. Measured on the same
+ * gauges (`T044`):
+ *
+ * | rule (dry-side disputes) | honest cells alarmed | one faked 14-day run caught | two | three |
+ * |---|---|---|---|---|
+ * | 2 in 90 days  | 6 of 40 | 38.5 % | 68.9 % | 82.5 % |
+ * | **3 in 90 days** | **0 of 40** | 14.5 % | 42.3 % | 64.1 % |
+ * | 3 in 60 days  | 0 of 40 | 11.3 % | 32.1 % | 52.5 % |
+ *
+ * **What it cannot see.** In 41.9 % of the placements where a faked run
+ * changes the outcome, no faked day had the reference at the tolerance or
+ * above: the model saw no rain worth disputing either. An operator who reads
+ * the reference can pick such a fortnight. The lever catches the cell that
+ * does it again, not the first time — which is what it is for: it moves
+ * future underwriting, and a policy already sold is paid by the median
+ * (`FR-043`).
+ *
+ * Twinned with the program, which checks its half of the rule on chain: the
+ * days are named, inside the window, and dry in the cell's own log.
+ */
+export const INVESTIGATION_WINDOW_DAYS = 90
+export const INVESTIGATION_DISPUTED_DAYS = 3
+
+/**
+ * The days that put a cell under investigation on `today`, oldest first — or
+ * null when the rule has not fired. `disputedDryDays` are the cell's days with
+ * a dry class and a `disputed` verdict; any order, repeats ignored.
+ */
+export function investigationDays(
+  disputedDryDays: readonly number[],
+  today: number,
+): number[] | null {
+  const inWindow = [
+    ...new Set(
+      disputedDryDays.filter((day) => day < today && today - day <= INVESTIGATION_WINDOW_DAYS),
+    ),
+  ].sort((a, b) => a - b)
+  return inWindow.length >= INVESTIGATION_DISPUTED_DAYS ? inWindow : null
+}

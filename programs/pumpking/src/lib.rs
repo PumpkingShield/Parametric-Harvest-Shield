@@ -136,4 +136,21 @@ pub mod pumpking {
     pub fn move_sensor(ctx: Context<MoveSensor>, cell_id: u64) -> Result<()> {
         instructions::sensor::move_sensor(ctx, cell_id)
     }
+
+    /// Puts a cell under investigation — `FR-045`: the cell recorded the
+    /// published number of days dry that the reference measured rain on, so
+    /// no new policy is sold there. Policies already sold are untouched. The
+    /// aggregator's key, as soon as the rule fires.
+    pub fn open_investigation(
+        ctx: Context<OpenInvestigation>,
+        params: OpenInvestigationParams,
+    ) -> Result<()> {
+        instructions::investigation::open_investigation(ctx, params)
+    }
+
+    /// Takes a cell out of investigation and back on sale — the pool
+    /// authority's judgement, never a timer.
+    pub fn close_investigation(ctx: Context<CloseInvestigation>, cell_id: u64) -> Result<()> {
+        instructions::investigation::close_investigation(ctx, cell_id)
+    }
 }

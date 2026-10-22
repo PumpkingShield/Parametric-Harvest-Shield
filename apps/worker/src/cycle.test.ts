@@ -238,6 +238,7 @@ describe('the order of a cycle', () => {
       settled: 1,
       closed: 1,
       excluded: 0,
+      investigated: 0,
       failed: 0,
     })
   })
@@ -431,6 +432,11 @@ describe('summarise', () => {
       registry: null,
       rewards: null,
       reference: null,
+      investigated: [
+        { cellId: 1n, status: 'failed' as const, days: [3, 8, 14], error: new Error('x') },
+        { cellId: 2n, status: 'opened' as const, days: [3, 8, 14], txSignature: 'tx' },
+        { cellId: 3n, status: 'already-open' as const, days: [3, 8, 14] },
+      ],
     }
 
     expect(summarise(failed)).toEqual({
@@ -438,7 +444,8 @@ describe('summarise', () => {
       settled: 0,
       closed: 0,
       excluded: 1,
-      failed: 3,
+      investigated: 1,
+      failed: 4,
     })
   })
 })
@@ -704,6 +711,7 @@ describe('the reference in a cycle — FR-043, FR-044', () => {
       settled: 1,
       closed: 0,
       excluded: 0,
+      investigated: 0,
       failed: 0,
     })
   })
@@ -724,5 +732,63 @@ describe('the reference in a cycle — FR-043, FR-044', () => {
     expect(down.report.reference).toMatchObject({ status: 'failed' })
     expect(down.sent).toEqual(without.sent)
     expect(summarise(down.report).failed).toBe(0)
+  })
+})
+
+describe('an investigation in a cycle — FR-045, T044', () => {
+  const NOW = new Date(GENESIS.getTime() + 20 * 86_400_000 + 1_000)
+  /** A reference attempt that judged nothing new, noted in `events`. */
+  const attempted = (events: string[]): NonNullable<CycleDeps['reference']> => ({
+    checkIfDue() {
+      events.push('reference')
+      return Promise.resolve({
+        status: 'checked',
+        gaveUp: 0,
+        applies: true,
+        cells: [],
+        deferred: 0,
+      })
+    },
+  })
+  const investigation = (events: string[]): NonNullable<CycleDeps['investigation']> => ({
+    store: {
+      disputedDryDays() {
+        events.push('investigation')
+        return Promise.resolve([{ cellId: CELL_ID, days: [3, 8, 14] }])
+      },
+    },
+    chain: { underInvestigation: () => Promise.resolve(false) },
+  })
+
+  it('looks at the disputes with each reference attempt, after it, and takes the cell off sale', async () => {
+    const events: string[] = []
+    store.cells = []
+
+    const report = await runCycle(
+      { ...deps, reference: attempted(events), investigation: investigation(events) },
+      NOW,
+    )
+
+    expect(events).toEqual(['reference', 'investigation'])
+    expect(chain.names).toEqual(['openInvestigation'])
+    expect(report.investigated).toMatchObject([
+      { cellId: CELL_ID, status: 'opened', days: [3, 8, 14] },
+    ])
+    expect(summarise(report)).toMatchObject({ investigated: 1, failed: 0 })
+  })
+
+  it('looks at nothing when no reference attempt was due', async () => {
+    const events: string[] = []
+    store.cells = []
+    const idle: NonNullable<CycleDeps['reference']> = { checkIfDue: () => Promise.resolve(null) }
+
+    const report = await runCycle(
+      { ...deps, reference: idle, investigation: investigation(events) },
+      NOW,
+    )
+
+    expect(events).toEqual([])
+    expect(chain.sent).toEqual([])
+    expect(report.investigated).toEqual([])
   })
 })

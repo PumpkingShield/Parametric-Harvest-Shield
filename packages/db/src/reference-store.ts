@@ -1,4 +1,4 @@
-import type { DayClassification, ReferenceStateName } from '@pumpking/shared'
+import { type DayClassification, DayState, type ReferenceStateName } from '@pumpking/shared'
 import { and, asc, eq, gte, isNotNull, lt, type SQL, sql } from 'drizzle-orm'
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { cellDays, referenceHours } from './schema.ts'
@@ -87,8 +87,50 @@ function excluded(column: string): SQL {
   return sql.raw(`excluded.${column}`)
 }
 
-export function pgReferenceStore(db: PostgresJsDatabase<Record<string, never>>): ReferenceStore {
+/** A cell's days that the cell called dry and the reference disputed — `FR-045`. */
+export type DisputedDryDays = { cellId: bigint; days: number[] }
+
+/** What the investigation step reads — `T044`. */
+export interface InvestigationStore {
+  /** Disputed dry days from `fromDay` on, grouped by cell, oldest first. */
+  disputedDryDays(fromDay: number): Promise<DisputedDryDays[]>
+}
+
+type Selects = Pick<PostgresJsDatabase<Record<string, never>>, 'select'>
+
+/**
+ * The read behind the rule: one-sided, so a day the cell called wet and the
+ * reference dry never counts — it is no claim of drought.
+ */
+export function disputedDryDaysQuery(db: Selects, fromDay: number) {
+  return db
+    .select({ cellId: cellDays.cellId, dayIndex: cellDays.dayIndex })
+    .from(cellDays)
+    .where(
+      and(
+        gte(cellDays.dayIndex, fromDay),
+        eq(cellDays.state, DayState.Dry),
+        eq(cellDays.referenceState, 'disputed'),
+      ),
+    )
+    .orderBy(asc(cellDays.cellId), asc(cellDays.dayIndex))
+}
+
+/** Both reads of `cell_days` the reference drives — the check and the investigation. */
+export function pgReferenceStore(
+  db: PostgresJsDatabase<Record<string, never>>,
+): ReferenceStore & InvestigationStore {
   return {
+    async disputedDryDays(fromDay) {
+      const byCell = new Map<bigint, number[]>()
+      for (const row of await disputedDryDaysQuery(db, fromDay)) {
+        const days = byCell.get(row.cellId) ?? []
+        days.push(row.dayIndex)
+        byCell.set(row.cellId, days)
+      }
+      return [...byCell].map(([cellId, days]) => ({ cellId, days }))
+    },
+
     async pendingDays(fromDay) {
       return await db
         .select({

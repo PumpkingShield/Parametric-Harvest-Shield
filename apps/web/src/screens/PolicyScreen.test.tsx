@@ -34,6 +34,7 @@ const POLICY: Policy = {
   state: 'active',
   spell: 3,
   recordedDays: 4,
+  cellUnderInvestigation: false,
 }
 
 const ROWS: Day[] = [
@@ -197,5 +198,23 @@ describe('PolicyView — a closed policy whose days are not on record here', () 
     )
     expect(fresh).toContain('>0<')
     expect(fresh).toContain('not recorded yet')
+  })
+})
+
+describe('PolicyView — a cell under investigation (FR-045)', () => {
+  const html = (policy: Policy) =>
+    renderToStaticMarkup(<PolicyView policy={policy} rows={[]} decimals={6} />)
+
+  it('tells a live policy it is not affected', () => {
+    const markup = html({ ...POLICY, cellUnderInvestigation: true })
+    expect(markup).toContain('This cell is under investigation')
+    expect(markup).toContain('Yours is not affected')
+  })
+
+  it('says nothing to a cell that is not, or to a policy already closed', () => {
+    expect(html(POLICY)).not.toContain('under investigation')
+    expect(html({ ...POLICY, state: 'paidOut', cellUnderInvestigation: true })).not.toContain(
+      'under investigation',
+    )
   })
 })

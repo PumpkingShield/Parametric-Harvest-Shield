@@ -27,6 +27,7 @@ const POLICY: Policy = {
   state: 'active',
   spell: 3,
   recordedDays: 8,
+  cellUnderInvestigation: false,
 }
 
 function day(dayIndex: number, state: number, rainfallX100: number | null): Day {

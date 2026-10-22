@@ -4,6 +4,9 @@ import { DayState } from './day.ts'
 import { medianX100 } from './median.ts'
 import {
   DISPUTE_TOLERANCE_X100,
+  INVESTIGATION_DISPUTED_DAYS,
+  INVESTIGATION_WINDOW_DAYS,
+  investigationDays,
   judgeDay,
   type ReferenceHour,
   ReferenceState,
@@ -101,7 +104,7 @@ describe('the dispute tolerance on real gauges', () => {
         return []
       }
       const state = rainfallX100 <= DRY_THRESHOLD_X100 ? DayState.Dry : DayState.Wet
-      return [{ cell, cellDay: { state, rainfallX100 }, referenceX100 }]
+      return [{ cell, day, cellDay: { state, rainfallX100 }, referenceX100 }]
     })
   })
 
@@ -138,5 +141,64 @@ describe('the dispute tolerance on real gauges', () => {
       }),
     )
     expect(worst).toBeLessThan(1 / 14)
+  })
+
+  /**
+   * `FR-045`, `T044`: the rule that puts a cell under investigation, run over
+   * the same honest season one day at a time. Every cell is evaluated on every
+   * day of it, so "no honest cell fires" covers each day it could have.
+   */
+  const SEASON_DAYS = 183
+  const dryDisputes = (toleranceX100: number) =>
+    disputedAt(toleranceX100).filter((one) => one.cellDay.state === DayState.Dry)
+  const firesOn = (disputed: readonly { cell: string; day: number }[], cell: string) => {
+    const mine = disputed.filter((one) => one.cell === cell).map((one) => one.day)
+    for (let today = 1; today <= SEASON_DAYS; today += 1) {
+      if (investigationDays(mine, today) !== null) return true
+    }
+    return false
+  }
+
+  it('disputes a dry day on an honest cell only one time in 150', () => {
+    expect(dryDisputes(DISPUTE_TOLERANCE_X100)).toHaveLength(27)
+  })
+
+  it('puts no honest cell under investigation over the season', () => {
+    const disputed = dryDisputes(DISPUTE_TOLERANCE_X100)
+    const fired = gauges.cells.filter(({ cell }) => firesOn(disputed, cell))
+    expect(fired).toEqual([])
+  })
+
+  it('would put six honest cells under investigation one disputed day sooner', () => {
+    // The published count is the lowest with no honest cell in it.
+    const disputed = dryDisputes(DISPUTE_TOLERANCE_X100)
+    const sooner = gauges.cells.filter(({ cell }) => {
+      const mine = disputed.filter((one) => one.cell === cell).map((one) => one.day)
+      for (let today = 1; today <= SEASON_DAYS; today += 1) {
+        const inWindow = mine.filter(
+          (day) => day < today && today - day <= INVESTIGATION_WINDOW_DAYS,
+        )
+        if (inWindow.length >= INVESTIGATION_DISPUTED_DAYS - 1) return true
+      }
+      return false
+    })
+    expect(sooner).toHaveLength(6)
+  })
+})
+
+describe('investigationDays', () => {
+  it('fires on the published count of disputed dry days inside the window', () => {
+    expect(investigationDays([3, 8], 20)).toBeNull()
+    expect(investigationDays([14, 3, 8], 20)).toEqual([3, 8, 14])
+  })
+
+  it('counts a day once however often it is named', () => {
+    expect(investigationDays([3, 3, 8], 20)).toBeNull()
+  })
+
+  it('looks one coverage window back from today, and not at today', () => {
+    expect(investigationDays([5, 9, 50], 95)).toEqual([5, 9, 50])
+    expect(investigationDays([5, 9, 50], 96)).toBeNull()
+    expect(investigationDays([9, 50, 96], 96)).toBeNull()
   })
 })

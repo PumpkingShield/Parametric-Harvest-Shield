@@ -1,5 +1,7 @@
 import type { Idl } from '@coral-xyz/anchor'
 import {
+  INVESTIGATION_DISPUTED_DAYS,
+  INVESTIGATION_WINDOW_DAYS,
   OUTLIER_FLOOR_X100,
   OUTLIER_MIN_JUDGED,
   OUTLIER_REL_BPS,
@@ -33,6 +35,8 @@ describe('constants twinned with @pumpking/shared', () => {
     ['outlierMinJudged', OUTLIER_MIN_JUDGED],
     ['rewardScheduleDays', REWARD_SCHEDULE_DAYS],
     ['rewardWeightUnit', REWARD_WEIGHT_UNIT],
+    ['investigationWindowDays', INVESTIGATION_WINDOW_DAYS],
+    ['investigationDisputedDays', INVESTIGATION_DISPUTED_DAYS],
   ])('agrees with the program on %s', (name, value) => {
     expect(programConstant(name)).toBe(String(value))
   })

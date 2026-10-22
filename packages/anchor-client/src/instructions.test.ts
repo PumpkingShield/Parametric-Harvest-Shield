@@ -5,6 +5,7 @@ import {
   buildInstruction,
   claimRewardInstruction,
   claimUnclaimedPayoutInstruction,
+  closeInvestigationInstruction,
   closePolicyInstruction,
   DayState,
   depositCapitalInstruction,
@@ -12,6 +13,7 @@ import {
   initializePoolInstruction,
   issuePolicyInstruction,
   moveSensorInstruction,
+  openInvestigationInstruction,
   type PoolParams,
   registerSensorInstruction,
   reinstateSensorInstruction,
@@ -1008,5 +1010,53 @@ describe('moveSensorInstruction', () => {
     ).toEqual([operator.toBase58(), sensorKey.toBase58()])
     expect(instruction.keys[4]?.isWritable).toBe(true)
     expect(instruction.keys[5]?.isWritable).toBe(false)
+  })
+})
+
+describe('openInvestigationInstruction', () => {
+  const cellId = 0x871e701b3ffffffn
+  const input = { aggregator, cellId, disputedDays: [3, 8, 14], programId }
+
+  it('round-trips the cell and the disputed days, oldest first', () => {
+    const { name, data } = decode(openInvestigationInstruction(input).data)
+    expect(name).toBe('openInvestigation')
+    const encoded = data.params as Record<string, unknown>
+    expect(String(encoded.cellId)).toBe(cellId.toString())
+    expect(encoded.disputedDays).toEqual([3, 8, 14])
+  })
+
+  it('derives the pool and the cell and has the aggregator alone sign', () => {
+    const { keys } = openInvestigationInstruction(input)
+    expect(accountNames('openInvestigation')).toEqual(['aggregator', 'pool', 'cell'])
+    expect(keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      aggregator.toBase58(),
+      poolPda(programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+    ])
+    expect(keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58())).toEqual([
+      aggregator.toBase58(),
+    ])
+    expect(keys.filter((meta) => meta.isWritable).map((meta) => meta.pubkey.toBase58())).toEqual([
+      cellPda(cellId, programId).address.toBase58(),
+    ])
+  })
+})
+
+describe('closeInvestigationInstruction', () => {
+  const cellId = 0x871e701b3ffffffn
+
+  it('takes the cell as its argument and has the authority alone sign', () => {
+    const instruction = closeInvestigationInstruction({ authority, cellId, programId })
+    const { name, data } = decode(instruction.data)
+    expect(name).toBe('closeInvestigation')
+    expect(String(data.cellId)).toBe(cellId.toString())
+    expect(instruction.keys.map((meta) => meta.pubkey.toBase58())).toEqual([
+      authority.toBase58(),
+      poolPda(programId).address.toBase58(),
+      cellPda(cellId, programId).address.toBase58(),
+    ])
+    expect(
+      instruction.keys.filter((meta) => meta.isSigner).map((meta) => meta.pubkey.toBase58()),
+    ).toEqual([authority.toBase58()])
   })
 })

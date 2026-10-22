@@ -252,6 +252,75 @@ export const PUMPKING_IDL: Pumpking = {
       "args": []
     },
     {
+      "name": "closeInvestigation",
+      "docs": [
+        "Takes a cell out of investigation and back on sale — the pool",
+        "authority's judgement, never a timer."
+      ],
+      "discriminator": [
+        20,
+        12,
+        227,
+        123,
+        92,
+        211,
+        27,
+        59
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "cellId"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "cellId",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "closePolicy",
       "docs": [
         "Closes a policy whose window ended without the event — `FR-028`. No",
@@ -1069,6 +1138,78 @@ export const PUMPKING_IDL: Pumpking = {
         {
           "name": "cellId",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "openInvestigation",
+      "docs": [
+        "Puts a cell under investigation — `FR-045`: the cell recorded the",
+        "published number of days dry that the reference measured rain on, so",
+        "no new policy is sold there. Policies already sold are untouched. The",
+        "aggregator's key, as soon as the rule fires."
+      ],
+      "discriminator": [
+        71,
+        56,
+        160,
+        202,
+        228,
+        197,
+        115,
+        250
+      ],
+      "accounts": [
+        {
+          "name": "aggregator",
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cell",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  101,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.cell_id"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "openInvestigationParams"
+            }
+          }
         }
       ]
     },
@@ -2060,6 +2201,32 @@ export const PUMPKING_IDL: Pumpking = {
       ]
     },
     {
+      "name": "investigationClosed",
+      "discriminator": [
+        3,
+        204,
+        109,
+        200,
+        168,
+        254,
+        124,
+        150
+      ]
+    },
+    {
+      "name": "investigationOpened",
+      "discriminator": [
+        252,
+        226,
+        185,
+        37,
+        104,
+        0,
+        191,
+        232
+      ]
+    },
+    {
       "name": "payoutClaimed",
       "discriminator": [
         200,
@@ -2597,6 +2764,41 @@ export const PUMPKING_IDL: Pumpking = {
       "code": 6070,
       "name": "minStakeNotSet",
       "msg": "The minimum stake must be above zero: a free vote makes the cell limit zero"
+    },
+    {
+      "code": 6071,
+      "name": "cellUnderInvestigation",
+      "msg": "The cell is under investigation: no new policies are sold on it"
+    },
+    {
+      "code": 6072,
+      "name": "cellAlreadyUnderInvestigation",
+      "msg": "The cell is already under investigation"
+    },
+    {
+      "code": 6073,
+      "name": "cellNotUnderInvestigation",
+      "msg": "The cell is not under investigation"
+    },
+    {
+      "code": 6074,
+      "name": "notEnoughDisputedDays",
+      "msg": "An investigation needs at least the published number of disputed days"
+    },
+    {
+      "code": 6075,
+      "name": "disputedDaysNotOrdered",
+      "msg": "Disputed days must be listed in strictly increasing order"
+    },
+    {
+      "code": 6076,
+      "name": "disputedDayOutsideWindow",
+      "msg": "A disputed day lies outside the investigation window"
+    },
+    {
+      "code": 6077,
+      "name": "disputedDayNotDry",
+      "msg": "A disputed day must be one the cell recorded as dry"
     }
   ],
   "types": [
@@ -3179,6 +3381,70 @@ export const PUMPKING_IDL: Pumpking = {
               "any day never written before it, and the dust of the division."
             ],
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "investigationClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "dayIndex",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "investigationOpened",
+      "docs": [
+        "Emitted with the evidence: the trace and the methodology page name the",
+        "days, and anyone can hold them up against the reference."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "dayIndex",
+            "type": "u32"
+          },
+          {
+            "name": "disputedDays",
+            "type": {
+              "vec": "u32"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "openInvestigationParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cellId",
+            "type": "u64"
+          },
+          {
+            "name": "disputedDays",
+            "docs": [
+              "The days the cell recorded dry and the reference disputed, oldest",
+              "first, at least `INVESTIGATION_DISPUTED_DAYS` of them."
+            ],
+            "type": {
+              "vec": "u32"
+            }
           }
         ]
       }
@@ -4224,6 +4490,31 @@ export const PUMPKING_IDL: Pumpking = {
     }
   ],
   "constants": [
+    {
+      "name": "investigationDisputedDays",
+      "docs": [
+        "`FR-045`: days the cell called dry while the reference measured rain past",
+        "the dispute tolerance, within `INVESTIGATION_WINDOW_DAYS`, that open an",
+        "investigation. Measured, not chosen (`T044`): on forty honest CoCoRaHS",
+        "cells over a season none had more than two such days in any window, and a",
+        "cell that fakes a fortnight's drought two or three times is caught in 42 %",
+        "and 64 % of placements. Twinned in `@pumpking/shared` (`reference.ts`)."
+      ],
+      "type": "u32",
+      "value": "3"
+    },
+    {
+      "name": "investigationWindowDays",
+      "docs": [
+        "`FR-045`: how far back the disputed days that open an investigation may",
+        "lie — one coverage window, so \"systematic\" means \"within what one policy",
+        "on this cell could have been paid from\". A literal rather than the name,",
+        "because the IDL carries a constant's text; a test keeps the two equal.",
+        "Twinned in `@pumpking/shared` (`reference.ts`)."
+      ],
+      "type": "u32",
+      "value": "90"
+    },
     {
       "name": "outlierFloorX100",
       "docs": [

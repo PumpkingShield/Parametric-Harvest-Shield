@@ -2,6 +2,7 @@ import { Connection } from '@pumpking/anchor-client'
 import type {
   CellSlotStore,
   IntervalStore,
+  InvestigationStore,
   ReferenceStore,
   RegistryMirrorStore,
   RewardMirrorStore,
@@ -10,6 +11,7 @@ import type {
 import type { Logger } from 'pino'
 import { rpcDaySubmitter, rpcPoolSource } from './chain.ts'
 import { rpcExclusionSource } from './exclude.ts'
+import { rpcInvestigationSource } from './investigate.ts'
 import type { WorkerConfig } from './config.ts'
 import { type CycleDeps, type CycleReport, runCycle, summarise } from './cycle.ts'
 import { stalledAfterMs, type WorkerHealthState } from './health.ts'
@@ -80,7 +82,7 @@ export function rpcCycle(
   registry: RegistryMirrorStore,
   slots: CellSlotStore,
   rewards: RewardMirrorStore,
-  reference: ReferenceStore,
+  reference: ReferenceStore & InvestigationStore,
 ): CycleRunner {
   const connection = new Connection(config.rpcUrl, 'confirmed')
 
@@ -113,6 +115,10 @@ export function rpcCycle(
             store: reference,
             source: openMeteoSource(config.referenceUrl),
           }),
+          investigation: {
+            store: reference,
+            chain: rpcInvestigationSource(connection, config.programId),
+          },
         }),
   }
 
@@ -185,7 +191,14 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
         const summary = summarise(report)
         const line = { ...summary, aggregatorMatches: report.aggregatorMatches }
         if (summary.failed > 0) log.warn(line, 'cycle finished with failures')
-        else if (summary.submitted + summary.settled + summary.closed + summary.excluded > 0)
+        else if (
+          summary.submitted +
+            summary.settled +
+            summary.closed +
+            summary.excluded +
+            summary.investigated >
+          0
+        )
           log.info(line, 'cycle')
         else log.debug(line, 'cycle')
 
@@ -198,6 +211,18 @@ export function startWorker(options: StartWorkerOptions): WorkerRuntime {
           } else if (read.status === 'missing') {
             log.debug(at, 'the day’s transaction is not on the cluster yet')
           } else log.debug({ ...at, slots: read.slots }, 'day rewards read')
+        }
+
+        for (const one of report.investigated) {
+          // FR-045: a cell taken off sale is worth a line of its own; one that
+          // stays under investigation is the normal state until the authority
+          // closes it.
+          const at = { cellId: one.cellId.toString(), days: one.days }
+          if (one.status === 'opened') {
+            log.info({ ...at, txSignature: one.txSignature }, 'a cell is under investigation')
+          } else if (one.status === 'failed') {
+            log.warn({ ...at, err: one.error }, 'putting a cell under investigation failed')
+          } else log.debug(at, 'the cell is still under investigation')
         }
 
         if (report.reference?.status === 'failed') {

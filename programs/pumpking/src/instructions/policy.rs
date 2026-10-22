@@ -267,6 +267,14 @@ pub fn issue_policy(ctx: Context<IssuePolicy>, params: PolicyParams) -> Result<(
         .day_index(now)
         .ok_or(PumpkingError::DayIndexUnavailable)?;
 
+    // FR-045: the reference's one lever, and the only place it is pulled.
+    // Settlement never reads the flag — a policy sold here before it was
+    // raised is served by the median to the end of its window.
+    require!(
+        !ctx.accounts.cell.under_investigation,
+        PumpkingError::CellUnderInvestigation
+    );
+
     check_underwriting(
         &params,
         &ctx.accounts.pool,

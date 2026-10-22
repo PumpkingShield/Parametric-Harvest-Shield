@@ -170,6 +170,16 @@ export function runCaption(policy: Policy): string {
   }
 }
 
+/**
+ * `FR-045` — the cell is under investigation, said to the one person it does
+ * not change anything for. Only while the policy is live: a closed policy has
+ * nothing left the investigation could have touched, and nothing it did.
+ */
+export function investigationNote(policy: Policy): string | null {
+  if (!policy.cellUnderInvestigation || policy.state !== 'active') return null
+  return 'This cell is under investigation: on several days its sensors reported dry while the public weather reference measured rain, so no new policies are sold here for now. Yours is not affected — it pays on the sensors’ readings exactly as written, to the end of its cover period.'
+}
+
 /** The terms `FR-018` says a policy carries. */
 export function policyFacts(policy: Policy, decimals: number): [string, string][] {
   return [

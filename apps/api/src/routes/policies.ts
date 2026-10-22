@@ -1,5 +1,7 @@
 import {
   type Connection,
+  cellPda,
+  decodeCellState,
   decodePolicy,
   POLICY_DISCRIMINATOR,
   type PolicyAccount,
@@ -44,6 +46,12 @@ import { apiError } from '../errors.ts'
 export interface PolicyLookup {
   /** The policy at an address, or null when no policy lives there. */
   policyAt(address: string): Promise<PolicyAccount | null>
+  /**
+   * Whether the policy's cell is under investigation now — `FR-045`. False
+   * for a cell with no account: a cell nobody has written to was never put
+   * under investigation.
+   */
+  cellUnderInvestigation(cellId: bigint): Promise<boolean>
 }
 
 function startsWith(data: Uint8Array, prefix: Uint8Array): boolean {
@@ -70,6 +78,10 @@ export function rpcPolicyLookup(connection: Connection, programId?: PublicKey): 
       const data = Uint8Array.from(info.data)
       if (!startsWith(data, POLICY_DISCRIMINATOR)) return null
       return decodePolicy(data)
+    },
+    async cellUnderInvestigation(cellId) {
+      const info = await connection.getAccountInfo(cellPda(cellId, program).address)
+      return info === null ? false : decodeCellState(Uint8Array.from(info.data)).underInvestigation
     },
   }
 }
@@ -138,6 +150,12 @@ export type PolicyWire = {
    * second tells a farmer the rain fell.
    */
   recordedDays: number
+  /**
+   * `FR-045`: the cell sells no new cover while its readings are under
+   * investigation. Carried so the screen can say this policy is not touched by
+   * it — it is settled from the sensors' median to the end of its window.
+   */
+  cellUnderInvestigation: boolean
 }
 
 export type PoliciesRouteOptions = {
@@ -164,7 +182,10 @@ export function createPoliciesRoute(options: PoliciesRouteOptions): Hono {
     }
 
     const cellId = BigInt(policy.cellId.toString())
-    const rows = await store.dayRecords(cellId, policy.windowStartDay, policy.windowEndDay)
+    const [rows, cellUnderInvestigation] = await Promise.all([
+      store.dayRecords(cellId, policy.windowStartDay, policy.windowEndDay),
+      policies.cellUnderInvestigation(cellId),
+    ])
 
     const wire: PolicyWire = {
       policy: address,
@@ -180,6 +201,7 @@ export function createPoliciesRoute(options: PoliciesRouteOptions): Hono {
       state: policyStateName(policy.state),
       spell: spellInWindow(rows, policy.windowStartDay, policy.windowEndDay),
       recordedDays: rows.length,
+      cellUnderInvestigation,
     }
     return context.json(wire, 200)
   })

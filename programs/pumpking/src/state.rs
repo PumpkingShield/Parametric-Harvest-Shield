@@ -43,6 +43,23 @@ pub const DAY_LOG_LEN: usize = 128;
 /// The longest coverage window a policy may span, in days.
 pub const MAX_COVERAGE_DAYS: u32 = 90;
 
+/// `FR-045`: how far back the disputed days that open an investigation may
+/// lie — one coverage window, so "systematic" means "within what one policy
+/// on this cell could have been paid from". A literal rather than the name,
+/// because the IDL carries a constant's text; a test keeps the two equal.
+/// Twinned in `@pumpking/shared` (`reference.ts`).
+#[constant]
+pub const INVESTIGATION_WINDOW_DAYS: u32 = 90;
+
+/// `FR-045`: days the cell called dry while the reference measured rain past
+/// the dispute tolerance, within `INVESTIGATION_WINDOW_DAYS`, that open an
+/// investigation. Measured, not chosen (`T044`): on forty honest CoCoRaHS
+/// cells over a season none had more than two such days in any window, and a
+/// cell that fakes a fortnight's drought two or three times is caught in 42 %
+/// and 64 % of placements. Twinned in `@pumpking/shared` (`reference.ts`).
+#[constant]
+pub const INVESTIGATION_DISPUTED_DAYS: u32 = 3;
+
 /// The grid level sensors register on — `FR-060`: H3 res 7, ≈ 5.2 km².
 ///
 /// Checked at registration and nowhere else. A policy carries its own cell id

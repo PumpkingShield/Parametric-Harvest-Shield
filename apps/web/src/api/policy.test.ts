@@ -15,6 +15,7 @@ const POLICY = {
   state: 'active',
   spell: 18,
   recordedDays: 29,
+  cellUnderInvestigation: false,
 }
 
 const DAYS = {
@@ -47,6 +48,15 @@ describe('parsePolicy', () => {
     // `u64` does not survive a JSON number, so the route sends decimal strings.
     // A number here means somebody changed the wire and rounded a payout.
     expect(() => parsePolicy({ ...POLICY, payout: 120_000_000 })).toThrow(/not a policy/)
+  })
+
+  it('reads an answer from an API older than the investigation flag as not under investigation', () => {
+    const { cellUnderInvestigation: _flag, ...older } = POLICY
+    expect(parsePolicy(older).cellUnderInvestigation).toBe(false)
+    expect(parsePolicy({ ...POLICY, cellUnderInvestigation: true }).cellUnderInvestigation).toBe(
+      true,
+    )
+    expect(() => parsePolicy({ ...POLICY, cellUnderInvestigation: 'yes' })).toThrow(/not a policy/)
   })
 
   it('refuses anything that is not an object', () => {

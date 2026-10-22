@@ -48,6 +48,7 @@ function report(overrides: Partial<CycleReport> = {}): CycleReport {
     swept: null,
     registry: null,
     rewards: null,
+    investigated: [],
     reference: null,
     ...overrides,
   }
@@ -189,6 +190,7 @@ describe('startWorker', () => {
       settled: 0,
       closed: 0,
       excluded: 0,
+      investigated: 0,
       failed: 0,
     })
     expect(worker.state.lastSkipped).toBeNull()

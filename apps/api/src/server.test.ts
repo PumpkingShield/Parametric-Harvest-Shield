@@ -48,7 +48,10 @@ class Registry implements RegistryStore {
   }
 }
 
-const noPolicies: PolicyLookup = { policyAt: () => Promise.resolve(null) }
+const noPolicies: PolicyLookup = {
+  policyAt: () => Promise.resolve(null),
+  cellUnderInvestigation: () => Promise.resolve(false),
+}
 
 /** `T067`: nothing has published here yet, so every sensor starts at one. */
 const noCounters: CounterStore = { lastCounters: () => Promise.resolve(new Map()) }
@@ -133,7 +136,7 @@ describe('GET /health', () => {
         uptimeSeconds: 12,
         cycles: 3,
         lastCycleAgoSeconds: 1,
-        lastCycle: { submitted: 2, settled: 1, closed: 0, excluded: 0, failed: 0 },
+        lastCycle: { submitted: 2, settled: 1, closed: 0, excluded: 0, investigated: 0, failed: 0 },
         lastSkipped: null,
         lastError: null,
       }),

@@ -1,9 +1,14 @@
 import type { PoolAccount, PublicKey } from '@pumpking/anchor-client'
-import type { CellSlotStore, IntervalStore } from '@pumpking/db'
+import type { CellSlotStore, IntervalStore, InvestigationStore } from '@pumpking/db'
 import { ReadingKind } from '@pumpking/shared'
 import type { PoolSource } from './chain.ts'
 import { type CloseDeps, type CloseOutcome, closeAfterDays } from './close.ts'
 import { type ExcludeOutcome, type ExclusionSource, excludeAfterDays } from './exclude.ts'
+import {
+  type InvestigateOutcome,
+  type InvestigationSource,
+  investigateDisputes,
+} from './investigate.ts'
 import {
   type AggregationParams,
   backlogHorizon,
@@ -59,6 +64,9 @@ import {
  *    reference (`T042`), every few minutes. After the money and outside it,
  *    because an outside service must never be the reason a day or a payout
  *    waited (`FR-044`); the verdict is a mark beside the day, not a change to it.
+ *    With each attempt, **`investigateDisputes`** puts under investigation a
+ *    cell whose disputed dry days reached the published count (`FR-045`,
+ *    `T044`) — which stops new policies there and touches none already sold.
  * 7. **`sweepIfDue`** — readings and hourly medians past their retention
  *    (`T055`), once an hour. Last, because it has no deadline, and never newer
  *    than the oldest day step 1 could still close.
@@ -106,6 +114,8 @@ export type CycleDeps = {
   rewards?: RewardMirror
   /** Absent where the reference is switched off, and in tests not about it — `T042`. */
   reference?: ReferenceChecker
+  /** Absent in tests not about it; runs only with a reference attempt — `T044`. */
+  investigation?: { store: InvestigationStore; chain: InvestigationSource }
 }
 
 /** Why a cycle did nothing, when it did nothing. */
@@ -143,6 +153,8 @@ export type CycleReport = {
   rewards: RewardReadOutcome[] | null
   /** Null when no reference check was due this cycle. */
   reference: ReferenceReport | null
+  /** Cells the rule holds for, looked at with each reference attempt. */
+  investigated: InvestigateOutcome[]
 }
 
 /** A fresh set of empty lists — never a shared one a caller could append to. */
@@ -156,6 +168,7 @@ function nothing(): Omit<CycleReport, 'skipped' | 'aggregatorMatches'> {
     registry: null,
     rewards: null,
     reference: null,
+    investigated: [],
   }
 }
 
@@ -267,6 +280,20 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
       ? null
       : await deps.reference.checkIfDue(now, clock, params.dryThresholdX100)
 
+  const investigated =
+    deps.investigation === undefined || reference === null
+      ? []
+      : await investigateDisputes(
+          {
+            ...deps.investigation,
+            submitter: deps.submitter,
+            aggregator: deps.aggregator,
+            clock,
+            ...(deps.programId === undefined ? {} : { programId: deps.programId }),
+          },
+          now,
+        )
+
   const swept =
     deps.retention === undefined
       ? null
@@ -286,6 +313,7 @@ export async function runCycle(deps: CycleDeps, now: Date): Promise<CycleReport>
     registry,
     rewards,
     reference,
+    investigated,
   }
 }
 
@@ -295,7 +323,9 @@ export type CycleSummary = {
   settled: number
   closed: number
   excluded: number
-  /** Days, settlements, closures and exclusions the cluster refused. */
+  /** Cells put under investigation this cycle — `FR-045`. */
+  investigated: number
+  /** Days, settlements, closures, exclusions and investigations the cluster refused. */
   failed: number
 }
 
@@ -305,10 +335,12 @@ export function summarise(report: CycleReport): CycleSummary {
     settled: report.settled.filter((one) => one.status === 'settled').length,
     closed: report.closed.filter((one) => one.status === 'closed').length,
     excluded: report.excluded.filter((one) => one.status === 'excluded').length,
+    investigated: report.investigated.filter((one) => one.status === 'opened').length,
     failed:
       report.days.filter((day) => day.status === 'failed').length +
       report.settled.filter((one) => one.status === 'failed').length +
       report.closed.filter((one) => one.status === 'failed').length +
-      report.excluded.filter((one) => one.status === 'failed').length,
+      report.excluded.filter((one) => one.status === 'failed').length +
+      report.investigated.filter((one) => one.status === 'failed').length,
   }
 }

@@ -216,4 +216,25 @@ pub enum PumpkingError {
 
     #[msg("The minimum stake must be above zero: a free vote makes the cell limit zero")]
     MinStakeNotSet,
+
+    #[msg("The cell is under investigation: no new policies are sold on it")]
+    CellUnderInvestigation,
+
+    #[msg("The cell is already under investigation")]
+    CellAlreadyUnderInvestigation,
+
+    #[msg("The cell is not under investigation")]
+    CellNotUnderInvestigation,
+
+    #[msg("An investigation needs at least the published number of disputed days")]
+    NotEnoughDisputedDays,
+
+    #[msg("Disputed days must be listed in strictly increasing order")]
+    DisputedDaysNotOrdered,
+
+    #[msg("A disputed day lies outside the investigation window")]
+    DisputedDayOutsideWindow,
+
+    #[msg("A disputed day must be one the cell recorded as dry")]
+    DisputedDayNotDry,
 }

@@ -77,6 +77,9 @@ export {
   REFERENCE_DAY_HOURS,
   REFERENCE_SOURCE,
   ReferenceState,
+  INVESTIGATION_DISPUTED_DAYS,
+  INVESTIGATION_WINDOW_DAYS,
+  investigationDays,
   referenceDayX100,
 } from './reference.ts'
 export {

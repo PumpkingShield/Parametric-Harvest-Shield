@@ -47,6 +47,8 @@ export interface Policy {
   spell: number
   /** Days of the window the aggregator has a row for. */
   recordedDays: number
+  /** `FR-045`: the cell sells no new cover; this policy is settled as before. */
+  cellUnderInvestigation: boolean
 }
 
 /** `DayWire` as `apps/api/src/routes/cells.ts` sends it. */
@@ -103,7 +105,10 @@ export function parsePolicy(value: unknown): Policy {
     // cannot draw honestly, and drawing it anyway is how this went wrong once.
     !policyState(row.state) ||
     !int(row.spell) ||
-    !int(row.recordedDays)
+    !int(row.recordedDays) ||
+    // Absent from an API older than `T044`, which never put a cell under
+    // investigation; anything else that is not a boolean is a broken answer.
+    (row.cellUnderInvestigation !== undefined && typeof row.cellUnderInvestigation !== 'boolean')
   ) {
     throw new Error('the API answered with something that is not a policy')
   }
@@ -122,6 +127,7 @@ export function parsePolicy(value: unknown): Policy {
     state: row.state,
     spell: row.spell,
     recordedDays: row.recordedDays,
+    cellUnderInvestigation: row.cellUnderInvestigation === true,
   }
 }
 

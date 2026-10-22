@@ -15,6 +15,7 @@ import {
 import DayStrip from '../components/DayStrip.tsx'
 import {
   basisRisk,
+  investigationNote,
   journalMissing,
   policyFacts,
   policyWindow,
@@ -112,6 +113,7 @@ export const PolicyView = ({
   const strip = rows === null ? null : policyWindow(policy, rows)
   const uncovered =
     rows === null ? 0 : rows.filter((row) => row.state === DayState.NoCoverage).length
+  const investigation = investigationNote(policy)
 
   return (
     <div>
@@ -137,6 +139,12 @@ export const PolicyView = ({
       </Block>
 
       <BasisRisk policy={policy} decimals={decimals} />
+
+      {investigation === null ? null : (
+        <Block>
+          <Prose>{investigation}</Prose>
+        </Block>
+      )}
 
       {uncovered > 0 ? (
         <Block>

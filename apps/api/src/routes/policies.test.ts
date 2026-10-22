@@ -44,8 +44,14 @@ function day(dayIndex: number, state: DayRow['state']): DayRow {
 class FakeLookup implements PolicyLookup {
   accounts = new Map<string, PolicyAccount>()
 
+  flagged = new Set<bigint>()
+
   policyAt(address: string): Promise<PolicyAccount | null> {
     return Promise.resolve(this.accounts.get(address) ?? null)
+  }
+
+  cellUnderInvestigation(cellId: bigint): Promise<boolean> {
+    return Promise.resolve(this.flagged.has(cellId))
   }
 }
 
@@ -92,7 +98,17 @@ describe('GET /v1/policies/:pubkey', () => {
       state: 'active',
       spell: 0,
       recordedDays: 0,
+      cellUnderInvestigation: false,
     })
+  })
+
+  it('says when the policy’s cell is under investigation — FR-045', async () => {
+    policies.flagged.add(BigInt(policy().cellId.toString()))
+    const response = await get(ADDRESS)
+    const body = (await response.json()) as { cellUnderInvestigation: boolean; state: string }
+    // The flag is news about future sales; the policy itself is as it was.
+    expect(body.cellUnderInvestigation).toBe(true)
+    expect(body.state).toBe('active')
   })
 
   /**

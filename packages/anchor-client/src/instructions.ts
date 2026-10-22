@@ -1065,3 +1065,56 @@ export function moveSensorInstruction(input: MoveSensorInput): TransactionInstru
     args: { cellId: new BN(input.cellId.toString()) },
   })
 }
+
+/* -------------------------------------------------------------------------- */
+/* open_investigation / close_investigation                                   */
+/* -------------------------------------------------------------------------- */
+
+export interface OpenInvestigationInput {
+  /** Must be `pool.aggregator`; the program checks the key. */
+  aggregator: PublicKey
+  cellId: bigint
+  /**
+   * Days the cell recorded dry and the reference disputed, oldest first, at
+   * least `INVESTIGATION_DISPUTED_DAYS`, inside the window back from today.
+   */
+  disputedDays: readonly number[]
+  programId?: PublicKey
+}
+
+/**
+ * Puts a cell under investigation — `FR-045`: no new policy is sold on it;
+ * policies already sold are settled from the median as before.
+ */
+export function openInvestigationInstruction(
+  input: OpenInvestigationInput,
+): TransactionInstruction {
+  return buildInstruction('openInvestigation', {
+    programId: input.programId ?? PROGRAM_ID,
+    accounts: { aggregator: input.aggregator },
+    args: {
+      params: {
+        cellId: new BN(input.cellId.toString()),
+        disputedDays: [...input.disputedDays],
+      },
+    },
+  })
+}
+
+export interface CloseInvestigationInput {
+  /** Must be `pool.authority`; the program checks it. */
+  authority: PublicKey
+  cellId: bigint
+  programId?: PublicKey
+}
+
+/** Takes a cell out of investigation and back on sale — the authority's call. */
+export function closeInvestigationInstruction(
+  input: CloseInvestigationInput,
+): TransactionInstruction {
+  return buildInstruction('closeInvestigation', {
+    programId: input.programId ?? PROGRAM_ID,
+    accounts: { authority: input.authority },
+    args: { cellId: new BN(input.cellId.toString()) },
+  })
+}

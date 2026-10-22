@@ -306,6 +306,10 @@ function assess(state, poolState) {
   if (frequency === null) blockers.push(`${covered} covered days, needs ${MIN_HISTORY_DAYS}`)
   if (free < payout) final.push(`free liquidity ${free} < payout ${payout}`)
   if (cellAfter > cellLimit) final.push(`cell exposure ${cellAfter} > limit ${cellLimit}`)
+  // FR-045: only the pool authority takes a cell out of investigation.
+  if (state.underInvestigation) {
+    final.push('the cell is under investigation — no new policies until the pool authority closes it')
+  }
 
   let premium = null
   if (frequency !== null) {

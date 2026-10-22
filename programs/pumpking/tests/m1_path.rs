@@ -31,7 +31,8 @@ use anchor_lang::prelude::Pubkey as AnchorPubkey;
 use harness::*;
 use pumpking::errors::PumpkingError;
 use pumpking::instructions::{
-    DayRecordParams, DayReputationParams, PolicyParams, PoolParams, RiskParams,
+    DayRecordParams, DayReputationParams, OpenInvestigationParams, PolicyParams, PoolParams,
+    RiskParams,
 };
 use pumpking::index::DayState;
 use pumpking::state::{
@@ -1528,4 +1529,139 @@ fn the_window_survives_exactly_until_its_first_day_leaves_the_log() {
     params.window_end_day = last_day_the_window_survives + 12;
     params.max_premium = u64::MAX;
     world.exec_err(&issue_policy(params), PumpkingError::CellExposureExceeded);
+}
+
+/* -------------------------------------------------------------------------- */
+/* FR-045 — a cell under investigation (T044)                                 */
+/* -------------------------------------------------------------------------- */
+
+/// Three of the history's dry days, the ones the reference is taken to have
+/// measured rain on. All inside one coverage window of today.
+const DISPUTED: [u32; 3] = [3, 8, 14];
+
+fn open_investigation(signer: AnchorPubkey, days: &[u32]) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::OpenInvestigation {
+            aggregator: signer,
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+        },
+        pumpking::instruction::OpenInvestigation {
+            params: OpenInvestigationParams {
+                cell_id: CELL_ID,
+                disputed_days: days.to_vec(),
+            },
+        },
+    )
+}
+
+fn close_investigation(signer: AnchorPubkey) -> solana_instruction::Instruction {
+    instruction(
+        pumpking::accounts::CloseInvestigation {
+            authority: signer,
+            pool: pool_pda(),
+            cell: cell_pda(CELL_ID),
+        },
+        pumpking::instruction::CloseInvestigation { cell_id: CELL_ID },
+    )
+}
+
+fn under_investigation(world: &World) -> bool {
+    let cell: CellState = world.read(cell_pda(CELL_ID));
+    cell.under_investigation
+}
+
+#[test]
+fn a_cell_under_investigation_sells_no_new_cover() {
+    let mut world = world_with_history();
+    world.exec_ok(&open_investigation(aggregator(), &DISPUTED));
+    assert!(under_investigation(&world));
+
+    let before = token_amount(world.account(farmer_tokens()));
+    world.exec_err(
+        &issue_policy(policy_params()),
+        PumpkingError::CellUnderInvestigation,
+    );
+    assert!(!world.exists(policy_pda(farmer(), NONCE)));
+    assert_eq!(token_amount(world.account(farmer_tokens())), before);
+}
+
+#[test]
+fn a_policy_sold_before_the_investigation_still_pays() {
+    // FR-045's other half: the reference moves future underwriting, never a
+    // live obligation. The spell lands after the flag went up, and the
+    // stranger who settles it needs no one's leave.
+    let mut world = world_with_policy();
+    world.exec_ok(&open_investigation(aggregator(), &DISPUTED));
+    for offset in 0..u32::from(SPELL_THRESHOLD) {
+        let day = WINDOW_START + offset;
+        world.set_day(day + 1);
+        world.exec_ok(&submit_day(day_params(day, true)));
+    }
+    let before = token_amount(world.account(farmer_tokens()));
+
+    world.exec_ok(&settle_policy(stranger(), farmer_tokens()));
+
+    assert_eq!(token_amount(world.account(farmer_tokens())), before + PAYOUT);
+    let policy: Policy = world.read(policy_pda(farmer(), NONCE));
+    assert_eq!(policy.state, PolicyState::PaidOut);
+    assert!(under_investigation(&world), "settlement cleared the flag");
+}
+
+#[test]
+fn only_the_aggregator_opens_an_investigation() {
+    let mut world = world_with_history();
+    for signer in [stranger(), authority()] {
+        world.exec_err(
+            &open_investigation(signer, &DISPUTED),
+            PumpkingError::NotTheAggregator,
+        );
+    }
+    assert!(!under_investigation(&world));
+}
+
+#[test]
+fn an_investigation_names_days_the_cell_called_dry() {
+    // Day 4 was wet in the history: a cell that reported rain made no claim
+    // of drought the reference could dispute.
+    let mut world = world_with_history();
+    world.exec_err(
+        &open_investigation(aggregator(), &[3, 4, 8]),
+        PumpkingError::DisputedDayNotDry,
+    );
+    world.exec_err(
+        &open_investigation(aggregator(), &[3, 8]),
+        PumpkingError::NotEnoughDisputedDays,
+    );
+    assert!(!under_investigation(&world));
+
+    world.exec_ok(&open_investigation(aggregator(), &DISPUTED));
+    world.exec_err(
+        &open_investigation(aggregator(), &[3, 8, 19]),
+        PumpkingError::CellAlreadyUnderInvestigation,
+    );
+}
+
+#[test]
+fn only_the_authority_closes_an_investigation_and_sales_resume() {
+    let mut world = world_with_history();
+    world.exec_err(
+        &close_investigation(authority()),
+        PumpkingError::CellNotUnderInvestigation,
+    );
+    world.exec_ok(&open_investigation(aggregator(), &DISPUTED));
+
+    // The aggregator raised it and cannot lower it: a rule that undid itself
+    // would let a cell wait out the window and start again.
+    for signer in [aggregator(), stranger()] {
+        world.exec_anchor_err(
+            &close_investigation(signer),
+            anchor_lang::error::ErrorCode::ConstraintHasOne,
+        );
+    }
+    assert!(under_investigation(&world));
+
+    world.exec_ok(&close_investigation(authority()));
+    assert!(!under_investigation(&world));
+    world.exec_ok(&issue_policy(policy_params()));
 }

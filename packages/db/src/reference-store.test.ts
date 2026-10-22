@@ -1,7 +1,7 @@
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import { describe, expect, it } from 'vitest'
-import { giveUpUpdate, verdictUpdate } from './reference-store.ts'
+import { disputedDryDaysQuery, giveUpUpdate, verdictUpdate } from './reference-store.ts'
 
 /**
  * What a verdict may touch — `FR-043`, `FR-044`, `T043`.
@@ -70,5 +70,16 @@ describe('giveUpUpdate', () => {
     expect(written(query)).toEqual({ reference_state: 'unchecked' })
     expect(query.sql).toMatch(/ where "cell_days"\."reference_state" = \$2$/)
     expect(query.params).toEqual(['unchecked', 'pending'])
+  })
+})
+
+describe('disputedDryDaysQuery', () => {
+  it('reads only days the cell called dry and the reference disputed, from the window on', () => {
+    const query = disputedDryDaysQuery(db, 30).toSQL()
+
+    expect(query.sql).toMatch(
+      / where \("cell_days"\."day_index" >= \$1 and "cell_days"\."state" = \$2 and "cell_days"\."reference_state" = \$3\) order by "cell_days"\."cell_id" asc, "cell_days"\."day_index" asc$/,
+    )
+    expect(query.params).toEqual([30, 1, 'disputed'])
   })
 })
